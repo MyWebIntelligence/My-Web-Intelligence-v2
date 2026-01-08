@@ -1035,13 +1035,14 @@ class LandController:
             network GEXF), 'nodegexf' (node network GEXF), 'mediacsv' (media
             links CSV), 'corpus' (raw text corpus), 'pseudolinks' (embedding
             similarity links), 'pseudolinkspage' (page-level pseudolinks),
-            'pseudolinksdomain' (domain-level pseudolinks).
+            'pseudolinksdomain' (domain-level pseudolinks), 'nodelinkcsv'
+            (4 CSV files: pagesnodes, pageslinks, domainnodes, domainlinks).
         """
         minimum_relevance = 1
         core.check_args(args, ('name', 'type'))
         valid_types = ['pagecsv', 'fullpagecsv', 'nodecsv', 'pagegexf',
                        'nodegexf', 'mediacsv', 'corpus', 'pseudolinks',
-                       'pseudolinkspage', 'pseudolinksdomain']
+                       'pseudolinkspage', 'pseudolinksdomain', 'nodelinkcsv']
 
         if isinstance(args.minrel, int) and (args.minrel >= 0):
             minimum_relevance = args.minrel

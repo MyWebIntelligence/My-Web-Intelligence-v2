@@ -260,6 +260,202 @@ class Export:
         cursor = self.get_sql_cursor(sql, col_map)
         return self.write_csv(filename, col_map.keys(), cursor)
 
+    def write_nodelinkcsv(self, filename) -> int:
+        """Export 4 CSV files: page nodes/links and domain nodes/links.
+
+        Args:
+            filename: Base path for output CSV files.
+
+        Returns:
+            int: Total number of records written across all 4 files.
+
+        Notes:
+            Generates 4 files with suffixes: _pagesnodes.csv, _pageslinks.csv,
+            _domainnodes.csv, _domainlinks.csv.
+            Provides a complete network export for analysis tools.
+        """
+        # Remove the .csv extension added automatically to create our own names
+        base = filename.replace('.csv', '')
+
+        total = 0
+        total += self._write_pagesnodes(f"{base}_pagesnodes.csv")
+        total += self._write_pageslinks(f"{base}_pageslinks.csv")
+        total += self._write_domainnodes(f"{base}_domainnodes.csv")
+        total += self._write_domainlinks(f"{base}_domainlinks.csv")
+
+        return total
+
+    def _write_pagesnodes(self, filename) -> int:
+        """Write expression nodes to CSV file with all fields and SEO rank data.
+
+        Args:
+            filename: Path to output CSV file.
+
+        Returns:
+            int: Number of expression records written.
+
+        Notes:
+            Includes all Expression fields plus dynamically parsed SEO rank JSON.
+            Uses the same pattern as write_pagecsv for SEO rank handling.
+        """
+        col_map = {
+            'id': 'e.id',
+            'url': 'e.url',
+            'domain_id': 'e.domain_id',
+            'domain_name': 'd.name',
+            'title': 'e.title',
+            'description': 'e.description',
+            'keywords': 'e.keywords',
+            'lang': 'e.lang',
+            'relevance': 'e.relevance',
+            'depth': 'e.depth',
+            'http_status': 'e.http_status',
+            'created_at': 'e.created_at',
+            'published_at': 'e.published_at',
+            'fetched_at': 'e.fetched_at',
+            'approved_at': 'e.approved_at',
+            'readable_at': 'e.readable_at',
+            'validllm': 'e.validllm',
+            'validmodel': 'e.validmodel'
+        }
+        sql = """
+            SELECT {}
+            FROM expression AS e
+            JOIN domain AS d ON d.id = e.domain_id
+            WHERE e.land_id = ? AND e.relevance >= ?
+            ORDER BY e.relevance DESC, e.id
+        """
+        # Use _fetch_page_rows_with_seorank to parse the seorank JSON field
+        records, seorank_keys = self._fetch_page_rows_with_seorank(col_map, sql)
+        base_keys = list(col_map.keys())
+        header = base_keys + seorank_keys
+
+        count = 0
+        with open(filename, 'w', newline='\n', encoding='utf-8') as file:
+            writer = csv.writer(file, quoting=csv.QUOTE_ALL)
+            if records:
+                writer.writerow(header)
+                for base_data, seorank_payload in records:
+                    row = [self._normalize_value(base_data.get(key)) for key in base_keys]
+                    row.extend(self._normalize_value(seorank_payload.get(key)) for key in seorank_keys)
+                    writer.writerow(row)
+                    count += 1
+        print(f"  - pagesnodes.csv: {count} expressions")
+        return count
+
+    def _write_pageslinks(self, filename) -> int:
+        """Write expression links to CSV file (all links including intra-domain).
+
+        Args:
+            filename: Path to output CSV file.
+
+        Returns:
+            int: Number of link records written.
+        """
+        col_map = {
+            'source_id': 'link.source_id',
+            'source_url': 'e1.url',
+            'source_domain_id': 'e1.domain_id',
+            'target_id': 'link.target_id',
+            'target_url': 'e2.url',
+            'target_domain_id': 'e2.domain_id'
+        }
+        sql = """
+            WITH idx(x) AS (
+                SELECT id FROM expression
+                WHERE land_id = ? AND relevance >= ?
+            )
+            SELECT {}
+            FROM expressionlink AS link
+            JOIN expression AS e1 ON e1.id = link.source_id
+            JOIN expression AS e2 ON e2.id = link.target_id
+            WHERE link.source_id IN idx AND link.target_id IN idx
+            ORDER BY link.source_id, link.target_id
+        """
+        cursor = self.get_sql_cursor(sql, col_map)
+        count = self.write_csv(filename, col_map.keys(), cursor)
+        print(f"  - pageslinks.csv: {count} links")
+        return count
+
+    def _write_domainnodes(self, filename) -> int:
+        """Write domain nodes with aggregated statistics to CSV file.
+
+        Args:
+            filename: Path to output CSV file.
+
+        Returns:
+            int: Number of domain records written.
+
+        Notes:
+            Aggregations: nbexpressions (count), average_relevance (mean),
+            first_expression_date (min published_at), last_expression_date (max published_at).
+        """
+        col_map = {
+            'id': 'd.id',
+            'name': 'd.name',
+            'title': 'd.title',
+            'description': 'd.description',
+            'http_status': 'd.http_status',
+            'nbexpressions': 'COUNT(e.id)',
+            'average_relevance': 'ROUND(AVG(e.relevance), 2)',
+            'first_expression_date': 'MIN(e.published_at)',
+            'last_expression_date': 'MAX(e.published_at)'
+        }
+        sql = """
+            SELECT {}
+            FROM domain AS d
+            JOIN expression AS e ON e.domain_id = d.id
+            WHERE e.land_id = ? AND e.relevance >= ?
+            GROUP BY d.id
+            ORDER BY nbexpressions DESC, d.id
+        """
+        cursor = self.get_sql_cursor(sql, col_map)
+        count = self.write_csv(filename, col_map.keys(), cursor)
+        print(f"  - domainnodes.csv: {count} domains")
+        return count
+
+    def _write_domainlinks(self, filename) -> int:
+        """Write aggregated inter-domain links to CSV file.
+
+        Args:
+            filename: Path to output CSV file.
+
+        Returns:
+            int: Number of domain link records written.
+
+        Notes:
+            Excludes intra-domain links (source_domain != target_domain).
+            link_count represents number of page-level links between domains.
+        """
+        col_map = {
+            'source_domain_id': 'e1.domain_id',
+            'source_domain_name': 'd1.name',
+            'target_domain_id': 'e2.domain_id',
+            'target_domain_name': 'd2.name',
+            'link_count': 'COUNT(*)'
+        }
+        sql = """
+            WITH idx(x) AS (
+                SELECT id FROM expression
+                WHERE land_id = ? AND relevance >= ?
+            )
+            SELECT {}
+            FROM expressionlink AS link
+            JOIN expression AS e1 ON e1.id = link.source_id
+            JOIN expression AS e2 ON e2.id = link.target_id
+            JOIN domain AS d1 ON d1.id = e1.domain_id
+            JOIN domain AS d2 ON d2.id = e2.domain_id
+            WHERE link.source_id IN idx
+              AND link.target_id IN idx
+              AND e1.domain_id != e2.domain_id
+            GROUP BY e1.domain_id, e2.domain_id
+            ORDER BY link_count DESC
+        """
+        cursor = self.get_sql_cursor(sql, col_map)
+        count = self.write_csv(filename, col_map.keys(), cursor)
+        print(f"  - domainlinks.csv: {count} domain links")
+        return count
+
     @staticmethod
     def write_csv(filename, keys, cursor):
         """Write database cursor results to CSV file.

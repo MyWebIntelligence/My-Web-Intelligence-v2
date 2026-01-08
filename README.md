@@ -613,6 +613,11 @@ python mywi.py land export --name="MyResearchTopic" --type=EXPORT_TYPE [--minrel
 - `pseudolinks`: CSV of semantic paragraph pairs (source/target expression, domain, paragraph indices, relation score, confidence, snippets)
 - `pseudolinkspage`: CSV of page‑level aggregated pseudolinks (expression↔expression). Columns: Source_ExpressionID, Target_ExpressionID, Source_DomainID, Target_DomainID, PairCount, EntailCount, NeutralCount, ContradictCount, AvgRelationScore, AvgConfidence.
 - `pseudolinksdomain`: CSV of domain‑level aggregated pseudolinks (domain↔domain). Columns: Source_DomainID, Source_Domain, Target_DomainID, Target_Domain, PairCount, EntailCount, NeutralCount, ContradictCount, AvgRelationScore, AvgConfidence.
+- `nodelinkcsv`: Generates 4 CSV files for complete network analysis:
+  - `*_pagesnodes.csv`: Expression nodes with all fields (id, url, domain_id, domain_name, title, description, keywords, lang, relevance, depth, http_status, created_at, published_at, fetched_at, approved_at, readable_at, validllm, validmodel) + dynamic SEO rank columns (sr_rank, sr_traffic, fb_shares, etc.)
+  - `*_pageslinks.csv`: All expression links (source_id, source_url, source_domain_id, target_id, target_url, target_domain_id)
+  - `*_domainnodes.csv`: Domain nodes with aggregations (id, name, title, description, http_status, nbexpressions, average_relevance, first_expression_date, last_expression_date)
+  - `*_domainlinks.csv`: Aggregated inter-domain links (source_domain_id, source_domain_name, target_domain_id, target_domain_name, link_count)
 
 **Examples:**
 ```bash
@@ -621,6 +626,7 @@ python mywi.py land export --name="AsthmaResearch" --type=corpus --minrel=0.7
 python mywi.py land export --name="AsthmaResearch" --type=pseudolinks
 python mywi.py land export --name="AsthmaResearch" --type=pseudolinkspage
 python mywi.py land export --name="AsthmaResearch" --type=pseudolinksdomain
+python mywi.py land export --name="AsthmaResearch" --type=nodelinkcsv --minrel=1
 ```
 
 ---
