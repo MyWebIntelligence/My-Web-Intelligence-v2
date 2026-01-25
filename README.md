@@ -1,5 +1,10 @@
 # My Web Intelligence (MyWI)
 
+MAIN REPOSITORY (FLAGSHIP)
+
+This is the main entry point for My Web Intelligence.
+Organization start page: https://github.com/MyWebIntelligence
+
 This README is also available in French: [README_fr.md](README_fr.md)
 
 MyWebIntelligence (MyWI) is a Python-based tool designed to assist researchers in digital humanities with creating and managing web-based research projects. It facilitates the collection, organization, and analysis of web data, storing information in a SQLite database. For browsing the database, a tool like [SQLiteBrowser](https://sqlitebrowser.org/) can be very helpful.
