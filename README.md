@@ -5,10 +5,11 @@ MAIN REPOSITORY (FLAGSHIP)
 This is the main entry point for My Web Intelligence.
 Organization start page: https://github.com/MyWebIntelligence
 
-This README is also available in French: [README_fr.md](README_fr.md)
 MyWebIntelligence (MWI) is a reproducible research tool for digital methods in social sciences and communication studies. It supports: corpus collection, qualification (NLP/LLM-assisted but auditable), socio-semantic/network analysis, and exports for replication (CSV/JSON/GEXF). MWI is a Python-based tool designed storing information in a SQLite database. 
 
 For browsing the database, a tool like [SQLiteBrowser](https://sqlitebrowser.org/) can be very helpful.
+
+This README is also available in French: [README_fr.md](README_fr.md)
 
 ## Table of Contents
 
