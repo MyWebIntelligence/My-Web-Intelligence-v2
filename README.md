@@ -1,5 +1,7 @@
 # My Web Intelligence (MyWI)
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18376428.svg)](https://doi.org/10.5281/zenodo.18376428)
+
 MAIN REPOSITORY (FLAGSHIP)
 
 This is the main entry point for My Web Intelligence.
