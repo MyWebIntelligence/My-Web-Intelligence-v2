@@ -1,0 +1,33 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "My Web Intelligence (MWI)"
+version: 1.0.0
+date-released: 2025-01-25
+url: "https://github.com/MyWebIntelligence/My-Web-Intelligence-v2"
+repository-code: "https://github.com/MyWebIntelligence/My-Web-Intelligence-v2"
+license: MIT
+authors:
+  - family-names: "Lakel"
+    given-names: "Amar"
+    orcid: "https://orcid.org/0000-0001-6062-6257"
+    affiliation: "Université Bordeaux Montaigne, MICA"
+keywords:
+  - digital methods
+  - web analysis
+  - controversy mapping
+  - network analysis
+  - NLP
+  - embeddings
+references:
+  - type: article
+    authors:
+      - family-names: "Lakel"
+        given-names: "Amar"
+    title: "My web intelligence : un outil pour l'analyse du web et des réseaux"
+    journal: "I2D - Information, données & documents"
+    year: 2021
+    volume: 1
+    issue: 1
+    pages: "96-103"
+    doi: "10.3917/i2d.211.0096"
