@@ -31,3 +31,8 @@ references:
     issue: 1
     pages: "96-103"
     doi: "10.3917/i2d.211.0096"
+doi: 10.5281/zenodo.18376428
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.18376428
+    description: Zenodo archive
