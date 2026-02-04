@@ -1,0 +1,110 @@
+{
+  "search_metadata": {
+    "id": "mock_search_12345",
+    "status": "Success",
+    "created_at": "2024-01-15T10:30:00Z",
+    "processed_at": "2024-01-15T10:30:01Z",
+    "google_url": "https://www.google.com/search?q=test+keyword",
+    "total_time_taken": 1.2
+  },
+  "search_parameters": {
+    "q": "test keyword",
+    "engine": "google",
+    "hl": "fr",
+    "gl": "fr",
+    "num": 10
+  },
+  "search_information": {
+    "query_displayed": "test keyword",
+    "total_results": 125000000,
+    "time_taken_displayed": 0.45
+  },
+  "organic_results": [
+    {
+      "position": 1,
+      "title": "Understanding Test Keywords in Research",
+      "link": "https://example.com/article1",
+      "displayed_link": "https://example.com › article1",
+      "snippet": "Comprehensive guide to test keywords and their importance in research methodology. Learn how keywords improve data discovery.",
+      "date": "15 Jan 2024"
+    },
+    {
+      "position": 2,
+      "title": "Test Keyword Analysis: Best Practices",
+      "link": "https://research.edu/test-keywords",
+      "displayed_link": "https://research.edu › test-keywords",
+      "snippet": "Best practices for using test keywords in academic research. Detailed analysis with examples and case studies.",
+      "date": "10 Jan 2024"
+    },
+    {
+      "position": 3,
+      "title": "The Science of Keyword Testing",
+      "link": "https://science.org/keyword-testing",
+      "displayed_link": "https://science.org › keyword-testing",
+      "snippet": "Scientific approach to keyword testing. Methods, results, and implications for research quality.",
+      "date": "5 Jan 2024"
+    },
+    {
+      "position": 4,
+      "title": "Keyword Research Methodology",
+      "link": "https://test.org/methodology",
+      "displayed_link": "https://test.org › methodology",
+      "snippet": "In-depth look at keyword research methodology. Tools, techniques, and validation approaches.",
+      "date": "3 Jan 2024"
+    },
+    {
+      "position": 5,
+      "title": "Advanced Test Keywords",
+      "link": "https://data.com/advanced-keywords",
+      "displayed_link": "https://data.com › advanced-keywords",
+      "snippet": "Advanced techniques for test keyword optimization. Data-driven approaches to keyword selection.",
+      "date": "1 Jan 2024"
+    },
+    {
+      "position": 6,
+      "title": "Test Keywords in Digital Humanities",
+      "link": "https://humanities.org/test-keywords",
+      "displayed_link": "https://humanities.org › test-keywords",
+      "snippet": "Application of test keywords in digital humanities research. Case studies and practical examples.",
+      "date": "28 Dec 2023"
+    },
+    {
+      "position": 7,
+      "title": "Keyword Testing Framework",
+      "link": "https://framework.net/keyword-testing",
+      "displayed_link": "https://framework.net › keyword-testing",
+      "snippet": "Comprehensive framework for keyword testing. Standards, protocols, and evaluation metrics.",
+      "date": "25 Dec 2023"
+    },
+    {
+      "position": 8,
+      "title": "Research Keywords Database",
+      "link": "https://database.org/research-keywords",
+      "displayed_link": "https://database.org › research-keywords",
+      "snippet": "Large-scale database of research keywords. Searchable, categorized, and continuously updated.",
+      "date": "20 Dec 2023"
+    },
+    {
+      "position": 9,
+      "title": "Test Keyword Validation",
+      "link": "https://validation.com/test-keywords",
+      "displayed_link": "https://validation.com › test-keywords",
+      "snippet": "Methods for validating test keywords. Quality assurance and reliability testing.",
+      "date": "15 Dec 2023"
+    },
+    {
+      "position": 10,
+      "title": "Keywords in Academic Testing",
+      "link": "https://academic.edu/keyword-testing",
+      "displayed_link": "https://academic.edu › keyword-testing",
+      "snippet": "Role of keywords in academic testing and evaluation. Research assessment and metrics.",
+      "date": "10 Dec 2023"
+    }
+  ],
+  "answer_box": {
+    "type": "organic_result",
+    "title": "Test Keywords",
+    "snippet": "Test keywords are specific terms used in research to identify and categorize content. They play a crucial role in information retrieval and data organization.",
+    "link": "https://example.com/definition"
+  }
+}

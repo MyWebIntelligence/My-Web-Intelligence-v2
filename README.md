@@ -712,18 +712,52 @@ python mywi.py land consolidate --name="AsthmaResearch" --depth=0
 
 ## Testing
 
-To run tests for the project:
+MyWI includes a comprehensive test suite (85+ tests, ~87% coverage) designed for JOSS (Journal of Open Source Software) standards.
+
+### Quick Start
+
 ```bash
-pytest tests/
+# Install test dependencies
+pip install -r requirements.txt
+
+# Run all basic tests (no API keys required, ~7 seconds)
+make test
+
+# Run with coverage report
+make test-cov
+
+# View coverage
+open htmlcov/index.html
 ```
-To run a specific test file:
+
+### Test Structure
+
+The test suite covers all core functionality:
+- **test_01_installation.py** (12 tests) - Database setup and migrations
+- **test_02_land_management.py** (19 tests) - CRUD operations for lands
+- **test_03_data_collection.py** (10 tests) - Crawling and data collection
+- **test_04_export.py** (12 tests) - Export formats (CSV, GEXF, corpus)
+- **test_05_media_analysis.py** (9 tests) - Media analysis and metadata
+- **test_06_embeddings.py** (12 tests) - Embeddings and pseudolinks
+- **test_07_integration.py** (11 tests) - End-to-end workflows
+
+### Optional API Tests
+
+Tests requiring external API keys are automatically skipped if keys are not set:
+
 ```bash
-pytest tests/test_cli.py
+# Set API keys (optional)
+export MWI_SERPAPI_API_KEY="your_key"
+export MWI_SEORANK_API_KEY="your_key"
+export MWI_OPENROUTER_API_KEY="your_key"
+
+# Run API tests
+make test-apis
 ```
-To run a specific test method within a file:
-```bash
-pytest tests/test_cli.py::test_functional_test
-```
+
+### Documentation
+
+For detailed testing documentation, see [TESTING.md](TESTING.md).
 
 #  Embeddings & Pseudolinks (User Guide)
 

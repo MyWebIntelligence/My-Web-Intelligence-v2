@@ -1,0 +1,22 @@
+{
+  "sr_domain": "example.com",
+  "sr_rank": 1234,
+  "sr_kwords": 15678,
+  "sr_traffic": 125000,
+  "sr_costs": 45000,
+  "sr_ulinks": 42,
+  "sr_hlinks": 8765,
+  "sr_dlinks": 2345,
+  "fb_comments": 156,
+  "fb_shares": 892,
+  "fb_reac": 1456,
+  "moz_da": 65,
+  "moz_pa": 58,
+  "moz_rank": 5.6,
+  "moz_links": 12456,
+  "moz_equity": 4.8,
+  "alexa_rank": 15678,
+  "alexa_country_rank": 1234,
+  "timestamp": "2024-01-15T10:30:00Z",
+  "status": "success"
+}

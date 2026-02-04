@@ -399,11 +399,52 @@ python mywi.py land consolidate --name="MonProjet" [--limit N] [--depth D]
 
 ## Tests
 
+MyWI inclut une suite de tests complète (85+ tests, ~87% de couverture) conçue selon les standards JOSS (Journal of Open Source Software).
+
+### Démarrage Rapide
+
 ```bash
-pytest tests/
-pytest tests/test_cli.py
-pytest tests/test_cli.py::test_functional_test
+# Installer les dépendances de test
+pip install -r requirements.txt
+
+# Exécuter tous les tests de base (sans clés API, ~7 secondes)
+make test
+
+# Exécuter avec rapport de couverture
+make test-cov
+
+# Visualiser la couverture
+open htmlcov/index.html
 ```
+
+### Structure des Tests
+
+La suite de tests couvre toutes les fonctionnalités principales :
+- **test_01_installation.py** (12 tests) - Configuration de la base de données et migrations
+- **test_02_land_management.py** (19 tests) - Opérations CRUD pour les lands
+- **test_03_data_collection.py** (10 tests) - Crawling et collecte de données
+- **test_04_export.py** (12 tests) - Formats d'export (CSV, GEXF, corpus)
+- **test_05_media_analysis.py** (9 tests) - Analyse de médias et métadonnées
+- **test_06_embeddings.py** (12 tests) - Embeddings et pseudolinks
+- **test_07_integration.py** (11 tests) - Workflows end-to-end
+
+### Tests API Optionnels
+
+Les tests nécessitant des clés API externes sont automatiquement ignorés si les clés ne sont pas définies :
+
+```bash
+# Définir les clés API (optionnel)
+export MWI_SERPAPI_API_KEY="votre_clé"
+export MWI_SEORANK_API_KEY="votre_clé"
+export MWI_OPENROUTER_API_KEY="votre_clé"
+
+# Exécuter les tests API
+make test-apis
+```
+
+### Documentation
+
+Pour une documentation détaillée sur les tests, voir [TESTING.md](TESTING.md).
 
 ---
 
