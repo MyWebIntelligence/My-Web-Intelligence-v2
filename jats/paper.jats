@@ -1,0 +1,830 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE article PUBLIC "-//NLM//DTD JATS (Z39.96) Journal Publishing DTD v1.2 20190208//EN"
+                  "JATS-publishing1.dtd">
+<article xmlns:mml="http://www.w3.org/1998/Math/MathML" xmlns:xlink="http://www.w3.org/1999/xlink" dtd-version="1.2" article-type="other">
+<front>
+<journal-meta>
+<journal-id></journal-id>
+<journal-title-group>
+<journal-title>Journal of Open Source Software</journal-title>
+<abbrev-journal-title>JOSS</abbrev-journal-title>
+</journal-title-group>
+<issn publication-format="electronic">2475-9066</issn>
+<publisher>
+<publisher-name>Open Journals</publisher-name>
+</publisher>
+</journal-meta>
+<article-meta>
+<article-id pub-id-type="publisher-id">0</article-id>
+<article-id pub-id-type="doi">N/A</article-id>
+<title-group>
+<article-title>My Web Intelligence: Enunciation-Level Web Crawling for
+Authentic Controversy Mapping</article-title>
+</title-group>
+<contrib-group>
+<contrib contrib-type="author">
+<contrib-id contrib-id-type="orcid">https://orcid.org/0000-0001-6062-6257</contrib-id>
+<name>
+<surname>Lakel</surname>
+<given-names>Amar</given-names>
+</name>
+<xref ref-type="aff" rid="aff-1"/>
+</contrib>
+<aff id="aff-1">
+<institution-wrap>
+<institution>MICA Laboratory, Université Bordeaux Montaigne,
+France</institution>
+</institution-wrap>
+</aff>
+</contrib-group>
+<pub-date date-type="pub" publication-format="electronic" iso-8601-date="2026-01-26">
+<day>26</day>
+<month>1</month>
+<year>2026</year>
+</pub-date>
+<volume>¿VOL?</volume>
+<issue>¿ISSUE?</issue>
+<fpage>¿PAGE?</fpage>
+<permissions>
+<copyright-statement>Authors of papers retain copyright and release the
+work under a Creative Commons Attribution 4.0 International License (CC
+BY 4.0)</copyright-statement>
+<copyright-year>1970</copyright-year>
+<copyright-holder>The article authors</copyright-holder>
+<license license-type="open-access" xlink:href="https://creativecommons.org/licenses/by/4.0/">
+<license-p>Authors of papers retain copyright and release the work under
+a Creative Commons Attribution 4.0 International License (CC BY
+4.0)</license-p>
+</license>
+</permissions>
+<kwd-group kwd-group-type="author">
+<kwd>Python</kwd>
+<kwd>digital methods</kwd>
+<kwd>web analysis</kwd>
+<kwd>controversy mapping</kwd>
+<kwd>network analysis</kwd>
+<kwd>NLP</kwd>
+<kwd>computational social science</kwd>
+<kwd>boilerplate removal</kwd>
+<kwd>webometrics</kwd>
+</kwd-group>
+</article-meta>
+</front>
+<body>
+<sec id="summary">
+  <title>Summary</title>
+  <p>My Web Intelligence (MWI) is an open-source Python tool that
+  introduces a fundamental methodological shift in digital controversy
+  mapping: extraction at the <bold>enunciation level</bold> rather than
+  the page level. Unlike existing web crawlers that extract all
+  hyperlinks from HTML pages (including navigation, advertisements,
+  widgets, and CMS-generated links), MWI extracts only the links present
+  within the readable content — the actual discourse produced by
+  authors. This distinction operationalizes the difference between
+  technical traces and intentional citation acts, producing authentic
+  cartographies of controversies rather than maps of web infrastructure.
+  MWI further extends this enunciative approach through paragraph-level
+  embeddings and Natural Language Inference, enabling semantic network
+  analysis at the granularity of argumentative units.</p>
+</sec>
+<sec id="statement-of-need">
+  <title>Statement of Need</title>
+  <sec id="a-two-decade-methodological-gap">
+    <title>A Two-Decade Methodological Gap</title>
+    <p>MWI addresses a methodological gap identified in webometrics
+    literature over two decades ago. Henzinger, Motwani, and Silverstein
+    (<xref alt="2002" rid="ref-henzinger2002challenges" ref-type="bibr">2002</xref>)
+    noted that “there has not been much research on link types, and
+    although such research is needed since it may facilitate
+    distinguishing commercial from editorial links or links to
+    metainformation from links that relate to the actual content of the
+    site.”</p>
+    <p>Bar-Ilan
+    (<xref alt="2005" rid="ref-barilan2005links" ref-type="bibr">2005</xref>)
+    subsequently proposed a multi-faceted framework for hyperlink
+    classification that explicitly included <bold>“link area”</bold> as
+    a key analytical dimension — the position of a hyperlink within page
+    structure (content body, navigation, sidebar, footer). This
+    framework acknowledged that the location of a link carries
+    methodological significance: a link placed within argumentative
+    prose represents a different speech act than a link placed in a
+    navigation menu.</p>
+    <p>Despite this theoretical recognition, <bold>no social science web
+    crawler has operationalized this distinction</bold>. Tools such as
+    Hyphe
+    (<xref alt="Jacomy et al., 2016" rid="ref-jacomy2016hyphe" ref-type="bibr">Jacomy
+    et al., 2016</xref>), IssueCrawler
+    (<xref alt="Rogers, 2010" rid="ref-rogers2010issuecrawler" ref-type="bibr">Rogers,
+    2010</xref>), Navicrawler
+    (<xref alt="Jacomy, 2006" rid="ref-jacomy2006navicrawler" ref-type="bibr">Jacomy,
+    2006</xref>), and VOSON
+    (<xref alt="Ackland, 2013" rid="ref-ackland2013voson" ref-type="bibr">Ackland,
+    2013</xref>) extract all hyperlinks present in the HTML source of a
+    page. This includes:</p>
+    <list list-type="bullet">
+      <list-item>
+        <p>Navigation links (menus, headers, footers)</p>
+      </list-item>
+      <list-item>
+        <p>Advertising and affiliate links</p>
+      </list-item>
+      <list-item>
+        <p>Social media widgets and share buttons</p>
+      </list-item>
+      <list-item>
+        <p>CMS-generated “related articles” links</p>
+      </list-item>
+      <list-item>
+        <p>Sidebar and footer links to unrelated content</p>
+      </list-item>
+    </list>
+    <p>When researchers use these tools to map controversies, they
+    inadvertently produce <bold>cartographies of web
+    infrastructure</bold> rather than cartographies of discursive
+    exchange. A controversy, in the sociological sense
+    (<xref alt="Venturini, 2010" rid="ref-venturini2010diving" ref-type="bibr">Venturini,
+    2010</xref>), consists of intentional argumentative acts between
+    enunciators — citations, refutations, endorsements. These acts occur
+    within the body of texts, not in navigation menus.</p>
+  </sec>
+  <sec id="mwis-methodological-innovation">
+    <title>MWI’s Methodological Innovation</title>
+    <p>MWI addresses this fundamental gap through what we term
+    <bold>enunciation-level extraction</bold>. The tool first extracts
+    the “readable” content of each page using boilerplate removal
+    algorithms, isolating the actual text produced by the author from
+    the surrounding technical apparatus. Links are then extracted only
+    from this readable content, capturing intentional citation acts
+    rather than technical URL presence.</p>
+    <p>This approach operationalizes the theoretical framework of
+    “algorithmic hermeneutics”
+    (<xref alt="Lakel, 2024" rid="ref-lakel2024classification" ref-type="bibr">Lakel,
+    2024</xref>) and “augmented enunciative pragmatics” — treating web
+    data as traces of discursive production requiring interpretation,
+    not self-sufficient network data. The distinction between
+    <bold>enunciative links</bold> (intentional citations within
+    discourse) and <bold>page-level links</bold> (all URLs in HTML)
+    constitutes MWI’s core methodological contribution.</p>
+    <p>The tool has been deployed for controversy analysis of the French
+    “Gilets Jaunes” movement (30,000 pages, 200,000 paragraphs, October
+    2018 – November 2019), revealing counter-intuitive patterns
+    invisible to page-level analysis: mainstream media informational
+    dominance despite the movement’s purportedly “digital native”
+    character.</p>
+  </sec>
+</sec>
+<sec id="historical-development-and-prior-art">
+  <title>Historical Development and Prior Art</title>
+  <p>MWI’s core methodology — extracting hyperlinks only from readable
+  content rather than full HTML — has been implemented since
+  <bold>2014</bold>, as documented in the original prototype funded by
+  the Nouvelle-Aquitaine Regional “Big Data” call for projects. The
+  complete development history is preserved in Software Heritage
+  (<xref alt="Lakel &amp; Bruant, 2014--2016" rid="ref-mwi_v1_2016_swh" ref-type="bibr">Lakel
+  &amp; Bruant, 2014--2016</xref>).</p>
+  <p>The conceptual distinction between “relevant links” (<italic>liens
+  pertinents</italic>) and structural page links was explicitly
+  articulated in the 2014 project presentation
+  (<xref alt="Lakel, 2015" rid="ref-lakel2015slideshare" ref-type="bibr">Lakel,
+  2015</xref>), which described the platform’s goal to “restructure data
+  analyzed by mapping relevant links” (<italic>restructurer les données
+  analysées par la cartographie des liens pertinents</italic>). This
+  formulation demonstrates that the enunciative extraction methodology
+  predates both:</p>
+  <list list-type="bullet">
+    <list-item>
+      <p>The mainstream adoption of boilerplate removal tools in web
+      mining (trafilatura
+      (<xref alt="Barbaresi, 2021" rid="ref-barbaresi2021trafilatura" ref-type="bibr">Barbaresi,
+      2021</xref>), 2019)</p>
+    </list-item>
+    <list-item>
+      <p>Systematic attention to content extraction in digital methods
+      literature</p>
+    </list-item>
+  </list>
+  <p>The methodology was first publicly presented at DHNord 2016
+  (<xref alt="Lakel &amp; Le Deuff, 2016" rid="ref-lakel2016dhnord" ref-type="bibr">Lakel
+  &amp; Le Deuff, 2016</xref>) alongside a comparative workshop with
+  Hyphe, establishing MWI as a methodological alternative to page-level
+  extraction tools. The article in <italic>Les Cahiers du
+  numérique</italic>
+  (<xref alt="Lakel &amp; Le Deuff, 2017" rid="ref-lakel2017analyse" ref-type="bibr">Lakel
+  &amp; Le Deuff, 2017</xref>) explicitly noted: “For total page link
+  extraction, refer to Hyphe software” (<italic>Pour l’extraction total
+  des liens de la page se reporter au Logiciel Hyphe</italic>) —
+  demonstrating conscious methodological differentiation.</p>
+  <table-wrap>
+    <table>
+      <colgroup>
+        <col width="19%" />
+        <col width="34%" />
+        <col width="47%" />
+      </colgroup>
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Milestone</th>
+          <th>Documentation</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>2014</td>
+          <td>Regional funding, prototype development</td>
+          <td>SlideShare presentation
+          (<xref alt="Lakel, 2015" rid="ref-lakel2015slideshare" ref-type="bibr">Lakel,
+          2015</xref>)</td>
+        </tr>
+        <tr>
+          <td>2015</td>
+          <td>Public presentation CHU Bordeaux</td>
+          <td>SlideShare (5,000+ views)</td>
+        </tr>
+        <tr>
+          <td>2016</td>
+          <td>DHNord conference + workshop</td>
+          <td>HAL hal-03351672
+          (<xref alt="Lakel &amp; Le Deuff, 2016" rid="ref-lakel2016dhnord" ref-type="bibr">Lakel
+          &amp; Le Deuff, 2016</xref>)</td>
+        </tr>
+        <tr>
+          <td>2016</td>
+          <td>Code archived</td>
+          <td>Software Heritage
+          (<xref alt="Lakel &amp; Bruant, 2014--2016" rid="ref-mwi_v1_2016_swh" ref-type="bibr">Lakel
+          &amp; Bruant, 2014--2016</xref>)</td>
+        </tr>
+        <tr>
+          <td>2017</td>
+          <td>Methodological publication</td>
+          <td><italic>Les Cahiers du numérique</italic>
+          (<xref alt="Lakel &amp; Le Deuff, 2017" rid="ref-lakel2017analyse" ref-type="bibr">Lakel
+          &amp; Le Deuff, 2017</xref>)</td>
+        </tr>
+        <tr>
+          <td>2021</td>
+          <td>Software paper (French)</td>
+          <td><italic>I2D</italic>
+          (<xref alt="Lakel, 2021" rid="ref-lakel2021mwi" ref-type="bibr">Lakel,
+          2021</xref>)</td>
+        </tr>
+        <tr>
+          <td>2026</td>
+          <td>MWI v2 with embeddings/NLI</td>
+          <td>This paper, Zenodo
+          (<xref alt="Lakel, 2026" rid="ref-mwi2026" ref-type="bibr">Lakel,
+          2026</xref>)</td>
+        </tr>
+      </tbody>
+    </table>
+  </table-wrap>
+</sec>
+<sec id="functionality">
+  <title>Functionality</title>
+  <sec id="enunciation-level-corpus-constitution-core-innovation">
+    <title>Enunciation-Level Corpus Constitution (Core
+    Innovation)</title>
+    <list list-type="bullet">
+      <list-item>
+        <p><bold>Readable content extraction</bold>: Boilerplate removal
+        isolates author-produced text from page infrastructure
+        (navigation, ads, widgets, CMS elements)</p>
+      </list-item>
+      <list-item>
+        <p><bold>Enunciative link extraction</bold>: Hyperlinks
+        extracted exclusively from readable content, capturing
+        intentional citations rather than technical URL presence</p>
+      </list-item>
+      <list-item>
+        <p><bold>Focus crawling on discourse</bold>: Depth crawling
+        follows only enunciative links, building corpora of discursive
+        exchange rather than web topology</p>
+      </list-item>
+      <list-item>
+        <p><bold>Search engine bootstrapping</bold>: Corpus seeding via
+        SerpAPI (Google, Bing, DuckDuckGo) with temporal filtering</p>
+      </list-item>
+      <list-item>
+        <p><bold>Relevance qualification</bold>: Lemma-based scoring
+        with optional LLM validation (OpenRouter) operating on readable
+        content only</p>
+      </list-item>
+    </list>
+  </sec>
+  <sec id="paragraph-level-semantic-analysis">
+    <title>Paragraph-Level Semantic Analysis</title>
+    <list list-type="bullet">
+      <list-item>
+        <p><bold>Paragraph extraction</bold>: Readable content segmented
+        into discrete enunciative units</p>
+      </list-item>
+      <list-item>
+        <p><bold>Embeddings generation</bold>: Multi-provider
+        vectorization (OpenAI, Mistral, Gemini, HuggingFace, Ollama) at
+        paragraph granularity</p>
+      </list-item>
+      <list-item>
+        <p><bold>Semantic similarity</bold>: Three scalable methods
+        (exact cosine, LSH approximate, FAISS ANN)</p>
+      </list-item>
+      <list-item>
+        <p><bold>Natural Language Inference</bold>: Cross-encoder
+        classification (mDeBERTa XNLI multilingual) producing
+        entailment/neutral/contradiction relations between paragraph
+        pairs</p>
+      </list-item>
+      <list-item>
+        <p><bold>Pseudolinks</bold>: Semantic connections between
+        paragraphs across documents, extending enunciative analysis
+        beyond explicit citation to implicit argumentative relations</p>
+      </list-item>
+    </list>
+  </sec>
+  <sec id="network-export-and-reproducibility">
+    <title>Network Export and Reproducibility</title>
+    <list list-type="bullet">
+      <list-item>
+        <p><bold>Multi-level aggregation</bold>: Paragraph pairs,
+        expression (page), and domain-level projections</p>
+      </list-item>
+      <list-item>
+        <p><bold>Export formats</bold>: CSV, GEXF (Gephi-compatible),
+        raw corpus with full audit trail</p>
+      </list-item>
+      <list-item>
+        <p><bold>Docker infrastructure</bold>: One-command reproducible
+        deployment</p>
+      </list-item>
+      <list-item>
+        <p><bold>Database migrations</bold>: Schema versioning for
+        longitudinal studies</p>
+      </list-item>
+    </list>
+  </sec>
+</sec>
+<sec id="state-of-the-field">
+  <title>State of the Field</title>
+  <p>MWI is, to our knowledge, the <bold>first and only robust
+  open-source web crawling tool</bold> that distinguishes enunciative
+  links from page-level links for social science research:</p>
+  <table-wrap>
+    <table>
+      <colgroup>
+        <col width="11%" />
+        <col width="30%" />
+        <col width="23%" />
+        <col width="37%" />
+      </colgroup>
+      <thead>
+        <tr>
+          <th>Tool</th>
+          <th>Extraction Level</th>
+          <th>Link Source</th>
+          <th>Methodological Basis</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Hyphe
+          (<xref alt="Jacomy et al., 2016" rid="ref-jacomy2016hyphe" ref-type="bibr">Jacomy
+          et al., 2016</xref>)</td>
+          <td>Page HTML</td>
+          <td>All page links</td>
+          <td>Web entity curation</td>
+        </tr>
+        <tr>
+          <td>IssueCrawler
+          (<xref alt="Rogers, 2010" rid="ref-rogers2010issuecrawler" ref-type="bibr">Rogers,
+          2010</xref>)</td>
+          <td>Page HTML</td>
+          <td>All page links</td>
+          <td>Co-link analysis</td>
+        </tr>
+        <tr>
+          <td>Navicrawler
+          (<xref alt="Jacomy, 2006" rid="ref-jacomy2006navicrawler" ref-type="bibr">Jacomy,
+          2006</xref>)</td>
+          <td>Page HTML</td>
+          <td>All page links</td>
+          <td>Manual navigation</td>
+        </tr>
+        <tr>
+          <td>VOSON
+          (<xref alt="Ackland, 2013" rid="ref-ackland2013voson" ref-type="bibr">Ackland,
+          2013</xref>)</td>
+          <td>Page HTML</td>
+          <td>All page links</td>
+          <td>Hyperlink networks</td>
+        </tr>
+        <tr>
+          <td><bold>MWI</bold></td>
+          <td><bold>Readable content</bold></td>
+          <td><bold>Enunciative links only</bold></td>
+          <td><bold>Discursive exchange</bold></td>
+        </tr>
+      </tbody>
+    </table>
+  </table-wrap>
+  <p>This distinction has significant implications for controversy
+  studies. Existing tools produce networks where nodes (pages/domains)
+  are connected by edges that mix intentional citations with
+  navigational artifacts. MWI produces networks where edges represent
+  exclusively the citation acts performed by authors within their
+  discourse — the actual fabric of controversies.</p>
+  <p>The distinction operationalizes Bar-Ilan’s
+  (<xref alt="2005" rid="ref-barilan2005links" ref-type="bibr">2005</xref>)
+  theoretical framework, which identified “link area” as a key
+  classification dimension but noted that operational tools had not yet
+  implemented this distinction. MWI fills this gap, providing
+  researchers with the first tool capable of building networks based on
+  discursive intentionality rather than technical HTML structure.</p>
+  <p>The paragraph-level pseudolinks feature extends this approach,
+  detecting semantic relations (entailment, contradiction, neutrality)
+  between argumentative units across the corpus, enabling cartography of
+  implicit argumentative structures beyond explicit hyperlink
+  citation.</p>
+</sec>
+<sec id="research-applications">
+  <title>Research Applications</title>
+  <p>MWI has been deployed in peer-reviewed research with publicly
+  archived datasets (Nakala/Huma-Num):</p>
+  <list list-type="bullet">
+    <list-item>
+      <p><bold>Health information ecosystem mapping</bold>: enunciative
+      networks of medical authority
+      (<xref alt="Lakel, 2017" rid="ref-dataset_asthma" ref-type="bibr">Lakel,
+      2017</xref>,
+      <xref alt="2020" rid="ref-lakel2020positions" ref-type="bibr">2020</xref>,
+      <xref alt="2022" rid="ref-lakel2022health" ref-type="bibr">2022</xref>)</p>
+    </list-item>
+    <list-item>
+      <p><bold>Digital humanities community</bold>: citation practices
+      vs. institutional linking
+      (<xref alt="Lakel, 2016" rid="ref-dataset_dh" ref-type="bibr">Lakel,
+      2016</xref>;
+      <xref alt="Lakel &amp; Le Deuff, 2016" rid="ref-lakel2016dhnord" ref-type="bibr">Lakel
+      &amp; Le Deuff, 2016</xref>,
+      <xref alt="2017" rid="ref-lakel2017analyse" ref-type="bibr">2017</xref>)</p>
+    </list-item>
+    <list-item>
+      <p><bold>Gilets Jaunes controversy</bold>: mainstream media
+      hegemony revealed through enunciative analysis (30,000 pages,
+      200,000 paragraphs)
+      (<xref alt="Lakel, 2019" rid="ref-dataset_giletsjaunes" ref-type="bibr">Lakel,
+      2019</xref>)</p>
+    </list-item>
+    <list-item>
+      <p><bold>Intellectual influence networks</bold>: discourse-level
+      rather than page-level citation
+      (<xref alt="Cormerais &amp; Lakel, 2023" rid="ref-cormerais2023branco" ref-type="bibr">Cormerais
+      &amp; Lakel, 2023</xref>;
+      <xref alt="Lakel, 2023" rid="ref-dataset_branco" ref-type="bibr">Lakel,
+      2023</xref>)</p>
+    </list-item>
+    <list-item>
+      <p><bold>Automatic classification of digital corpora</bold>:
+      interdisciplinary problematization
+      (<xref alt="Lakel, 2024" rid="ref-lakel2024classification" ref-type="bibr">Lakel,
+      2024</xref>)</p>
+    </list-item>
+    <list-item>
+      <p><bold>Communication sciences methodology</bold>: digital
+      methods epistemology
+      (<xref alt="Cormerais et al., 2016" rid="ref-cormerais2016sic" ref-type="bibr">Cormerais
+      et al., 2016</xref>;
+      <xref alt="Cormerais &amp; Lakel, 2018" rid="ref-cormerais2018recherches" ref-type="bibr">Cormerais
+      &amp; Lakel, 2018</xref>)</p>
+    </list-item>
+  </list>
+  <p>All research datasets are openly available with DOI identifiers on
+  the Nakala platform (French national infrastructure for humanities
+  data).</p>
+</sec>
+<sec id="acknowledgements">
+  <title>Acknowledgements</title>
+  <p>MWI development was supported by the MICA Laboratory at Université
+  Bordeaux Montaigne and the Nouvelle-Aquitaine Region (2014 “Big Data”
+  call for projects). The author thanks Franck Cormerais, Olivier Le
+  Deuff, Nathalie Pinede and the E3D research group for theoretical
+  discussions on enunciative pragmatics, David Bruant for foundational
+  software development (2014-2016), and Jean Devalance for contributions
+  to MWI python version.</p>
+</sec>
+</body>
+<back>
+<ref-list>
+  <title></title>
+  <ref id="ref-lakel2021mwi">
+    <element-citation publication-type="article-journal">
+      <person-group person-group-type="author">
+        <name><surname>Lakel</surname><given-names>Amar</given-names></name>
+      </person-group>
+      <article-title>My web intelligence : Un outil pour l’analyse du web et des réseaux</article-title>
+      <source>I2D – Information, données &amp; documents</source>
+      <year iso-8601-date="2021">2021</year>
+      <volume>2021/1</volume>
+      <issue>1</issue>
+      <pub-id pub-id-type="doi">10.3917/i2d.211.0096</pub-id>
+      <fpage>96</fpage>
+      <lpage>103</lpage>
+    </element-citation>
+  </ref>
+  <ref id="ref-lakel2024classification">
+    <element-citation publication-type="article-journal">
+      <person-group person-group-type="author">
+        <name><surname>Lakel</surname><given-names>Amar</given-names></name>
+      </person-group>
+      <article-title>Classification automatique des grands corpus numériques : Une problématisation interdisciplinaire</article-title>
+      <source>Essais</source>
+      <year iso-8601-date="2024">2024</year>
+      <volume>21</volume>
+      <pub-id pub-id-type="doi">10.4000/essais.12989</pub-id>
+    </element-citation>
+  </ref>
+  <ref id="ref-lakel2020positions">
+    <element-citation publication-type="article-journal">
+      <person-group person-group-type="author">
+        <name><surname>Lakel</surname><given-names>Amar</given-names></name>
+      </person-group>
+      <article-title>Prises de positions et influences sur le web : Le cas de l’information de santé</article-title>
+      <source>Revue française des sciences de l’information et de la communication</source>
+      <year iso-8601-date="2020">2020</year>
+      <issue>18</issue>
+      <pub-id pub-id-type="doi">10.4000/rfsic.8376</pub-id>
+    </element-citation>
+  </ref>
+  <ref id="ref-cormerais2023branco">
+    <element-citation publication-type="article-journal">
+      <person-group person-group-type="author">
+        <name><surname>Cormerais</surname><given-names>Franck</given-names></name>
+        <name><surname>Lakel</surname><given-names>Amar</given-names></name>
+      </person-group>
+      <article-title>Juan branco, influenceur éphémère ou figure d’un nouvel « intellectuel numérique » ?</article-title>
+      <source>Quaderni</source>
+      <year iso-8601-date="2023">2023</year>
+      <issue>109</issue>
+      <pub-id pub-id-type="doi">10.4000/quaderni.2731</pub-id>
+      <fpage>39</fpage>
+      <lpage>58</lpage>
+    </element-citation>
+  </ref>
+  <ref id="ref-lakel2017analyse">
+    <element-citation publication-type="article-journal">
+      <person-group person-group-type="author">
+        <name><surname>Lakel</surname><given-names>Amar</given-names></name>
+        <name><surname>Le Deuff</surname><given-names>Olivier</given-names></name>
+      </person-group>
+      <article-title>À quoi peut bien servir l’analyse du web ? Les communautés de sites des humanités numériques sur internet</article-title>
+      <source>Les Cahiers du numérique</source>
+      <year iso-8601-date="2017">2017</year>
+      <volume>13</volume>
+      <issue>3-4</issue>
+      <pub-id pub-id-type="doi">10.3166/lcn.13.3-4.107-138</pub-id>
+      <fpage>107</fpage>
+      <lpage>138</lpage>
+    </element-citation>
+  </ref>
+  <ref id="ref-cormerais2016sic">
+    <element-citation publication-type="article-journal">
+      <person-group person-group-type="author">
+        <name><surname>Cormerais</surname><given-names>Franck</given-names></name>
+        <name><surname>Le Deuff</surname><given-names>Olivier</given-names></name>
+        <name><surname>Lakel</surname><given-names>Amar</given-names></name>
+        <name><surname>Pucheu</surname><given-names>David</given-names></name>
+      </person-group>
+      <article-title>Les SIC à l’épreuve du digital et des humanités : Des origines, des concepts, des méthodes et des outils</article-title>
+      <source>Revue française des sciences de l’information et de la communication</source>
+      <year iso-8601-date="2016">2016</year>
+      <issue>8</issue>
+      <pub-id pub-id-type="doi">10.4000/rfsic.1820</pub-id>
+    </element-citation>
+  </ref>
+  <ref id="ref-cormerais2018recherches">
+    <element-citation publication-type="article-journal">
+      <person-group person-group-type="author">
+        <name><surname>Cormerais</surname><given-names>Franck</given-names></name>
+        <name><surname>Lakel</surname><given-names>Amar</given-names></name>
+      </person-group>
+      <article-title>Recherches digitales et production des données, bouleversement des agencements pour le chercheur en SIC</article-title>
+      <source>Études Digitales</source>
+      <year iso-8601-date="2018">2018</year>
+      <issue>6</issue>
+      <fpage>155</fpage>
+      <lpage>179</lpage>
+    </element-citation>
+  </ref>
+  <ref id="ref-lakel2016dhnord">
+    <element-citation publication-type="paper-conference">
+      <person-group person-group-type="author">
+        <name><surname>Lakel</surname><given-names>Amar</given-names></name>
+        <name><surname>Le Deuff</surname><given-names>Olivier</given-names></name>
+      </person-group>
+      <article-title>Cartographie web de la communauté francophone des humanités numériques et développement d’une méthode critique avec l’outil MyWebIntelligence</article-title>
+      <source>DHNord 2016 : Humanités numériques : Théories, débats, approches critiques</source>
+      <publisher-name>Maison Européenne des Sciences de l’Homme et de la Société (MESHS)</publisher-name>
+      <publisher-loc>Lille, France</publisher-loc>
+      <year iso-8601-date="2016">2016</year>
+    </element-citation>
+  </ref>
+  <ref id="ref-lakel2022health">
+    <element-citation publication-type="chapter">
+      <person-group person-group-type="author">
+        <name><surname>Lakel</surname><given-names>Amar</given-names></name>
+      </person-group>
+      <article-title>Health literacy in complex digital information environments</article-title>
+      <source>Health information science</source>
+      <year iso-8601-date="2022">2022</year>
+    </element-citation>
+  </ref>
+  <ref id="ref-mwi2026">
+    <element-citation publication-type="software">
+      <person-group person-group-type="author">
+        <name><surname>Lakel</surname><given-names>Amar</given-names></name>
+      </person-group>
+      <article-title>My Web Intelligence</article-title>
+      <publisher-name>Zenodo</publisher-name>
+      <year iso-8601-date="2026">2026</year>
+      <uri>https://github.com/MyWebIntelligence/My-Web-Intelligence-v2</uri>
+      <pub-id pub-id-type="doi">10.5281/zenodo.18376429</pub-id>
+    </element-citation>
+  </ref>
+  <ref id="ref-mwi_v1_2016_swh">
+    <element-citation publication-type="software">
+      <person-group person-group-type="author">
+        <name><surname>Lakel</surname><given-names>Amar</given-names></name>
+        <name><surname>Bruant</surname><given-names>David</given-names></name>
+      </person-group>
+      <article-title>MyWebIntelligence v1.0</article-title>
+      <publisher-name>Software Heritage</publisher-name>
+      <uri>https://archive.softwareheritage.org/swh:1:snp:a3f4ddb6a7e689c582811e36a87c3e3950ec0857</uri>
+    </element-citation>
+  </ref>
+  <ref id="ref-lakel2015slideshare">
+    <element-citation>
+      <person-group person-group-type="author">
+        <name><surname>Lakel</surname><given-names>Amar</given-names></name>
+      </person-group>
+      <article-title>My web intelligence : Une plateforme open source au service des humanités digitales</article-title>
+      <publisher-name>SlideShare</publisher-name>
+      <year iso-8601-date="2015">2015</year>
+      <uri>https://www.slideshare.net/alakel/my-web-intelligence-une-plateforme-open-source-au-service-des-humanits-digitales</uri>
+    </element-citation>
+  </ref>
+  <ref id="ref-dataset_giletsjaunes">
+    <element-citation>
+      <person-group person-group-type="author">
+        <name><surname>Lakel</surname><given-names>Amar</given-names></name>
+      </person-group>
+      <article-title>Yellow vests online controversy dataset (nov 2018 - nov 2019)</article-title>
+      <publisher-name>Nakala (Huma-Num)</publisher-name>
+      <year iso-8601-date="2019">2019</year>
+      <pub-id pub-id-type="doi">10.34847/nkl.0bfeq252</pub-id>
+    </element-citation>
+  </ref>
+  <ref id="ref-dataset_asthma">
+    <element-citation>
+      <person-group person-group-type="author">
+        <name><surname>Lakel</surname><given-names>Amar</given-names></name>
+      </person-group>
+      <article-title>Health information ecosystem: Childhood asthma dataset</article-title>
+      <publisher-name>Nakala (Huma-Num)</publisher-name>
+      <year iso-8601-date="2017">2017</year>
+      <pub-id pub-id-type="doi">10.34847/nkl.0f3a97l0</pub-id>
+    </element-citation>
+  </ref>
+  <ref id="ref-dataset_dh">
+    <element-citation>
+      <person-group person-group-type="author">
+        <name><surname>Lakel</surname><given-names>Amar</given-names></name>
+      </person-group>
+      <article-title>French digital humanities web communities dataset</article-title>
+      <publisher-name>Nakala (Huma-Num)</publisher-name>
+      <year iso-8601-date="2016">2016</year>
+      <pub-id pub-id-type="doi">10.34847/nkl.f43by03n</pub-id>
+    </element-citation>
+  </ref>
+  <ref id="ref-dataset_branco">
+    <element-citation>
+      <person-group person-group-type="author">
+        <name><surname>Lakel</surname><given-names>Amar</given-names></name>
+      </person-group>
+      <article-title>Juan branco: Digital influencer analysis dataset</article-title>
+      <publisher-name>Nakala (Huma-Num)</publisher-name>
+      <year iso-8601-date="2023">2023</year>
+      <pub-id pub-id-type="doi">10.34847/nkl.c4fc83mv</pub-id>
+    </element-citation>
+  </ref>
+  <ref id="ref-barilan2005links">
+    <element-citation publication-type="article-journal">
+      <person-group person-group-type="author">
+        <name><surname>Bar-Ilan</surname><given-names>Judit</given-names></name>
+      </person-group>
+      <article-title>What do we know about links and linking? A framework for studying links in academic environments</article-title>
+      <source>Information Processing &amp; Management</source>
+      <year iso-8601-date="2005">2005</year>
+      <volume>41</volume>
+      <issue>4</issue>
+      <pub-id pub-id-type="doi">10.1016/j.ipm.2004.02.005</pub-id>
+      <fpage>973</fpage>
+      <lpage>986</lpage>
+    </element-citation>
+  </ref>
+  <ref id="ref-henzinger2002challenges">
+    <element-citation publication-type="article-journal">
+      <person-group person-group-type="author">
+        <name><surname>Henzinger</surname><given-names>Monika R.</given-names></name>
+        <name><surname>Motwani</surname><given-names>Rajeev</given-names></name>
+        <name><surname>Silverstein</surname><given-names>Craig</given-names></name>
+      </person-group>
+      <article-title>Challenges in web search engines</article-title>
+      <source>ACM SIGIR Forum</source>
+      <publisher-name>ACM</publisher-name>
+      <year iso-8601-date="2002">2002</year>
+      <volume>36</volume>
+      <issue>2</issue>
+      <fpage>11</fpage>
+      <lpage>22</lpage>
+    </element-citation>
+  </ref>
+  <ref id="ref-jacomy2016hyphe">
+    <element-citation publication-type="article-journal">
+      <person-group person-group-type="author">
+        <name><surname>Jacomy</surname><given-names>Mathieu</given-names></name>
+        <name><surname>Girard</surname><given-names>Paul</given-names></name>
+        <name><surname>Ooghe-Tabanou</surname><given-names>Benjamin</given-names></name>
+        <name><surname>Venturini</surname><given-names>Tommaso</given-names></name>
+      </person-group>
+      <article-title>Hyphe, a curation-oriented approach to web crawling for the social sciences</article-title>
+      <source>Proceedings of the International AAAI Conference on Web and Social Media</source>
+      <year iso-8601-date="2016">2016</year>
+      <volume>10</volume>
+      <issue>1</issue>
+      <fpage>595</fpage>
+      <lpage>598</lpage>
+    </element-citation>
+  </ref>
+  <ref id="ref-jacomy2006navicrawler">
+    <element-citation>
+      <person-group person-group-type="author">
+        <name><surname>Jacomy</surname><given-names>Mathieu</given-names></name>
+      </person-group>
+      <article-title>Navicrawler</article-title>
+      <publisher-name>Sciences Po médialab</publisher-name>
+      <year iso-8601-date="2006">2006</year>
+    </element-citation>
+  </ref>
+  <ref id="ref-rogers2010issuecrawler">
+    <element-citation publication-type="chapter">
+      <person-group person-group-type="author">
+        <name><surname>Rogers</surname><given-names>Richard</given-names></name>
+      </person-group>
+      <article-title>Mapping public web space with the Issuecrawler</article-title>
+      <source>Digital cognitive technologies: Epistemology and knowledge society</source>
+      <publisher-name>Wiley</publisher-name>
+      <year iso-8601-date="2010">2010</year>
+      <fpage>89</fpage>
+      <lpage>99</lpage>
+    </element-citation>
+  </ref>
+  <ref id="ref-ackland2013voson">
+    <element-citation publication-type="article-journal">
+      <person-group person-group-type="author">
+        <name><surname>Ackland</surname><given-names>Robert</given-names></name>
+      </person-group>
+      <article-title>Web social science: Concepts, data and tools for social scientists in the digital age</article-title>
+      <source>SAGE Publications</source>
+      <year iso-8601-date="2013">2013</year>
+    </element-citation>
+  </ref>
+  <ref id="ref-venturini2010diving">
+    <element-citation publication-type="article-journal">
+      <person-group person-group-type="author">
+        <name><surname>Venturini</surname><given-names>Tommaso</given-names></name>
+      </person-group>
+      <article-title>Diving in magma: How to explore controversies with actor-network theory</article-title>
+      <source>Public Understanding of Science</source>
+      <year iso-8601-date="2010">2010</year>
+      <volume>19</volume>
+      <issue>3</issue>
+      <pub-id pub-id-type="doi">10.1177/0963662509102694</pub-id>
+      <fpage>258</fpage>
+      <lpage>273</lpage>
+    </element-citation>
+  </ref>
+  <ref id="ref-barbaresi2021trafilatura">
+    <element-citation publication-type="paper-conference">
+      <person-group person-group-type="author">
+        <name><surname>Barbaresi</surname><given-names>Adrien</given-names></name>
+      </person-group>
+      <article-title>Trafilatura: A web scraping library and command-line tool for text discovery and extraction</article-title>
+      <source>Proceedings of the 59th annual meeting of the association for computational linguistics and the 11th international joint conference on natural language processing: System demonstrations</source>
+      <year iso-8601-date="2021">2021</year>
+      <pub-id pub-id-type="doi">10.18653/v1/2021.acl-demo.15</pub-id>
+      <fpage>122</fpage>
+      <lpage>131</lpage>
+    </element-citation>
+  </ref>
+</ref-list>
+</back>
+</article>

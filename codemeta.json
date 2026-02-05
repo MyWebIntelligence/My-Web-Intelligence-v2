@@ -5,7 +5,7 @@
   "name": "My Web Intelligence (MWI)",
   "description": "A reproducible research tool for digital methods in social sciences and communication studies. Supports corpus collection, qualification (NLP/LLM-assisted), socio-semantic/network analysis, and exports for replication.",
   "applicationCategory": "Scientific/Engineering",
-  "version": "2.0.0",
+  "version": "1.0.0",
   "dateCreated": "2014-01-01",
   "datePublished": "2026-01-25",
   "dateModified": "2026-02-04",

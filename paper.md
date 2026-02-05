@@ -117,12 +117,16 @@ The paragraph-level pseudolinks feature extends this approach, detecting semanti
 
 # Research Applications
 
-- **Health information ecosystem mapping**: enunciative networks of medical authority [@lakel2020positions; @lakel2022health]
-- **Digital humanities community**: citation practices vs. institutional linking [@lakel2016dhnord; @lakel2017analyse]
-- **Gilets Jaunes controversy**: mainstream media hegemony revealed through enunciative analysis (30,000 pages, 200,000 paragraphs)
-- **Intellectual influence networks**: discourse-level rather than page-level citation [@cormerais2023branco]
+MWI has been deployed in peer-reviewed research with publicly archived datasets (Nakala/Huma-Num):
+
+- **Health information ecosystem mapping**: enunciative networks of medical authority [@lakel2020positions; @lakel2022health; @dataset_asthma]
+- **Digital humanities community**: citation practices vs. institutional linking [@lakel2016dhnord; @lakel2017analyse; @dataset_dh]
+- **Gilets Jaunes controversy**: mainstream media hegemony revealed through enunciative analysis (30,000 pages, 200,000 paragraphs) [@dataset_giletsjaunes]
+- **Intellectual influence networks**: discourse-level rather than page-level citation [@cormerais2023branco; @dataset_branco]
 - **Automatic classification of digital corpora**: interdisciplinary problematization [@lakel2024classification]
 - **Communication sciences methodology**: digital methods epistemology [@cormerais2016sic; @cormerais2018recherches]
+
+All research datasets are openly available with DOI identifiers on the Nakala platform (French national infrastructure for humanities data).
 
 # Acknowledgements
 
