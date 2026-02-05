@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """
 Test script for corpus export batching functionality
+
+This file can be run as a standalone script or via pytest.
 """
 
 import os
@@ -8,12 +10,27 @@ import sys
 import tempfile
 import shutil
 from zipfile import ZipFile
+import pytest
 
 # Add the project root to the Python path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+tests_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(os.path.dirname(tests_dir))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
-from mwi.export import Export
-from mwi import model
+# Try imports - skip tests if dependencies unavailable
+try:
+    from mwi.export import Export
+    from mwi import model
+    IMPORTS_AVAILABLE = True
+except ImportError as e:
+    IMPORTS_AVAILABLE = False
+    IMPORT_ERROR = str(e)
+
+pytestmark = pytest.mark.skipif(
+    not IMPORTS_AVAILABLE,
+    reason=f"Required imports not available: {IMPORT_ERROR if not IMPORTS_AVAILABLE else ''}"
+)
 
 def test_corpus_export_batching():
     """

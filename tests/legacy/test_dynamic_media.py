@@ -1,24 +1,33 @@
 #!/usr/bin/env python3
 """
 Script de test pour l'extraction dynamique des médias
+
+Ce fichier peut être exécuté directement en tant que script ou via pytest.
 """
 import asyncio
 import sys
 import os
+import pytest
 
 # Ajouter la racine du projet au PYTHONPATH pour les imports
 tests_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(tests_dir)
+project_root = os.path.dirname(os.path.dirname(tests_dir))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
+# Try imports - skip tests if dependencies unavailable
 try:
     from mwi import model, core
     import settings
+    IMPORTS_AVAILABLE = True
 except ImportError as e:
-    print(f"Erreur d'importation: {e}")
-    print("Assurez-vous d'être dans le bon répertoire et d'avoir installé les dépendances.")
-    sys.exit(1)
+    IMPORTS_AVAILABLE = False
+    IMPORT_ERROR = str(e)
+
+pytestmark = pytest.mark.skipif(
+    not IMPORTS_AVAILABLE,
+    reason=f"Required imports not available: {IMPORT_ERROR if not IMPORTS_AVAILABLE else ''}"
+)
 
 async def test_dynamic_media_extraction():
     """

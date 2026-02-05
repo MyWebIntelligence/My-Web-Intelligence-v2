@@ -99,7 +99,7 @@ The methodology was first publicly presented at DHNord 2016 [@lakel2016dhnord] a
 
 # State of the Field
 
-MWI is, to our knowledge, the **first and only web crawling tool** that distinguishes enunciative links from page-level links for social science research:
+MWI is, to our knowledge, the **first and only robust open-source web crawling tool** that distinguishes enunciative links from page-level links for social science research:
 
 | Tool | Extraction Level | Link Source | Methodological Basis |
 |------|-----------------|-------------|---------------------|
@@ -126,6 +126,6 @@ The paragraph-level pseudolinks feature extends this approach, detecting semanti
 
 # Acknowledgements
 
-MWI development was supported by the MICA Laboratory at Université Bordeaux Montaigne and the Nouvelle-Aquitaine Region (2014 "Big Data" call for projects). The author thanks Franck Cormerais, Olivier Le Deuff, and the E3D research group for theoretical discussions on enunciative pragmatics, David Bruant for foundational software development (2014-2016), and Jean Devalance for contributions to MWI v2.
+MWI development was supported by the MICA Laboratory at Université Bordeaux Montaigne and the Nouvelle-Aquitaine Region (2014 "Big Data" call for projects). The author thanks Franck Cormerais, Olivier Le Deuff, Nathalie Pinede and the E3D research group for theoretical discussions on enunciative pragmatics, David Bruant for foundational software development (2014-2016), and Jean Devalance for contributions to MWI python version.
 
 # References

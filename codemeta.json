@@ -1,0 +1,119 @@
+{
+  "@context": "https://doi.org/10.5063/schema/codemeta-2.0",
+  "@type": "SoftwareSourceCode",
+  "identifier": "mwi",
+  "name": "My Web Intelligence (MWI)",
+  "description": "A reproducible research tool for digital methods in social sciences and communication studies. Supports corpus collection, qualification (NLP/LLM-assisted), socio-semantic/network analysis, and exports for replication.",
+  "applicationCategory": "Scientific/Engineering",
+  "version": "2.0.0",
+  "dateCreated": "2014-01-01",
+  "datePublished": "2026-01-25",
+  "dateModified": "2026-02-04",
+  "license": "https://spdx.org/licenses/MIT.html",
+  "codeRepository": "https://github.com/MyWebIntelligence/My-Web-Intelligence-v2",
+  "issueTracker": "https://github.com/MyWebIntelligence/My-Web-Intelligence-v2/issues",
+  "downloadUrl": "https://github.com/MyWebIntelligence/My-Web-Intelligence-v2/archive/refs/heads/master.zip",
+  "url": "https://github.com/MyWebIntelligence",
+  "author": [
+    {
+      "@type": "Person",
+      "givenName": "Amar",
+      "familyName": "Lakel",
+      "@id": "https://orcid.org/0000-0001-6062-6257",
+      "affiliation": {
+        "@type": "Organization",
+        "name": "MICA Laboratory, Université Bordeaux Montaigne",
+        "url": "https://mica.u-bordeaux-montaigne.fr/"
+      }
+    }
+  ],
+  "contributor": [
+    {
+      "@type": "Person",
+      "givenName": "David",
+      "familyName": "Bruant"
+    },
+    {
+      "@type": "Person",
+      "givenName": "Jean",
+      "familyName": "Devalance"
+    }
+  ],
+  "funder": [
+    {
+      "@type": "Organization",
+      "name": "Région Nouvelle-Aquitaine",
+      "url": "https://www.nouvelle-aquitaine.fr/"
+    }
+  ],
+  "maintainer": {
+    "@type": "Person",
+    "givenName": "Amar",
+    "familyName": "Lakel",
+    "@id": "https://orcid.org/0000-0001-6062-6257"
+  },
+  "programmingLanguage": [
+    {
+      "@type": "ComputerLanguage",
+      "name": "Python",
+      "version": "3.9+"
+    }
+  ],
+  "operatingSystem": [
+    "Linux",
+    "macOS",
+    "Windows"
+  ],
+  "softwareRequirements": [
+    "Python >= 3.9",
+    "aiohttp",
+    "beautifulsoup4",
+    "nltk",
+    "peewee",
+    "trafilatura"
+  ],
+  "developmentStatus": "active",
+  "keywords": [
+    "digital methods",
+    "web analysis",
+    "controversy mapping",
+    "network analysis",
+    "NLP",
+    "embeddings",
+    "computational social science",
+    "webometrics",
+    "corpus linguistics",
+    "digital humanities"
+  ],
+  "isPartOf": {
+    "@type": "SoftwareApplication",
+    "name": "My Web Intelligence Ecosystem",
+    "url": "https://github.com/MyWebIntelligence"
+  },
+  "relatedLink": [
+    "https://github.com/MyWebIntelligence/mwiR",
+    "https://github.com/MyWebIntelligence/mywebapi"
+  ],
+  "referencePublication": {
+    "@type": "ScholarlyArticle",
+    "name": "My web intelligence : un outil pour l'analyse du web et des réseaux",
+    "author": {
+      "@type": "Person",
+      "givenName": "Amar",
+      "familyName": "Lakel"
+    },
+    "datePublished": "2021",
+    "isPartOf": {
+      "@type": "PublicationIssue",
+      "name": "I2D - Information, données & documents",
+      "issueNumber": "1"
+    },
+    "identifier": {
+      "@type": "PropertyValue",
+      "propertyID": "doi",
+      "value": "10.3917/i2d.211.0096"
+    }
+  },
+  "contIntegration": "https://github.com/MyWebIntelligence/My-Web-Intelligence-v2/actions",
+  "readme": "https://github.com/MyWebIntelligence/My-Web-Intelligence-v2/blob/master/README.md"
+}

@@ -73,7 +73,6 @@ Feature requests are welcome! Please open an issue with:
 
 - Document public functions and classes with docstrings
 - Update README.md if adding new features or changing CLI commands
-- Keep CLAUDE.md updated for significant architectural changes
 
 ### Testing
 
