@@ -294,8 +294,21 @@ class MercuryReadablePipeline:
         """
         try:
             print(f"🔄 Processing URL: {expression.url}")
-            # Extraction avec Mercury Parser
-            mercury_result = await self._extract_with_mercury(str(expression.url))
+
+            # Try stored HTML extraction first if available
+            mercury_result = None
+            stored_html = getattr(expression, 'html', None)
+            if stored_html:
+                local_result = await self._extract_from_stored_html(
+                    str(expression.url), stored_html
+                )
+                if local_result and not local_result.error:
+                    mercury_result = local_result
+                    self.logger.info(f"Used stored HTML for {expression.url}")
+
+            # Fallback: Mercury Parser (re-fetch URL)
+            if mercury_result is None:
+                mercury_result = await self._extract_with_mercury(str(expression.url))
 
             if mercury_result.error:
                 self.logger.warning(f"Mercury extraction failed for {expression.url}: {mercury_result.error}")
@@ -379,6 +392,47 @@ class MercuryReadablePipeline:
         self.stats['wayback_used'] += 1
         print(f"✅ Mercury succeeded via Wayback snapshot for {url}")
         return wayback_result
+
+    async def _extract_from_stored_html(self, url: str, html: str) -> Optional[MercuryResult]:
+        """Extract content from stored HTML using Trafilatura.
+
+        When expression.html is available (stored during crawl with --fullhtml),
+        this method extracts readable content locally without network requests.
+
+        Args:
+            url: Original URL (for metadata context).
+            html: Raw HTML content stored in the database.
+
+        Returns:
+            MercuryResult-compatible object, or None if extraction fails.
+        """
+        try:
+            import trafilatura
+            extracted = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: trafilatura.extract(
+                    html,
+                    url=url,
+                    include_links=True,
+                    output_format='txt',
+                    favor_precision=True,
+                )
+            )
+            if extracted and len(extracted.strip()) > 100:
+                meta = await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: trafilatura.extract_metadata(html)
+                )
+                return MercuryResult(
+                    title=meta.title if meta else None,
+                    author=meta.author if meta else None,
+                    date_published=str(meta.date) if meta and meta.date else None,
+                    content=extracted,
+                    word_count=len(extracted.split()),
+                    error=None,
+                )
+        except Exception as e:
+            self.logger.warning(f"Stored HTML extraction failed for {url}: {e}")
+        return None
 
     async def _run_mercury(self, url: str) -> MercuryResult:
         """Exécute Mercury Parser et retourne le résultat brut.

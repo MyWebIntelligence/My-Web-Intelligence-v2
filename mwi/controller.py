@@ -84,9 +84,17 @@ class DbController:
             if 'validmodel' not in cols:
                 model.DB.execute_sql("ALTER TABLE expression ADD COLUMN validmodel TEXT DEFAULT NULL")
                 print("[migrate] Added missing column expression.validmodel")
+            # HTML storage feature columns
+            if 'html' not in cols:
+                model.DB.execute_sql("ALTER TABLE expression ADD COLUMN html TEXT DEFAULT NULL")
+                print("[migrate] Added missing column expression.html")
+            land_cols = [row[1] for row in model.DB.execute_sql("PRAGMA table_info('land')").fetchall()]
+            if 'fullhtml' not in land_cols:
+                model.DB.execute_sql("ALTER TABLE land ADD COLUMN fullhtml INTEGER DEFAULT 0")
+                print("[migrate] Added missing column land.fullhtml")
         except Exception as e:
             # Non bloquant: on loggue et on continue
-            print(f"[migrate] Warning: LLM columns check failed: {e}")
+            print(f"[migrate] Warning: columns check failed: {e}")
         return 1
 
     @staticmethod
@@ -639,9 +647,13 @@ class LandController:
         core.check_args(args, ('name', 'desc'))
         # Store lang as comma-separated string
         lang_str = ",".join(args.lang) if isinstance(args.lang, list) else str(args.lang)
-        land = model.Land.create(name=args.name, description=args.desc, lang=lang_str)
+        # Parse --fullhtml option (default FALSE for new lands)
+        fullhtml_raw = core.get_arg_option('fullhtml', args, set_type=str, default=None)
+        store_html = fullhtml_raw.upper() == 'TRUE' if fullhtml_raw else False
+        land = model.Land.create(name=args.name, description=args.desc, lang=lang_str, fullhtml=store_html)
         os.makedirs(os.path.join(settings.data_location, 'lands/%s') % land.id, exist_ok=True)
-        print('Land "%s" created' % args.name)
+        html_status = "enabled" if store_html else "disabled"
+        print(f'Land "{args.name}" created (fullhtml={html_status})')
         return 1
 
     @staticmethod
@@ -943,12 +955,23 @@ class LandController:
         land = model.Land.get_or_none(model.Land.name == args.name)
         if land is None:
             print('Land "%s" not found' % args.name)
+            return 0
+
+        # Resolve --fullhtml: CLI override > land default
+        fullhtml_raw = core.get_arg_option('fullhtml', args, set_type=str, default=None)
+        if fullhtml_raw is not None:
+            store_html = fullhtml_raw.upper() == 'TRUE'
+            source = "CLI"
         else:
-            loop = asyncio.get_event_loop()
-            results = loop.run_until_complete(core.crawl_land(land, fetch_limit, http_status, depth))
-            print("%d expressions processed (%d errors)" % results)
-            return 1
-        return 0
+            store_html = bool(land.fullhtml)
+            source = "land default"
+        if store_html:
+            print(f'Full HTML storage enabled (source: {source})')
+
+        loop = asyncio.get_event_loop()
+        results = loop.run_until_complete(core.crawl_land(land, fetch_limit, http_status, depth, store_html=store_html))
+        print("%d expressions processed (%d errors)" % results)
+        return 1
 
     @staticmethod
     def readable(args: core.Namespace):

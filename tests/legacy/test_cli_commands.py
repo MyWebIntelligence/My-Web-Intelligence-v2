@@ -79,7 +79,7 @@ def test_land_addterm_addurl_and_crawl_readable_export(fresh_db, tmp_path, monke
     assert ret == 1
     assert model.Expression.select().where(model.Expression.land == land).count() == 2
 
-    async def _fake_crawl_land(land_obj, limit, http, depth):
+    async def _fake_crawl_land(land_obj, limit, http, depth, store_html=False):
         return (1, 0)
 
     monkeypatch.setattr(controller.core, "crawl_land", _fake_crawl_land)
@@ -1317,7 +1317,7 @@ async def test_core_crawl_land(monkeypatch, fresh_db):
         expr.depth = i % 2
         expr.save()
 
-    async def fake_worker(expression, dictionary, session):
+    async def fake_worker(expression, dictionary, session, store_html=False):
         return 1
 
     class FakeSession:

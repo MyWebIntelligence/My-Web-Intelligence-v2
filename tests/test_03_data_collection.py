@@ -36,7 +36,7 @@ class TestLandCrawlMocked:
         )
 
         # Mock async crawl response
-        async def mock_crawl_land(land_obj, limit, http_status, depth):
+        async def mock_crawl_land(land_obj, limit, http_status, depth, store_html=False):
             # Mark expression as fetched
             expr = model.Expression.get(
                 (model.Expression.land == land_obj)
@@ -82,7 +82,7 @@ class TestLandCrawlMocked:
 
         crawl_count = [0]
 
-        async def mock_crawl_land(land_obj, limit, http_status, depth):
+        async def mock_crawl_land(land_obj, limit, http_status, depth, store_html=False):
             # Should only process limit
             count = min(limit or 3, 3)
             crawl_count[0] = count
@@ -113,7 +113,7 @@ class TestLandCrawlMocked:
             core.Namespace(land=name, urls="https://example.com/notfound", path=None)
         )
 
-        async def mock_crawl_land(land_obj, limit, http_status, depth):
+        async def mock_crawl_land(land_obj, limit, http_status, depth, store_html=False):
             expr = model.Expression.get((model.Expression.land == land_obj))
             expr.http_status = "404"
             expr.fetched_at = datetime.now()

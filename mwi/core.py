@@ -1276,6 +1276,33 @@ def is_language_compatible(expression_lang: str, land_langs: str) -> bool:
     return False
 
 
+def detect_content_language(text: str, html_lang: str = '') -> str:
+    """Detect language from extracted text content, with HTML lang as fallback.
+
+    Uses langdetect on the actual text content rather than relying on the
+    <html lang> attribute, which can be wrong (e.g., Twitter/X always
+    returns lang='en' regardless of tweet language).
+
+    Args:
+        text: The extracted readable text content.
+        html_lang: The lang attribute from the HTML tag (fallback).
+
+    Returns:
+        str: Detected language code (e.g., 'fr', 'en'), or html_lang if
+            detection fails, or empty string if nothing is available.
+    """
+    if not text or len(text.strip()) < 20:
+        return html_lang
+
+    try:
+        from langdetect import detect, DetectorFactory
+        DetectorFactory.seed = 0  # reproducible results
+        detected = detect(text)
+        return detected
+    except Exception:
+        return html_lang
+
+
 class TimeoutException(Exception):
     """Custom exception for timeout handling."""
     pass
@@ -1812,7 +1839,7 @@ def get_keywords(soup: BeautifulSoup) -> str:
     return ""
 
 
-async def crawl_land(land: model.Land, limit: int = 0, http: Optional[str] = None, depth: Optional[int] = None) -> tuple:
+async def crawl_land(land: model.Land, limit: int = 0, http: Optional[str] = None, depth: Optional[int] = None, store_html: bool = False) -> tuple:
     """Asynchronously crawl all expressions in a land.
 
     This function orchestrates the crawling process for a land, processing
@@ -1906,9 +1933,9 @@ async def crawl_land(land: model.Land, limit: int = 0, http: Optional[str] = Non
                 break
 
             connector = aiohttp.TCPConnector(limit=settings.parallel_connections, ssl=False)
-            async with aiohttp.ClientSession(connector=connector) as session:
+            async with aiohttp.ClientSession(connector=connector, max_field_size=16384) as session:
                 tasks = [
-                    crawl_expression_with_media_analysis(expr, dictionary, session)
+                    crawl_expression_with_media_analysis(expr, dictionary, session, store_html=store_html)
                     for expr in current_batch_expressions
                 ]
                 results = await asyncio.gather(*tasks)
@@ -1924,7 +1951,7 @@ async def crawl_land(land: model.Land, limit: int = 0, http: Optional[str] = Non
 
     return total_processed, total_errors
 
-async def crawl_expression_with_media_analysis(expression: model.Expression, dictionary, session: aiohttp.ClientSession):
+async def crawl_expression_with_media_analysis(expression: model.Expression, dictionary, session: aiohttp.ClientSession, store_html: bool = False):
     """Crawl and process an expression with integrated media analysis.
 
     This function fetches an expression's URL, extracts content using Trafilatura,
@@ -2090,7 +2117,8 @@ async def crawl_expression_with_media_analysis(expression: model.Expression, dic
         expression.title = str(get_title(soup) or expression.url) # type: ignore
         expression.description = str(get_description(soup)) if get_description(soup) else None # type: ignore
         expression.keywords = str(get_keywords(soup)) if get_keywords(soup) else None # type: ignore
-        expression.lang = str(soup.html.get('lang', '')) if soup.html else '' # type: ignore
+        html_lang = str(soup.html.get('lang', '')) if soup.html else ''
+        expression.lang = detect_content_language(content, html_lang)  # type: ignore
         # Check language compatibility BEFORE any relevance calculation
         if expression.lang and not is_language_compatible(expression.lang, expression.land.lang):  # type: ignore
             expression.relevance = 0  # type: ignore
@@ -2134,6 +2162,8 @@ async def crawl_expression_with_media_analysis(expression: model.Expression, dic
             print(f"Linking {len(links)} expressions to #{expression.id}") # type: ignore
             for link in links:
                 link_expression(expression.land, expression, link) # type: ignore
+        if store_html and raw_html:
+            expression.html = raw_html  # type: ignore
         expression.save()
         return 1
     else:
@@ -2260,7 +2290,7 @@ async def consolidate_land(
     return total_processed, total_errors
 
 
-async def crawl_expression(expression: model.Expression, dictionary, session: aiohttp.ClientSession):
+async def crawl_expression(expression: model.Expression, dictionary, session: aiohttp.ClientSession, store_html: bool = False):
     """Crawl and process an expression using a multi-stage fallback pipeline.
 
     This function fetches and processes web content through a sophisticated pipeline
@@ -2426,7 +2456,8 @@ async def crawl_expression(expression: model.Expression, dictionary, session: ai
         expression.title = str(get_title(soup) or expression.url) # type: ignore
         expression.description = str(get_description(soup)) if get_description(soup) else None # type: ignore
         expression.keywords = str(get_keywords(soup)) if get_keywords(soup) else None # type: ignore
-        expression.lang = str(soup.html.get('lang', '')) if soup.html else '' # type: ignore
+        html_lang = str(soup.html.get('lang', '')) if soup.html else ''
+        expression.lang = detect_content_language(content, html_lang)  # type: ignore
         # Check language compatibility BEFORE any relevance calculation
         if expression.lang and not is_language_compatible(expression.lang, expression.land.lang):  # type: ignore
             expression.relevance = 0  # type: ignore
@@ -2470,6 +2501,8 @@ async def crawl_expression(expression: model.Expression, dictionary, session: ai
             print(f"Linking {len(links)} expressions to #{expression.id}") # type: ignore
             for link in links:
                 link_expression(expression.land, expression, link) # type: ignore
+        if store_html and raw_html:
+            expression.html = raw_html  # type: ignore
         expression.save()
         return 1
     else:
@@ -2793,7 +2826,7 @@ def is_crawlable(url: str):
         return False
 
 
-def process_expression_content(expression: model.Expression, html: str, dictionary) -> model.Expression:
+def process_expression_content(expression: model.Expression, html: str, dictionary, store_html: bool = False) -> model.Expression:
     """Process and extract metadata from HTML content for an expression.
 
     This function extracts title, description, keywords, language, and content
@@ -2819,9 +2852,8 @@ def process_expression_content(expression: model.Expression, html: str, dictiona
     print(f"Processing expression #{expression.id}") # type: ignore
     soup = BeautifulSoup(html, 'html.parser')
 
-    if soup.html is not None:
-        expression.lang = str(soup.html.get('lang', '')) # type: ignore
-    
+    html_lang = str(soup.html.get('lang', '')) if soup.html else ''
+
     # Extract basic metadata from the soup object first
     expression.title = str(soup.title.string.strip()) if soup.title and soup.title.string else '' # type: ignore
     expression.description = str(get_meta_content(soup, 'description')) if get_meta_content(soup, 'description') else None # type: ignore
@@ -2863,11 +2895,17 @@ def process_expression_content(expression: model.Expression, html: str, dictiona
             html_file.write(html.strip())
         html_file.close()
 
+    if store_html:
+        expression.html = html.strip()  # type: ignore
+
     readable_content = get_readable(soup)
     if not readable_content.strip():
         expression.readable = f"<!-- RAW HTML -->\n{html}" # type: ignore
     else:
         expression.readable = readable_content # type: ignore
+
+    # Detect language from content (more reliable than <html lang>)
+    expression.lang = detect_content_language(str(expression.readable or ''), html_lang)  # type: ignore
 
     # Check language compatibility BEFORE any relevance calculation
     if expression.lang and not is_language_compatible(expression.lang, expression.land.lang):  # type: ignore

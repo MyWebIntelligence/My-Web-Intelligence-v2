@@ -64,6 +64,9 @@ class Land(BaseModel):
         description (TextField): Detailed description of the research topic.
         lang (CharField): Language code(s) for the land. Accepts comma-separated
             list of language codes. Defaults to 'fr' (French).
+        fullhtml (BooleanField): Default HTML storage policy for this land.
+            When True, crawl operations store raw HTML in Expression.html
+            unless explicitly overridden via --fullhtml=FALSE. Defaults to False.
         created_at (DateTimeField): Timestamp when the land was created.
             Automatically set to current datetime on creation.
 
@@ -75,6 +78,7 @@ class Land(BaseModel):
     name = CharField(unique=True)
     description = TextField()
     lang = CharField(max_length=100, default='fr')  # Accepts comma-separated list of languages
+    fullhtml = BooleanField(default=False)
     created_at = DateTimeField(default=datetime.datetime.now)
 
 
@@ -130,6 +134,9 @@ class Expression(BaseModel):
         keywords (TextField): Meta keywords or extracted key terms, nullable.
         readable (TextField): Cleaned readable content extracted by Mercury Parser
             or similar tools, nullable.
+        html (TextField): Raw HTML content of the page as originally fetched.
+            Stored before any cleaning (clean_html, Trafilatura). Populated
+            only when --fullhtml is enabled (at land or crawl level). Nullable.
         created_at (DateTimeField): Timestamp when the expression was created.
             Automatically set to current datetime on creation.
         published_at (DateTimeField): Publication date of the content, nullable.
@@ -163,6 +170,7 @@ class Expression(BaseModel):
     description = TextField(null=True)
     keywords = TextField(null=True)
     readable = TextField(null=True)
+    html = TextField(null=True)
     created_at = DateTimeField(default=datetime.datetime.now)
     published_at = DateTimeField(null=True)
     fetched_at = DateTimeField(null=True, index=True)

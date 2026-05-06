@@ -118,6 +118,14 @@ def command_input():
                         type=int,
                         help='Only crawl URLs with the specified depth (for land crawl)',
                         nargs='?')
+    parser.add_argument('--fullhtml',
+                        type=str,
+                        help='Store raw HTML in database (TRUE/FALSE). '
+                             'For land create: sets the default. '
+                             'For land crawl: overrides land default if specified.',
+                        nargs='?',
+                        const='TRUE',
+                        default=None)
     parser.add_argument('--lang',
                         type=str,
                         help='Language of the project (default: fr)',
