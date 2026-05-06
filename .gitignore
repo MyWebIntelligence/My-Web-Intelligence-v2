@@ -9,6 +9,7 @@
 settings.py
 secrets.txt
 AGENTS.md
+CLAUDE.md
 
 # Base de données locale
 mwi.db
