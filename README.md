@@ -263,10 +263,14 @@ python mywi.py land create --name="MyResearchTopic" --desc="A description of thi
 | --name      | str    | Yes      |         | Name of the land (unique identifier)        |
 | --desc      | str    | No       |         | Description of the land                     |
 | --lang      | str    | No       | fr      | Language code for the land (default: fr)    |
+| --fullhtml  | str    | No       | FALSE   | When `TRUE`, this land's crawls store the raw HTML in `expression.html` by default |
 
 **Example:**
 ```bash
 python mywi.py land create --name="AsthmaResearch" --desc="Research on asthma and air quality" --lang="en"
+
+# Land that stores the full HTML of every crawled page by default
+python mywi.py land create --name="AsthmaArchive" --desc="HTML archive" --fullhtml=TRUE
 ```
 
 ---
@@ -341,12 +345,14 @@ python mywi.py land urlist --name="MyResearchTopic" --query="(gilets jaunes) OR 
 | Option      | Type  | Required | Default | Description |
 |-------------|-------|----------|---------|-------------|
 | --name      | str   | Yes      |         | Land receiving the URLs |
-| --query     | str   | Yes      |         | Google search query (any valid Boolean string) |
+| --query     | str   | Yes      |         | Search query (any valid Boolean string) |
+| --engine    | str   | No       | google  | SerpAPI engine: `google`, `bing`, or `duckduckgo`. Date filters require `google` or `duckduckgo`. |
 | --datestart | str   | No       |         | Start of the date filter (`YYYY-MM-DD`) |
 | --dateend   | str   | No       |         | End of the date filter (`YYYY-MM-DD`) |
 | --timestep  | str   | No       | week    | Window size when iterating between dates (`day`, `week`, `month`) |
 | --sleep     | float | No       | 1.0     | Base delay (seconds) between pages to respect rate limits |
 | --lang      | str   | No       | fr      | Comma-separated language list; first value is used for SerpAPI |
+| --progress  | flag  | No       | off     | Print one progress line per date window (auto-enabled when a date range is set) |
 
 > **API key** — populate `settings.serpapi_api_key` or export
 > `MWI_SERPAPI_API_KEY` before running the command.
@@ -370,7 +376,7 @@ Delete an entire land or only expressions below a relevance threshold.
 | Option   | Type   | Required | Default | Description                                         |
 |----------|--------|----------|---------|-----------------------------------------------------|
 | --name   | str    | Yes      |         | Name of the land to delete                          |
-| --maxrel | float  | No       |         | Only delete expressions with relevance < maxrel      |
+| --maxrel | int    | No       |         | Only delete expressions with relevance < maxrel     |
 
 
 ## Data Collection
@@ -383,12 +389,13 @@ Crawl the URLs added to a land to fetch their content.
 python mywi.py land crawl --name="MyResearchTopic" [--limit=NUMBER] [--http=HTTP_STATUS_CODE]
 ```
 
-| Option   | Type   | Required | Default | Description                                                                 |
-|----------|--------|----------|---------|-----------------------------------------------------------------------------|
-| --name   | str    | Yes      |         | Name of the land whose URLs to crawl                                        |
-| --limit  | int    | No       |         | Maximum number of URLs to crawl in this run                                 |
-| --http   | str    | No       |         | Re-crawl only pages that previously resulted in this HTTP error (e.g., 503) |
-| --depth  | int    | No       |         | Only crawl URLs that remain to be crawled at the specified depth            |
+| Option     | Type   | Required | Default        | Description                                                                 |
+|------------|--------|----------|----------------|-----------------------------------------------------------------------------|
+| --name     | str    | Yes      |                | Name of the land whose URLs to crawl                                        |
+| --limit    | int    | No       |                | Maximum number of URLs to crawl in this run                                 |
+| --http     | str    | No       |                | Re-crawl only pages that previously resulted in this HTTP error (e.g., 503) |
+| --depth    | int    | No       |                | Only crawl URLs that remain to be crawled at the specified depth            |
+| --fullhtml | str    | No       | (land default) | Override the land's HTML-storage policy (`TRUE`/`FALSE`) for this crawl     |
 
 **Examples:**
 ```bash
@@ -397,6 +404,7 @@ python mywi.py land crawl --name="AsthmaResearch" --limit=10
 python mywi.py land crawl --name="AsthmaResearch" --http=503
 python mywi.py land crawl --name="AsthmaResearch" --depth=2
 python mywi.py land crawl --name="AsthmaResearch" --depth=1 --limit=5
+python mywi.py land crawl --name="AsthmaResearch" --fullhtml=TRUE   # archive the raw HTML
 ```
 
 > **Tip (Bash)** — Running multiple small batches can be faster than a single huge crawl. On macOS/Linux you can loop the crawler in one line:
@@ -512,7 +520,7 @@ python mywi.py land seorank --name="MyResearchTopic" [--limit=NUMBER] [--depth=N
 
 - By default only expressions without SEO Rank data are selected. Use `--force` to refresh existing entries.
 - `--http` defaults to `200`; pass `--http=all` (or `any`) to include every status code.
-- `--minrel` defaults to `1`; set to `0` to include pages with relevance `0`.
+- `--minrel` (int) defaults to `1`; set to `0` to include pages with relevance `0`.
 - `--limit` applies after filtering; set it to keep the run short during testing.
 - Each successful call stores the JSON response as-is in the `expression.seorank` column (text field).
 - Errors or non-200 HTTP responses are logged and the command continues with the next URL.
@@ -554,7 +562,7 @@ python mywi.py land medianalyse --name=LAND_NAME [--depth=DEPTH] [--minrel=MIN_R
 |---|---|---|---|---|
 | `--name` | str | Yes | | Name of the land to analyze media for. |
 | `--depth` | int | No | 0 | Only analyze media for expressions up to this crawl depth. |
-| `--minrel` | float | No | 0.0 | Only analyze media for expressions with relevance greater than or equal to this value. |
+| `--minrel` | int | No | 0 | Only analyze media for expressions with relevance greater than or equal to this value. |
 
 **Example:**
 ```bash
@@ -609,7 +617,7 @@ python mywi.py land export --name="MyResearchTopic" --type=EXPORT_TYPE [--minrel
 |----------|--------|----------|---------|-----------------------------------------------------------------------------|
 | --name   | str    | Yes      |         | Name of the land to export                                                  |
 | --type   | str    | Yes      |         | Export type (see below)                                                     |
-| --minrel | float  | No       |         | Minimum relevance for expressions to be included in the export              |
+| --minrel | int    | No       |         | Minimum relevance for expressions to be included in the export              |
 
 **EXPORT_TYPE values:**
 - `pagecsv`: CSV of pages
@@ -652,7 +660,7 @@ python mywi.py tag export --name="MyResearchTopic" --type=EXPORT_TYPE [--minrel=
 |----------|--------|----------|---------|-----------------------------------------------------------------------------|
 | --name   | str    | Yes      |         | Name of the land whose tags to export                                       |
 | --type   | str    | Yes      |         | Export type (see below)                                                     |
-| --minrel | float  | No       |         | Minimum relevance for tag content to be included in the export              |
+| --minrel | int    | No       |         | Minimum relevance for tag content to be included in the export              |
 
 **EXPORT_TYPE values:**
 - `matrix`: Tag co-occurrence matrix
@@ -712,52 +720,66 @@ python mywi.py land consolidate --name="AsthmaResearch" --depth=0
 
 ## Testing
 
-MyWI includes a comprehensive test suite (85+ tests, ~87% coverage) designed for JOSS (Journal of Open Source Software) standards.
+MyWI ships with a JOSS-grade test suite (≈98 tests across 8 files, ~87% coverage).
 
-### Quick Start
+### Quick start
 
 ```bash
 # Install test dependencies
 pip install -r requirements.txt
 
-# Run all basic tests (no API keys required, ~7 seconds)
+# Basic tests, no API keys, no network (~7 seconds)
 make test
 
-# Run with coverage report
+# Same, with coverage report (open htmlcov/index.html)
 make test-cov
-
-# View coverage
-open htmlcov/index.html
 ```
 
-### Test Structure
+### Test structure
 
-The test suite covers all core functionality:
-- **test_01_installation.py** (12 tests) - Database setup and migrations
-- **test_02_land_management.py** (19 tests) - CRUD operations for lands
-- **test_03_data_collection.py** (10 tests) - Crawling and data collection
-- **test_04_export.py** (12 tests) - Export formats (CSV, GEXF, corpus)
-- **test_05_media_analysis.py** (9 tests) - Media analysis and metadata
-- **test_06_embeddings.py** (12 tests) - Embeddings and pseudolinks
-- **test_07_integration.py** (11 tests) - End-to-end workflows
+| File | Tests | Coverage |
+|------|------:|----------|
+| `tests/test_01_installation.py`     | 12 | Database setup, migration idempotency |
+| `tests/test_02_land_management.py`  | 19 | Land/term/URL CRUD, dictionary updates |
+| `tests/test_03_data_collection.py`  | 12 | Crawl pipeline, content extraction |
+| `tests/test_04_export.py`           | 12 | CSV / GEXF / corpus / pseudolinks exports |
+| `tests/test_05_media_analysis.py`   | 9  | Pillow / EXIF / hashing / colors |
+| `tests/test_06_embeddings.py`       | 12 | Paragraph splitting, providers, similarity |
+| `tests/test_07_integration.py`      | 11 | End-to-end workflows |
+| `tests/test_08_expression_html.py`  | 11 | `--fullhtml` storage, `Land.fullhtml` default, migration 007 |
 
-### Optional API Tests
+Older smoke tests (`test_cli.py`, `test_core.py`, etc.) live in `tests/legacy/` and are kept for reference; the active suite is `tests/test_0?_*.py`.
 
-Tests requiring external API keys are automatically skipped if keys are not set:
+### All Make targets
+
+| Command | Purpose |
+|---------|---------|
+| `make test` (alias `make test-basic`) | Default suite without API keys |
+| `make test-quick` | Run only `test_01_installation.py` (smoke) |
+| `make test-all` | Run *every* test, including those needing API keys |
+| `make test-cov` / `make test-cov-open` | Coverage report (open in browser) |
+| `make test-apis` | Tests gated by `MWI_SERPAPI_API_KEY`, `MWI_SEORANK_API_KEY`, `MWI_OPENROUTER_API_KEY` |
+| `make test-integration` | Slow end-to-end tests (network) |
+| `make test-01` … `make test-05` | Single file shortcuts |
+| `make check` | `test-quick` + `test-cov` (recommended for CI) |
+| `make joss-test` | Replays the JOSS evaluation flow |
+| `make list-tests` / `make list-markers` | Discovery helpers |
+| `make clean` | Remove `.pytest_cache`, `htmlcov`, `__pycache__` |
+
+### API tests
+
+Tests that hit external APIs are automatically skipped when keys are absent:
 
 ```bash
-# Set API keys (optional)
 export MWI_SERPAPI_API_KEY="your_key"
 export MWI_SEORANK_API_KEY="your_key"
 export MWI_OPENROUTER_API_KEY="your_key"
-
-# Run API tests
 make test-apis
 ```
 
-### Documentation
+### Further reading
 
-For detailed testing documentation, see [TESTING.md](TESTING.md).
+For pytest marker definitions, see `pytest.ini`. For CI configuration, see `.github/workflows/`.
 
 #  Embeddings & Pseudolinks (User Guide)
 
@@ -1045,6 +1067,20 @@ This command is idempotent: it inspects `data/mwi.db` (or the location specified
 cp data/mwi.db data/mwi.db.bak_$(date +%Y%m%d_%H%M%S)
 ```
 
+## Repair archive.org domain attributions
+
+Older crawls sometimes attached `archive.org` (or `web.archive.org`) as the `domain` of an `Expression` even when the actual content came from another host (the Wayback Machine fallback). Run the maintenance command below to re-attribute those expressions to the correct domain by re-parsing the archived URL:
+
+```bash
+# Preview only — list affected expressions, write nothing
+python mywi.py db fix_archive_domains --dryrun
+
+# Apply the re-attribution
+python mywi.py db fix_archive_domains
+```
+
+The command is non-destructive — it only updates the `expression.domain` foreign key and creates the missing `Domain` rows. Use `--dryrun` first to inspect what would change. Run it after a `db migrate` if you suspect that archive.org is over-represented in your domain stats.
+
 ## SQLite Recovery
 
 If your SQLite database becomes corrupted (e.g., "database disk image is malformed"), you can attempt a non-destructive recovery with the included helper script. It backs up the original DB, tries `sqlite3 .recover` (then `.dump` as a fallback), rebuilds a new DB, and verifies integrity.
@@ -1100,17 +1136,19 @@ mywi.py  →  mwi/cli.py  →  mwi/controller.py  →  mwi/core.py & mwi/export.
 
 ### Database Schema (SQLite, via Peewee)
 
-- **Land**: Research project/topic.
+- **Land**: Research project/topic. Notable column: `fullhtml` (INTEGER, default `0`) — when set to `1` (via `land create --fullhtml=TRUE`), this Land's crawls store the raw HTML of each page in `Expression.html` by default.
 - **Word**: Normalized vocabulary.
 - **LandDictionary**: Many-to-many Land/Word.
 - **Domain**: Unique website/domain.
-- **Expression**: Individual URL/page.
+- **Expression**: Individual URL/page. Extra columns added by recent migrations:
+  - `html` (TEXT, nullable) — raw HTML preserved when `--fullhtml=TRUE` is in effect (migration `007`).
+  - `seorank` (TEXT, nullable) — raw SEO Rank API JSON payload (migration `006`).
+  - `validllm` (`oui`/`non`/null) and `validmodel` (OpenRouter model slug) — bulk LLM verdict (migration `005`).
 - **ExpressionLink**: Directed link between Expressions.
 - **Media**: Images, videos, audio in Expressions.
 - **Paragraph / ParagraphEmbedding / ParagraphSimilarity**: Paragraph store, embeddings, and semantic links (pseudolinks).
 - **Tag**: Hierarchical tags.
 - **TaggedContent**: Snippets tagged in Expressions.
-  - Expression extra fields: `validllm` (yes/no), `validmodel` (OpenRouter model used), and `seorank` (raw SEO Rank API JSON)
 
 ### Main Workflows
 
@@ -1226,10 +1264,12 @@ pages (`--sleep`) to avoid rate limits; set it to `0` for tests/mocks only.
 When a date range is provided (or when you add `--progress`), the CLI prints one
 line per window indicating the covered dates and how many URLs SerpAPI returned.
 
-### Testing
+### Testing (developer view)
 
-- `tests/test_cli.py`: CLI smoke tests.
-- `tests/test_core.py`, etc.: Unit tests for extraction, parsing, export.
+- Active suite: `tests/test_01_installation.py` … `tests/test_08_expression_html.py` (numbered files).
+- Legacy smokes (`test_cli.py`, `test_core.py`, etc.) live under `tests/legacy/` and are **not** run by `make test`.
+- Conftest in `tests/conftest.py` sets up an isolated SQLite per test using temp directories.
+- See the full Make-target table in the [Testing](#testing) section above for entry points.
 
 ### Extending
 

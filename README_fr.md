@@ -266,6 +266,22 @@ python mywi.py land list
 python mywi.py land create --name="MonProjet" --desc="Description" --lang=fr
 ```
 
+| Option       | Type | Requis | Défaut | Description |
+|--------------|------|--------|--------|-------------|
+| `--name`     | str  | Oui    |        | Nom du land (identifiant unique) |
+| `--desc`     | str  | Non    |        | Description |
+| `--lang`     | str  | Non    | fr     | Code langue |
+| `--fullhtml` | str  | Non    | FALSE  | Si `TRUE`, les crawls de ce land stockent le HTML brut dans `expression.html` par défaut |
+
+**Exemples**
+
+```bash
+python mywi.py land create --name="AsthmaResearch" --desc="Recherche asthme & qualité de l'air" --lang="en"
+
+# Land qui archive le HTML brut de chaque page crawlée par défaut
+python mywi.py land create --name="AsthmaArchive" --desc="Archive HTML" --fullhtml=TRUE
+```
+
 ### 2. Lister les lands
 
 ```bash
@@ -313,12 +329,13 @@ python mywi.py land delete --name="MonProjet" --maxrel=0.5
 ### 1. Crawler les URLs du land
 
 ```bash
-python mywi.py land crawl --name="MonProjet" [--limit N] [--http CODE] [--depth D]
+python mywi.py land crawl --name="MonProjet" [--limit N] [--http CODE] [--depth D] [--fullhtml=TRUE|FALSE]
 ```
 
 - `--limit` : plafond d’URLs par run.
 - `--http` : relancer uniquement les codes spécifiés (`--http 503`).
 - `--depth` : limite la profondeur.
+- `--fullhtml` : surcharge ponctuelle de la politique de stockage HTML (sinon hérite de `land.fullhtml`).
 
 > Astuce shell :
 > `for i in {1..100}; do python mywi.py land crawl --name="MonProjet" --depth=0 --limit=100; done`
@@ -399,52 +416,59 @@ python mywi.py land consolidate --name="MonProjet" [--limit N] [--depth D]
 
 ## Tests
 
-MyWI inclut une suite de tests complète (85+ tests, ~87% de couverture) conçue selon les standards JOSS (Journal of Open Source Software).
+MyWI inclut une suite de tests aux standards JOSS (≈98 tests répartis sur 8 fichiers, ~87% de couverture).
 
-### Démarrage Rapide
+### Démarrage rapide
 
 ```bash
 # Installer les dépendances de test
 pip install -r requirements.txt
 
-# Exécuter tous les tests de base (sans clés API, ~7 secondes)
+# Exécuter les tests de base (sans clés API, ~7 secondes)
 make test
 
-# Exécuter avec rapport de couverture
+# Avec rapport de couverture (ouvre htmlcov/index.html)
 make test-cov
-
-# Visualiser la couverture
-open htmlcov/index.html
 ```
 
-### Structure des Tests
+### Structure des tests
 
-La suite de tests couvre toutes les fonctionnalités principales :
-- **test_01_installation.py** (12 tests) - Configuration de la base de données et migrations
-- **test_02_land_management.py** (19 tests) - Opérations CRUD pour les lands
-- **test_03_data_collection.py** (10 tests) - Crawling et collecte de données
-- **test_04_export.py** (12 tests) - Formats d'export (CSV, GEXF, corpus)
-- **test_05_media_analysis.py** (9 tests) - Analyse de médias et métadonnées
-- **test_06_embeddings.py** (12 tests) - Embeddings et pseudolinks
-- **test_07_integration.py** (11 tests) - Workflows end-to-end
+| Fichier | Tests | Couverture |
+|---------|------:|------------|
+| `tests/test_01_installation.py`     | 12 | Setup base, idempotence des migrations |
+| `tests/test_02_land_management.py`  | 19 | CRUD land/termes/URLs, dictionnaire |
+| `tests/test_03_data_collection.py`  | 12 | Pipeline crawl, extraction de contenu |
+| `tests/test_04_export.py`           | 12 | Exports CSV / GEXF / corpus / pseudolinks |
+| `tests/test_05_media_analysis.py`   |  9 | Pillow / EXIF / hash / couleurs |
+| `tests/test_06_embeddings.py`       | 12 | Découpage paragraphes, providers, similarité |
+| `tests/test_07_integration.py`      | 11 | Workflows end-to-end |
+| `tests/test_08_expression_html.py`  | 11 | Stockage `--fullhtml`, défaut `Land.fullhtml`, migration 007 |
 
-### Tests API Optionnels
+Les anciens smokes (`test_cli.py`, `test_core.py`, etc.) vivent dans `tests/legacy/` à titre de référence ; la suite active est `tests/test_0?_*.py`.
 
-Les tests nécessitant des clés API externes sont automatiquement ignorés si les clés ne sont pas définies :
+### Cibles Make
+
+| Commande | Rôle |
+|----------|------|
+| `make test` (alias `make test-basic`) | Suite par défaut, sans clés API |
+| `make test-quick` | Smoke test (`test_01_installation.py`) |
+| `make test-all` | Toute la suite, y compris les tests API |
+| `make test-cov` / `make test-cov-open` | Couverture (ouvre le rapport) |
+| `make test-apis` | Tests gated par `MWI_SERPAPI_API_KEY`, `MWI_SEORANK_API_KEY`, `MWI_OPENROUTER_API_KEY` |
+| `make test-integration` | Tests end-to-end (réseau) |
+| `make joss-test` | Rejoue le flux d'évaluation JOSS |
+| `make clean` | Purge `.pytest_cache`, `htmlcov`, `__pycache__` |
+
+### Tests API optionnels
+
+Les tests qui appellent des APIs externes sont automatiquement ignorés sans clé :
 
 ```bash
-# Définir les clés API (optionnel)
 export MWI_SERPAPI_API_KEY="votre_clé"
 export MWI_SEORANK_API_KEY="votre_clé"
 export MWI_OPENROUTER_API_KEY="votre_clé"
-
-# Exécuter les tests API
 make test-apis
 ```
-
-### Documentation
-
-Pour une documentation détaillée sur les tests, voir [TESTING.md](TESTING.md).
 
 ---
 
