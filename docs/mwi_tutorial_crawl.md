@@ -265,22 +265,25 @@ Le corpus Mélenchon (~13 000 seeds) correspond à une surveillance longitudinal
 Pour chaque URL, MWI :
 
 1. envoie une requête HTTP avec `aiohttp` (asynchrone, plusieurs URLs en parallèle) ;
-2. si la requête échoue (404, timeout…), retente sur **archive.org** ;
+2. **si le serveur renvoie un code rattrapable** (`403`, `406`, `429`, `503`, `520-526`, `ERR`) — typiquement Cloudflare qui détecte l'empreinte TLS de Python — MWI bascule automatiquement sur une **cascade de stratégies** : `curl_cffi` (TLS impersonation Chrome 120), puis Playwright (si `crawl_fallback_playwright=True`), puis `archive.org` ;
 3. nettoie le HTML pour en extraire le titre, le texte, et la liste des liens et médias ;
-4. enregistre tout dans la base : `expression.title`, `expression.readable`, `expression.relevance`, plus une ligne par lien dans `expressionlink`, plus une ligne par média dans `media` ;
+4. enregistre tout dans la base : `expression.title`, `expression.readable`, `expression.relevance`, plus `expression.fetch_method` (qui a fourni le HTML : `aiohttp` / `curl_cffi` / `playwright` / `archive_org`), plus une ligne par lien dans `expressionlink`, plus une ligne par média dans `media` ;
 5. les URLs trouvées dans les pages sont insérées comme nouvelles expressions à `depth+1`, prêtes pour le prochain `crawl`.
+
+> 💡 **Règle d'or de la cascade** — `expression.http_status` reflète **toujours** la réalité du serveur d'origine (ex. `403` même si `curl_cffi` a finalement obtenu le HTML). C'est `expression.fetch_method` qui dit *qui* a sauvé le contenu. Ce découplage évite de fausser les bilans HTTP. Détails : `.claude/rules/Pipelines.md` §3.5.
 
 ### 4.2 — Commande générique
 
 ```bash
-python mywi.py land crawl --name="MonLand" [--limit=N] [--depth=D] [--http=CODE] [--fullhtml=TRUE|FALSE]
+python mywi.py land crawl --name="MonLand" [--limit=N] [--depth=D] [--http=CODE] [--retry-status=CSV] [--fullhtml=TRUE|FALSE]
 ```
 
 | Paramètre | Effet |
 |---|---|
 | `--limit` | Nombre maximum d'URLs traitées dans cette session (utile pour des batches courts). |
 | `--depth` | Ne traiter que les URLs **déjà connues** à cette profondeur. Sans `--depth`, toutes profondeurs sont mélangées. |
-| `--http` | Re-crawler les pages qui avaient échoué avec ce code (ex. `--http=503`). |
+| `--http` | Re-crawler les pages qui avaient échoué avec ce code (ex. `--http=503`). Filtre sur **un seul** code. |
+| `--retry-status` | Re-crawler les pages avec un de ces codes (CSV : `--retry-status=403,429`), **en ignorant `fetched_at`**. Mode backfill cascade. |
 | `--fullhtml` | Surcharge la politique d'archivage du Land pour cette session. |
 
 ### 4.3 — Notre exemple : le crawl du Land Mélenchon
@@ -304,6 +307,76 @@ done
 
 # Vague 3 : depth=2, etc.
 ```
+
+#### Variante A — Crawl en tâche de fond (terminal libérable)
+
+Quand le crawl doit tourner pendant des heures (voire des jours), on n'a pas envie de garder le terminal ouvert. La commande Unix `nohup` détache le processus du terminal : on peut **fermer la fenêtre, se déconnecter en SSH, ou éteindre l'écran**, le crawl continue.
+
+```bash
+# Lancer toute la boucle en tâche de fond, sortie redirigée vers crawl.log
+nohup bash -c '
+  for i in {1..30}; do
+    python mywi.py land crawl --name="melenchon" --depth=0 --limit=500
+  done
+' > crawl.log 2>&1 &
+
+# Notez le PID affiché par le shell, par exemple :
+# [1] 48213
+```
+
+Décomposition de la ligne :
+
+| Morceau | Rôle |
+|---|---|
+| `nohup` | « no hang up » — le processus survit à la fermeture du terminal. |
+| `bash -c '…'` | Exécute la boucle entière dans un sous-shell (sinon `nohup` ne s'applique qu'à la première commande). |
+| `> crawl.log 2>&1` | Redirige stdout **et** stderr vers `crawl.log` (sans cela, `nohup` créerait un fichier `nohup.out`). |
+| `&` final | Lance le tout en arrière-plan, rend la main immédiatement. |
+
+Suivi de l'avancée sans interrompre le crawl :
+
+```bash
+# Voir les dernières lignes en direct
+tail -f crawl.log
+
+# Vérifier que le processus tourne toujours
+ps -p 48213            # remplacer par votre PID
+# ou
+pgrep -af "mywi.py land crawl"
+
+# Arrêter proprement le crawl si besoin
+kill 48213
+```
+
+> 💡 **Sur serveur distant (SSH)** : `nohup` suffit dans 90 % des cas. Pour des sessions très longues, préférez `tmux` ou `screen` — vous pouvez vous reconnecter et **reprendre la session interactive** plus tard. Exemple : `tmux new -s crawl` → lancer la boucle → `Ctrl-b d` pour détacher → `tmux attach -t crawl` pour revenir.
+
+#### Variante B — Sortie redirigée vers un fichier (sans détachement)
+
+Si vous voulez juste **garder une trace écrite** de la session sans la détacher (par exemple pour la relire plus tard ou la partager), redirigez simplement la sortie :
+
+```bash
+# Tout dans crawl.txt, écrasant le fichier précédent
+for i in {1..30}; do
+  python mywi.py land crawl --name="melenchon" --depth=0 --limit=500
+done > crawl.txt 2>&1
+
+# Variante : ajouter à un fichier existant (>> au lieu de >)
+for i in {1..30}; do
+  python mywi.py land crawl --name="melenchon" --depth=0 --limit=500
+done >> crawl.txt 2>&1
+```
+
+Le piège classique : `> crawl.txt` ne capture **que** stdout. Les erreurs (stderr) s'affichent toujours dans le terminal et ne sont pas dans le fichier. La syntaxe `2>&1` redirige stderr vers la même destination que stdout — vous récupérez tout dans un seul fichier.
+
+Pour **voir la sortie ET la sauvegarder en même temps** (utile pour un long crawl qu'on veut surveiller) :
+
+```bash
+for i in {1..30}; do
+  python mywi.py land crawl --name="melenchon" --depth=0 --limit=500
+done 2>&1 | tee crawl.txt
+```
+
+`tee` est un « T » de plomberie : il dédouble le flux — une copie vers le terminal, une copie vers le fichier.
 
 ### 4.4 — Statistiques réelles du crawl Mélenchon
 
@@ -339,14 +412,189 @@ Ce que le crawl a accumulé (top par nombre de pages) :
 
 > 💡 **Lecture critique** : Wikipedia domine massivement (Fr + En + traductions = ~47 000 pages, soit 28 % du corpus). Pour une étude sociologique, c'est à la fois une force (riche en biographie et événements) et un biais (homogénéité éditoriale). Mentionnez-le dans la méthode.
 
-### 4.6 — Re-crawler ce qui a échoué
+### 4.6 — Re-crawler ce qui a échoué (cascade anti-Cloudflare)
 
-Plus tard, vous voudrez peut-être re-tenter les pages qui ont échoué temporairement (429, timeouts) :
+Plus tard, vous voudrez peut-être re-tenter les pages qui ont échoué temporairement (429, timeouts) ou qui étaient bloquées par Cloudflare avant l'arrivée du sprint-403 :
 
 ```bash
 # Re-crawler ce qui était en 429 (rate limit dépassé)
 python mywi.py land crawl --name="melenchon" --http=429 --limit=1000
+
+# Backfill cascade : tous les 403 + 429 d'un coup, en ignorant fetched_at
+python mywi.py land crawl --name="melenchon" --retry-status=403,429
+
+# Idem mais limité pour test
+python mywi.py land crawl --name="melenchon" --retry-status=403 --limit=20
 ```
+
+**Effet typique** sur un Land Mélenchon antérieur au sprint-403 :
+
+| Avant sprint-403 | Après backfill `--retry-status=403` |
+|---|---|
+| `aiohttp` : 403 final | `curl_cffi` débloque ~91 % des cas (TLS impersonation Chrome) |
+| `aiohttp` : 403 final, sites Enterprise | reste `403` même après cascade — proxy résidentiel hors périmètre |
+
+Pour mesurer ce qui a été sauvé après la cascade :
+
+```bash
+sqlite3 data/mwi.db "
+  SELECT fetch_method, http_status, COUNT(*) FROM expression
+  WHERE land_id=(SELECT id FROM land WHERE name='melenchon')
+    AND fetched_at IS NOT NULL
+  GROUP BY fetch_method, http_status
+  ORDER BY 3 DESC LIMIT 20;
+"
+```
+
+> 💡 **Activer Playwright (opt-in)** — par défaut la cascade s'arrête à `curl_cffi` (~500 ms/page). Si vous voulez aussi débloquer les sites avec challenge JavaScript Cloudflare (Le Monde, etc.) : ajoutez `crawl_fallback_playwright = True` dans `settings.py`. Coût : 3-5 s/page sur les sites où la strate Playwright se déclenche, ~2 s d'init unique pour le pool.
+
+### 4.7 — Hygiène des URLs : normalisation automatique
+
+Depuis le sprint *normalise*, **toute URL entrant dans MWI passe par un pipeline de canonicalisation** (`mwi/url_normalizer.py`) — automatiquement, sans intervention. Ça concerne :
+
+- les seeds que vous ajoutez via `addurl` ou `urlist` ;
+- chaque URL trouvée par le crawler dans une page ;
+- chaque lien extrait par Mercury au moment du `readable`.
+
+Les transformations appliquées par défaut (lecture rapide) :
+
+| Avant | Après |
+|---|---|
+| `https://web.archive.org/web/2023.../lemonde.fr/article` | `https://lemonde.fr/article` |
+| `https://EXAMPLE.com/Page` | `https://example.com/Page` (path préservé) |
+| `https://lemonde.fr/article?utm_source=fb&id=42` | `https://lemonde.fr/article?id=42` |
+| `https://lemonde.fr/article?b=2&a=1` | `https://lemonde.fr/article?a=1&b=2` |
+| `https://lemonde.fr/article#section` | `https://lemonde.fr/article` |
+
+**Pourquoi c'est important** : sans cette étape, MWI stockerait deux `Expression` distinctes pour `lemonde.fr/article` et `web.archive.org/web/.../lemonde.fr/article`, ce qui **fausse la cartographie** de liens (deux nœuds, des arêtes éclatées entre les deux) et **gonfle artificiellement** le compteur de pages.
+
+> 💡 **Provenance** : quand le pipeline modifie une URL, l'original est sauvegardé dans `Expression.original_url` (NULL si rien n'a changé). Vous pouvez vérifier après coup ce qui a été normalisé :
+>
+> ```bash
+> sqlite3 data/mwi.db "SELECT original_url, url FROM expression
+>   WHERE land_id = (SELECT id FROM land WHERE name='melenchon')
+>     AND original_url IS NOT NULL LIMIT 10;"
+> ```
+
+#### Configuration
+
+Les règles « risquées » (qui peuvent casser des Lands existants si activées brutalement) sont **OFF par défaut** :
+
+| Règle | Effet | Activation |
+|---|---|---|
+| `force_https` | `http://X` → `https://X` | `export MWI_URL_FORCE_HTTPS=true` |
+| `strip_www` | `www.X.com` → `X.com` | `export MWI_URL_STRIP_WWW=true` |
+| `strip_mobile_subdomain` | `m.X.com` → `X.com` | `export MWI_URL_STRIP_MOBILE=true` |
+
+Ou directement dans `settings.py`, dictionnaire `url_normalization`.
+
+#### Rattrapage rétrospectif d'un Land existant
+
+Si votre Land Mélenchon a été crawlé **avant** ce sprint, il contient probablement des doublons archive ↔ canonique. La commande `land normalize` les nettoie :
+
+```bash
+# Backup obligatoire (la base peut faire plusieurs Go)
+cp data/mwi.db data/mwi.db.bak_$(date +%Y%m%d_%H%M%S)
+
+# Migration de la colonne expression.original_url (idempotent)
+python mywi.py db migrate
+
+# Aperçu : dénombre les renames et les fusions sans rien modifier
+python mywi.py land normalize --name=melenchon --dry-run
+
+# Application
+python mywi.py land normalize --name=melenchon
+```
+
+Sortie typique :
+
+```text
+Scanning land "melenchon" for URL normalization...
+  10901 URLs to rename, 9123 duplicates to merge.
+
+Done. renamed: 10901, merged: 9123
+  Links remapped (incoming): 28774
+  Links dropped  (incoming): 4112
+  Links remapped (outgoing): 19655
+  Links dropped  (outgoing): 2880
+  Cascade-deleted Media: 14302
+  Cascade-deleted Paragraph: 8911
+  Cascade-deleted TaggedContent: 0
+```
+
+Pour chaque doublon, MWI :
+
+1. **renomme** l'URL si le canonique n'existe pas encore (UPDATE en place + `original_url` rempli) ;
+2. **fusionne** quand le canonique existe déjà : remappe TOUS les liens entrants/sortants vers la version canonique, supprime les self-loops et les arêtes en double, puis supprime l'Expression doublon (ses `Media`/`Paragraph`/`TaggedContent` partent en CASCADE — ils venaient de la version Wayback polluée, pas de perte d'information utile).
+
+Les chaînes Wayback-de-Wayback (`/web/2024/web/2023/page`) sont résolues transitivement en une seule passe.
+
+#### Variante : re-crawler les URLs nettoyées
+
+Si la version archive avait reçu un `http_status=000` (panne réseau) et que la canonique n'avait jamais été crawlée, vous voulez probablement la re-fetcher après nettoyage :
+
+```bash
+# Remet http_status=NULL sur les expressions renommées
+python mywi.py land normalize --name=melenchon --reset-status
+
+# Puis re-crawle ces URLs (qui sont maintenant des canoniques propres)
+python mywi.py land crawl --name=melenchon --http=000 --limit=2000
+```
+
+#### Normaliser une **autre** base que `data/mwi.db`
+
+Par défaut MWI travaille sur `data/mwi.db`. Si vous gérez plusieurs bases en parallèle (un fichier par projet, des backups, des bases reçues d'un collègue), trois façons de pointer la commande sur une autre :
+
+**Option 1 — Le flag `--db PATH`** (le plus simple, accepte n'importe quel nom de fichier) :
+
+```bash
+python mywi.py land normalize --name=foo --db /chemin/vers/melenchon_v2.db --dry-run
+python mywi.py land normalize --name=bar --db ./backups/projet_A.db
+```
+
+Le flag s'applique à **toutes** les commandes (`land normalize`, `db migrate`, `land export`, etc.) — pratique pour scripter une boucle :
+
+```bash
+for db in backups/*.db; do
+  python mywi.py db migrate --db "$db"
+  python mywi.py land normalize --name="$(basename $db .db)" --db "$db"
+done
+```
+
+**Option 2 — La variable d'env `MYWI_DATA_DIR`** (limitée : le fichier doit être nommé `mwi.db` dans le dossier ciblé) :
+
+```bash
+MYWI_DATA_DIR=./data_projet_A python mywi.py land normalize --name=foo
+MYWI_DATA_DIR=./data_projet_B python mywi.py land normalize --name=bar
+```
+
+Cette option est utile quand chaque projet a son propre dossier `data/` (mode Docker, par exemple).
+
+**Option 3 — Renommer/symlinker** (à éviter sauf cas particulier) :
+
+```bash
+cp /chemin/vers/autre.db data/mwi.db.backup
+ln -sf /chemin/vers/autre.db data/mwi.db
+python mywi.py land normalize --name=foo
+rm data/mwi.db && mv data/mwi.db.backup data/mwi.db   # restaurer
+```
+
+> 💡 **Recommandation** : utilisez l'option 1 (`--db`). Elle ne touche à rien de votre layout de fichiers, fonctionne avec n'importe quel nom (`melenchon_v2.db`, `archive_2024.db`, `corpus_thèse.db`), et le chemin absolu utilisé est affiché en début de commande pour vérification : `Using database: /chemin/absolu/melenchon_v2.db`.
+
+#### Garde anti-archive d'archive
+
+Quand le crawler échoue sur une URL et qu'il essaie le fallback Wayback, MWI vérifie maintenant **deux conditions** avant de tenter l'appel :
+
+1. **L'URL n'est pas elle-même une `web.archive.org/...`** — sinon on demanderait à Wayback une archive d'une archive, ce qui n'a aucun sens et fait perdre 10 s en timeout.
+2. **Archive.org répond** — un *circuit breaker* (5 échecs consécutifs → 5 min de cooldown) coupe le fallback pendant les pannes archive.org. Ça évite que sur 9 000 erreurs réseau, vous attendiez 25 h cumulées de timeouts inutiles.
+
+Vous verrez parfois dans les logs :
+
+```text
+Skipping archive.org fallback (breaker open) for https://www.example.com/page
+```
+
+C'est normal — archive.org est temporairement indisponible, MWI passe.
 
 ---
 
@@ -636,6 +884,30 @@ GROUP BY d.name ORDER BY pages DESC LIMIT 10;
 SELECT http_status, COUNT(*) FROM expression
 WHERE fetched_at IS NOT NULL
 GROUP BY http_status ORDER BY 2 DESC LIMIT 10;
+```
+
+**Distribution des stratégies de fetch** (sprint-403 — qui a sauvé chaque page) :
+
+```sql
+SELECT fetch_method, COUNT(*) FROM expression
+WHERE fetched_at IS NOT NULL
+GROUP BY fetch_method ORDER BY 2 DESC;
+-- aiohttp     | 67 432  (le serveur a répondu directement)
+-- curl_cffi   |  9 800  (Cloudflare 403 → débloqué par TLS impersonation)
+-- archive_org |    400  (rescapé via Wayback)
+-- playwright  |     32  (challenge JS résolu, si crawl_fallback_playwright=True)
+-- (NULL)      | 43 569  (pages crawlées avant sprint-403)
+```
+
+**Croisement http_status × fetch_method** (savoir où la cascade a échoué) :
+
+```sql
+SELECT http_status, fetch_method, COUNT(*) FROM expression
+WHERE fetched_at IS NOT NULL
+GROUP BY http_status, fetch_method
+ORDER BY 1, 3 DESC;
+-- Lecture : http_status=403 + fetch_method=curl_cffi → la page reste en 403 final
+-- malgré la TLS impersonation (Cloudflare Enterprise, NYT, etc.).
 ```
 
 **Page la plus pertinente du Land** :

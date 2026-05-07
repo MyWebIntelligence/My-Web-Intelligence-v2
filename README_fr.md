@@ -20,7 +20,8 @@ MyWebIntelligence (MyWI) est un outil Python destiné aux équipes de recherche 
   - [3. Ajouter des termes](#3-ajouter-des-termes)
   - [4. Ajouter des URLs](#4-ajouter-des-urls)
   - [5. Récupérer des URLs via SerpAPI](#5-récupérer-des-urls-via-serpapi)
-  - [6. Supprimer un land ou des expressions](#6-supprimer-un-land-ou-des-expressions)
+  - [6. Routeur de recherche multi-API](#6-routeur-de-recherche-multi-api)
+  - [7. Supprimer un land ou des expressions](#7-supprimer-un-land-ou-des-expressions)
 - [Collecte de données](#collecte-de-données)
   - [1. Crawler les URLs du land](#1-crawler-les-urls-du-land)
   - [2. Extraire un contenu lisible (pipeline Mercury)](#2-extraire-un-contenu-lisible-pipeline-mercury)
@@ -66,6 +67,7 @@ MyWebIntelligence (MyWI) est un outil Python destiné aux équipes de recherche 
 - **Crawl résilient** : parallélisme contrôlé, retries, filtres HTTP, profondeur maîtrisée.
 - **Extraction Mercury** : contenu lisible propre avec fusion configurable, enrichissement des métadonnées, recalcul de la pertinence.
 - **Analyse médias** : dimensions, formats, couleurs dominantes, EXIF, hash perceptuel, score NSFW, erreurs traçables.
+- **Routeur de recherche multi-API** : collecte de seeds depuis 5 fournisseurs (SearXNG auto-hébergé, Brave, Serper, SerpAPI, Tavily) avec stratégies `fallback` ou `parallel`, journal complet par requête pour la reproductibilité (JOSS). Voir [`docs/search_router.md`](docs/search_router.md).
 - **Enrichissements** : SerpAPI pour préremplir les lands, SEO Rank pour les métriques, validation LLM (OpenRouter) en option.
 - **Embeddings & pseudolinks** : vecteurs par paragraphe, similarité cosine (exacte ou LSH), pipeline NLI pour qualifier les relations logiques.
 - **Exports multiples** : CSV, GEXF (pages/nœuds), corpus brut, médias, tags, pseudolinks.
@@ -191,6 +193,16 @@ python mywi.py land list
   - Navigateurs : `python install_playwright.py`
   - Dépendances Debian/Ubuntu : `sudo apt-get install libnspr4 libnss3 libdbus-1-3 libatk1.0-0 libatk-bridge2.0-0 libatspi2.0-0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libxkbcommon0 libasound2`
   - Docker : `docker compose exec mwi bash -lc "apt-get update && apt-get install -y <libs>"` puis `docker compose exec mwi python install_playwright.py`
+  - **Note (sprint-403)** : Playwright est désormais aussi utilisé par la cascade
+    fetch (`crawl_fallback_playwright=True` dans `settings.py`) et par
+    `extract_dynamic_medias`. Les deux partagent un `BrowserPool` singleton —
+    une seule instance Chromium par crawl quel que soit le nombre d'usages.
+
+**Cascade fetch (sprint-403)** : `requirements.txt` inclut `curl_cffi>=0.7.0`.
+Cette dépendance permet l'imitation TLS (Chrome 120) pour récupérer les pages
+qui retournent `403`/`429` à `aiohttp` à cause de l'empreinte Cloudflare, sans
+lancer de navigateur. Activée par défaut ; désactiver avec
+`crawl_fallback_curl_cffi = False` dans `settings.py`.
 
 **Problèmes NLTK (Windows/macOS)**
 
@@ -315,7 +327,67 @@ python mywi.py land urlist --name="MonProjet" --query="(mot clé)" \
 - Nécessite `settings.serpapi_api_key` ou `MWI_SERPAPI_API_KEY`.
 - `--sleep` contrôle la pause (défaut : 1 s).
 
-### 6. Supprimer un land ou des expressions
+> **Voir aussi** : le **Routeur de recherche multi-API** ci-dessous est la voie
+> recommandée pour amorcer un Land en MWI v2. `land urlist` reste préservé pour
+> les besoins ciblés Google + filtre de date.
+
+### 6. Routeur de recherche multi-API
+
+Collecte des seeds depuis **5 fournisseurs** en une seule commande — SearXNG
+(auto-hébergé), Brave, Serper, SerpAPI, Tavily — avec deux stratégies
+d'orchestration (`fallback` pour préserver les quotas, `parallel` pour la
+triangulation). Chaque collecte est journalisée dans les tables `searchquery`
+et `searchresultlog` pour la reproductibilité (JOSS).
+
+#### Démarrage rapide (SearXNG seul, sans clé API)
+
+```bash
+# 1. Démarrer une instance SearXNG locale.
+cd docker/searxng && docker compose up -d
+cd ../..
+
+# 2. Vérifier les fournisseurs configurés.
+python mywi.py search check
+
+# 3. Exécuter une recherche et amorcer un Land.
+python mywi.py land create --name=DemoSearch --desc="démo routeur de recherche"
+python mywi.py search run --land=DemoSearch \
+                          --query="humanités numériques" \
+                          --limit=20 --strategy=fallback
+```
+
+#### Commandes
+
+| Commande | Description |
+|----------|-------------|
+| `python mywi.py search check` | État configuré / non configuré pour les 5 fournisseurs |
+| `python mywi.py search run --land=X --query=… [--limit=20] [--strategy=fallback\|parallel] [--language=fr] [--providers=searxng,brave]` | Exécute la requête, dédoublonne et insère les Expressions dans le Land |
+| `python mywi.py search list --land=X` | Liste les `SearchQuery` passées pour un Land |
+| `python mywi.py search usage --land=X` | Agrège le rapport d'usage par fournisseur (calls, errors, status, quota) |
+
+#### Configuration
+
+Renseigner les clés disponibles dans `settings.py` ou `.env` (cf. `.env.example`) :
+
+```bash
+SEARXNG_BASE_URL=http://localhost:8888  # défaut
+BRAVE_API_KEY=...                       # optionnel
+SERPER_API_KEY=...                      # optionnel
+SERPAPI_API_KEY=...                     # optionnel (fallback vers serpapi_api_key legacy)
+TAVILY_API_KEY=...                      # optionnel
+SEARCH_DEFAULT_STRATEGY=fallback        # ou "parallel"
+SEARCH_PROVIDER_TIMEOUT=30              # secondes
+```
+
+Une clé manquante désactive silencieusement le fournisseur correspondant — le
+routeur ne lève jamais d'erreur sur une absence de clé.
+
+> 📘 **Documentation complète** :
+> - Guide utilisateur : [`docs/search_router.md`](docs/search_router.md) (commandes, cadre légal TDM, reproductibilité JOSS).
+> - Guide développeur : [`docs/search_router_architecture.md`](docs/search_router_architecture.md) (diagramme de séquence, recette d'ajout d'un nouveau provider).
+> - Mise en place SearXNG : [`docs/searxng_setup.md`](docs/searxng_setup.md).
+
+### 7. Supprimer un land ou des expressions
 
 ```bash
 python mywi.py land delete --name="MonProjet"
@@ -329,16 +401,28 @@ python mywi.py land delete --name="MonProjet" --maxrel=0.5
 ### 1. Crawler les URLs du land
 
 ```bash
-python mywi.py land crawl --name="MonProjet" [--limit N] [--http CODE] [--depth D] [--fullhtml=TRUE|FALSE]
+python mywi.py land crawl --name="MonProjet" [--limit N] [--http CODE] [--retry-status CSV] [--depth D] [--fullhtml=TRUE|FALSE]
 ```
 
 - `--limit` : plafond d’URLs par run.
 - `--http` : relancer uniquement les codes spécifiés (`--http 503`).
+- `--retry-status` : codes séparés par virgule à relancer, en ignorant `fetched_at` (`--retry-status=403,429`). Mode backfill cascade.
 - `--depth` : limite la profondeur.
 - `--fullhtml` : surcharge ponctuelle de la politique de stockage HTML (sinon hérite de `land.fullhtml`).
 
 > Astuce shell :
 > `for i in {1..100}; do python mywi.py land crawl --name="MonProjet" --depth=0 --limit=100; done`
+
+> **Cascade anti-Cloudflare (sprint-403)** — quand `aiohttp` reçoit un code
+> "rattrapable" (`403`, `406`, `429`, `503`, `520-526`, `ERR`), MWI bascule
+> automatiquement sur `curl_cffi` (TLS chrome120, ON par défaut), puis
+> Playwright optionnel (`crawl_fallback_playwright=True`, ~3-5 s/page),
+> puis archive.org. La stratégie utilisée est enregistrée dans
+> `expression.fetch_method` (visible dans `python mywi.py land list`).
+> Utiliser `--retry-status=403,429` pour rejouer la cascade sur les URLs
+> déjà crawlées sans réinitialiser leur `fetched_at`. Config détaillée :
+> `settings-example.py` (bloc `crawl_fallback_*`) et
+> `.claude/rules/Pipelines.md` §3.5.
 
 ### 2. Extraire un contenu lisible (pipeline Mercury)
 
@@ -413,6 +497,88 @@ python mywi.py heuristic update
 ```bash
 python mywi.py land consolidate --name="MonProjet" [--limit N] [--depth D]
 ```
+
+## Normalisation des URLs
+
+Toute URL entrant dans MWI (seeds, résultats SerpAPI, liens extraits par
+le crawl ou Mercury) passe par `mwi.url_normalizer.normalize_url`
+**avant** insertion en base. Cette canonicalisation garantit une seule
+forme par page logique et évite les doublons d'`Expression` causés par
+des variantes d'URL (snapshots Wayback, paramètres de tracking, ancres,
+casse du host).
+
+**Configuration** — voir `settings.url_normalization` dans
+`settings-example.py`. Défauts conservateurs :
+
+| Règle | Défaut | Effet |
+|---|---|---|
+| `unwrap_archive` | ON | `web.archive.org/.../X` → `X`, récursivement |
+| `lowercase_host` | ON | `EXAMPLE.com` → `example.com` (path préservé) |
+| `strip_trackers` | ON | Retire `utm_*`, `fbclid`, `gclid`, etc. |
+| `normalize_query_order` | ON | Tri alphabétique des params restants |
+| `force_https` | OFF | `http://X` → `https://X` (à activer manuellement) |
+| `strip_www` | OFF | `www.X.com` → `X.com` (à activer manuellement) |
+| `strip_mobile_subdomain` | OFF | `m.X.com` → `X.com` (à activer manuellement) |
+| `trailing_slash` | `preserve` | `preserve` \| `strip` \| `add` |
+
+Override par variables d'environnement :
+`MWI_URL_FORCE_HTTPS=true`, `MWI_URL_STRIP_WWW=true`,
+`MWI_URL_STRIP_MOBILE=true`.
+
+**Provenance** — quand la normalisation modifie l'URL, l'original est
+sauvegardé dans `Expression.original_url` (NULL sinon). Permet l'audit
+rétrospectif sans relancer le crawl.
+
+**Rattrapage rétrospectif** — pour appliquer les règles à un Land créé
+avant ce pipeline :
+
+```bash
+# Backup obligatoire
+cp data/mwi.db data/mwi.db.bak_$(date +%Y%m%d_%H%M%S)
+
+# Applique la migration 008 (ajoute la colonne original_url)
+python mywi.py db migrate
+
+# Aperçu (n'écrit rien)
+python mywi.py land normalize --name=MonProjet --dry-run --verbose
+
+# Application
+python mywi.py land normalize --name=MonProjet
+
+# Variante : remet http_status=NULL pour re-crawler les URLs renommées
+python mywi.py land normalize --name=MonProjet --reset-status
+```
+
+**Ce que fait `land normalize`** pour chaque `Expression` du Land :
+
+- Si la forme canonique **n'existe pas** déjà comme autre Expression :
+  UPDATE en place + `original_url` rempli.
+- Si la forme canonique **existe** : tous les `ExpressionLink`
+  (entrants ET sortants) sont remappés vers le canonique, les self-loops
+  et arêtes en double sont supprimés, puis l'Expression doublon est
+  supprimée (CASCADE sur `Media`, `Paragraph`, `TaggedContent`).
+- Les chaînes Wayback-de-Wayback sont résolues en une seule passe.
+
+**Circuit breaker archive.org** — quand archive.org est en panne (ce qui
+arrive régulièrement depuis 2024), le fallback Wayback du flux readable
+ouvre un breaker après 5 échecs consécutifs et skippe le fallback
+pendant 5 min. Économise jusqu'à ~10s par expression pendant les
+incidents. Reset automatique au cooldown ou au premier succès.
+
+> **Garde « pas d'archive d'archive »** — quand l'URL est déjà une
+> `web.archive.org/...`, le fallback ne se déclenche jamais.
+
+**Travailler sur une autre base que `data/mwi.db`** — le flag `--db`
+accepte n'importe quel chemin de fichier SQLite, indépendamment du nom :
+
+```bash
+python mywi.py land normalize --name=foo --db ./backups/projet_A.db --dry-run
+python mywi.py db migrate --db /chemin/vers/melenchon_v2.db
+```
+
+Le flag s'applique à **toutes** les commandes MWI. Alternative sans
+modification : `MYWI_DATA_DIR=/dossier python mywi.py …` (le fichier
+doit alors s'appeler `mwi.db` dans ce dossier).
 
 ## Tests
 

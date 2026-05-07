@@ -154,6 +154,11 @@ class Expression(BaseModel):
             Maximum 100 characters, nullable.
         seorank (TextField): Raw JSON payload from SEO Rank API for this URL,
             nullable.
+        fetch_method (CharField): Strategy that provided the HTML for this
+            expression — one of 'aiohttp', 'curl_cffi', 'playwright',
+            'archive_org'. NULL when not yet crawled or pre-cascade. Used
+            for auditing the fallback cascade (sprint-403). Maximum 32
+            characters, nullable.
 
     Notes:
         The url field is indexed for efficient lookup.
@@ -163,6 +168,11 @@ class Expression(BaseModel):
     """
     land = ForeignKeyField(Land, backref='expressions', on_delete='CASCADE')
     url = TextField(index=True)
+    # original_url: the URL as it was first observed, before normalization
+    # (mwi.url_normalizer). NULL when the canonical form was already
+    # canonical at insertion time. Used for provenance and retroactive
+    # auditing — not used by any pipeline logic.
+    original_url = TextField(null=True)
     domain = ForeignKeyField(Domain, backref='expressions')
     http_status = CharField(max_length=3, null=True, index=True)
     lang = CharField(max_length=100, null=True)  # Accepts comma-separated list of languages
@@ -185,6 +195,8 @@ class Expression(BaseModel):
     validmodel = CharField(max_length=100, null=True)
     # seorank persists the raw JSON payload returned by the SEO Rank API for the URL
     seorank = TextField(null=True)
+    # fetch_method records which strategy supplied the HTML (sprint-403 cascade audit)
+    fetch_method = CharField(max_length=32, null=True)
 
 
 class ExpressionLink(BaseModel):
@@ -652,3 +664,79 @@ class TaggedContent(BaseModel):
     text = TextField()
     from_char = IntegerField()
     to_char = IntegerField()
+
+
+class SearchQuery(BaseModel):
+    """Search query executed by the multi-API search router.
+
+    A SearchQuery records one invocation of `SearchRouter.search()` against
+    a Land. It groups every URL returned by the configured providers and
+    persists the runtime usage report (calls, errors, status) for
+    reproducibility — a JOSS requirement for academic web-data collection.
+
+    Attributes:
+        land (ForeignKeyField): Parent Land. Cascade deletes when the
+            Land is removed.
+        query (TextField): The user-supplied search string.
+        strategy (CharField): Orchestration strategy: 'fallback' or 'parallel'.
+        language (CharField): ISO 639-1 language code passed to providers.
+        num_requested (IntegerField): URL count requested by the user.
+        num_collected (IntegerField): URL count actually persisted.
+        created_at (DateTimeField): Timestamp when the query started.
+        completed_at (DateTimeField): Timestamp when the router returned.
+        usage_report (TextField): JSON-serialized per-provider usage report.
+    """
+
+    land = ForeignKeyField(Land, backref='search_queries', on_delete='CASCADE')
+    query = TextField()
+    strategy = CharField(max_length=20)
+    language = CharField(max_length=5, default='fr')
+    num_requested = IntegerField(default=20)
+    num_collected = IntegerField(default=0)
+    created_at = DateTimeField(default=datetime.datetime.now)
+    completed_at = DateTimeField(null=True)
+    usage_report = TextField(null=True)
+
+
+class SearchResultLog(BaseModel):
+    """Individual URL returned by a provider for a SearchQuery.
+
+    One row per distinct URL. When the same URL is returned by several
+    providers, their names are concatenated in `providers`
+    (e.g. ``'searxng+brave+serper'``) and the best (lowest) rank is kept.
+    The `expression` FK is populated when the controller successfully
+    creates an Expression in the same Land for the URL.
+
+    Attributes:
+        search_query (ForeignKeyField): The parent SearchQuery. Cascade
+            deletes when the query is removed.
+        url (TextField): Canonicalised URL (see ``mwi.search.utils``).
+        title (TextField): Result title from the provider, nullable.
+        snippet (TextField): Result snippet from the provider, nullable.
+        providers (CharField): Plus-joined provider names (max 200 chars).
+        rank_min (IntegerField): Best (lowest) 1-based rank across providers.
+        expression (ForeignKeyField): Linked Expression in the Land. SET NULL
+            on delete to preserve the search log even if the Expression is
+            removed downstream. Nullable.
+        created_at (DateTimeField): Insertion timestamp.
+
+    Notes:
+        Unique on (search_query, url) — same URL cannot be logged twice
+        for the same SearchQuery.
+    """
+
+    search_query = ForeignKeyField(SearchQuery, backref='results', on_delete='CASCADE')
+    url = TextField(index=True)
+    title = TextField(null=True)
+    snippet = TextField(null=True)
+    providers = CharField(max_length=200)
+    rank_min = IntegerField(null=True)
+    expression = ForeignKeyField(Expression, null=True,
+                                 backref='from_searches', on_delete='SET NULL')
+    created_at = DateTimeField(default=datetime.datetime.now)
+
+    class Meta:
+        database = DB
+        indexes = (
+            (('search_query', 'url'), True),
+        )

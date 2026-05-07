@@ -34,6 +34,7 @@ This README is also available in French: [README_fr.md](README_fr.md)
 ## Features
 
 *   **Land Creation & Management**: Organize your research into "lands," which are thematic collections of terms and URLs.
+*   **Multi-API Search Router**: Collect URL seeds from up to five providers (SearXNG self-hosted, Brave, Serper, SerpAPI, Tavily) with `fallback` or `parallel` strategies, full per-query journal for reproducibility (JOSS). See [`docs/search_router.md`](docs/search_router.md).
 *   **Web Crawling**: Crawl URLs associated with your lands to gather web page content.
 *   **Content Extraction**: Process crawled pages to extract readable content.
 *   **SEO Rank Enrichment**: Query the SEO Rank API for each expression and keep the raw JSON payload alongside the URL.
@@ -177,6 +178,17 @@ python mywi.py land list
   - Browsers: `python install_playwright.py`
   - Debian/Ubuntu libs: `sudo apt-get install libnspr4 libnss3 libdbus-1-3 libatk1.0-0 libatk-bridge2.0-0 libatspi2.0-0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libxkbcommon0 libasound2`
   - Docker: `docker compose exec mwi bash -lc "apt-get update && apt-get install -y <libs>"` then `docker compose exec mwi python install_playwright.py`
+  - **Note (sprint-403)**: Playwright is now also leveraged by the cascade fetch
+    (`crawl_fallback_playwright=True` in `settings.py`) and by
+    `extract_dynamic_medias`. Both share the same `BrowserPool` singleton, so a
+    single Chromium instance is launched per crawl regardless of how many pages
+    use it.
+
+**Cascade fetch dependency (sprint-403):** `requirements.txt` now includes
+`curl_cffi>=0.7.0`. It enables TLS impersonation (Chrome 120) so that pages
+returning `403`/`429` to plain `aiohttp` due to Cloudflare fingerprinting can
+still be retrieved without launching a full browser. Enabled by default; can be
+turned off with `crawl_fallback_curl_cffi = False` in `settings.py`.
 
 **Troubleshooting NLTK (Windows/macOS):**
 ```bash
@@ -292,6 +304,15 @@ List all lands or show properties of a specific land.
 |----------|------|----------|---------|----------------------------------|
 | --name   | str  | No       |         | Name of the land to show details |
 
+The detailed view shows, for each land:
+- Number of dictionary terms.
+- Total expressions (and how many remain to crawl).
+- HTTP status distribution.
+- **Fetch methods distribution** (sprint-403): which strategy provided the HTML
+  for each crawled page — `aiohttp`, `curl_cffi`, `playwright`, `archive_org`,
+  or `unknown` for pages crawled before the migration.
+- Embedding pipeline summary (paragraphs / embeddings / pseudolinks).
+
 ---
 
 ### 3. Add Terms to a Land
@@ -357,9 +378,72 @@ python mywi.py land urlist --name="MyResearchTopic" --query="(gilets jaunes) OR 
 > **API key** — populate `settings.serpapi_api_key` or export
 > `MWI_SERPAPI_API_KEY` before running the command.
 
+> **See also**: the new **Multi-API Search Router** (next section) is the
+> recommended way to seed Lands in MWI v2. `land urlist` is preserved for
+> compatibility and one-shot Google date-filtered scrapes.
+
 ---
 
-### 6. Delete a Land or Expressions
+### 6. Multi-API Search Router
+
+Collect URL seeds from up to **five providers** in one shot — SearXNG
+(self-hosted), Brave, Serper, SerpAPI, Tavily — with two orchestration
+strategies (`fallback` to preserve quotas, `parallel` for triangulation).
+Every collection is journaled in the `searchquery` and `searchresultlog`
+tables for reproducibility (JOSS).
+
+#### Quick start (SearXNG only — no API key required)
+
+```bash
+# 1. Start a local SearXNG instance.
+cd docker/searxng && docker compose up -d
+cd ../..
+
+# 2. Verify which providers are configured.
+python mywi.py search check
+# searxng yes / brave no / serper no / serpapi no / tavily no
+
+# 3. Run a search and seed a Land.
+python mywi.py land create --name=DemoSearch --desc="search router demo"
+python mywi.py search run --land=DemoSearch \
+                          --query="humanités numériques" \
+                          --limit=20 --strategy=fallback
+```
+
+#### Commands
+
+| Command | Description |
+|---------|-------------|
+| `python mywi.py search check` | Per-provider configured/unconfigured table |
+| `python mywi.py search run --land=X --query=… [--limit=20] [--strategy=fallback\|parallel] [--language=fr] [--providers=searxng,brave]` | Execute search, dedup URLs, insert Expressions in the Land |
+| `python mywi.py search list --land=X` | List past `SearchQuery` rows for a Land |
+| `python mywi.py search usage --land=X` | Aggregate per-provider usage report (calls, errors, status, quota) |
+
+#### Configuration
+
+Add the keys you have to `settings.py` or `.env` (see `.env.example`):
+
+```bash
+SEARXNG_BASE_URL=http://localhost:8888  # default
+BRAVE_API_KEY=...                       # optional
+SERPER_API_KEY=...                      # optional
+SERPAPI_API_KEY=...                     # optional (falls back to legacy serpapi_api_key)
+TAVILY_API_KEY=...                      # optional
+SEARCH_DEFAULT_STRATEGY=fallback        # or "parallel"
+SEARCH_PROVIDER_TIMEOUT=30              # seconds
+```
+
+A missing key silently disables the corresponding provider — the router
+never errors on unconfigured backends.
+
+> 📘 **Full documentation**:
+> - User guide: [`docs/search_router.md`](docs/search_router.md) (commands, legal framework, JOSS reproducibility).
+> - Developer guide: [`docs/search_router_architecture.md`](docs/search_router_architecture.md) (sequence diagram, recipe to add a new provider).
+> - SearXNG setup: [`docs/searxng_setup.md`](docs/searxng_setup.md).
+
+---
+
+### 7. Delete a Land or Expressions
 
 Delete an entire land or only expressions below a relevance threshold.
 
@@ -386,16 +470,17 @@ Delete an entire land or only expressions below a relevance threshold.
 Crawl the URLs added to a land to fetch their content.
 
 ```bash
-python mywi.py land crawl --name="MyResearchTopic" [--limit=NUMBER] [--http=HTTP_STATUS_CODE]
+python mywi.py land crawl --name="MyResearchTopic" [--limit=NUMBER] [--http=HTTP_STATUS_CODE] [--retry-status=CSV]
 ```
 
-| Option     | Type   | Required | Default        | Description                                                                 |
-|------------|--------|----------|----------------|-----------------------------------------------------------------------------|
-| --name     | str    | Yes      |                | Name of the land whose URLs to crawl                                        |
-| --limit    | int    | No       |                | Maximum number of URLs to crawl in this run                                 |
-| --http     | str    | No       |                | Re-crawl only pages that previously resulted in this HTTP error (e.g., 503) |
-| --depth    | int    | No       |                | Only crawl URLs that remain to be crawled at the specified depth            |
-| --fullhtml | str    | No       | (land default) | Override the land's HTML-storage policy (`TRUE`/`FALSE`) for this crawl     |
+| Option         | Type   | Required | Default        | Description                                                                 |
+|----------------|--------|----------|----------------|-----------------------------------------------------------------------------|
+| --name         | str    | Yes      |                | Name of the land whose URLs to crawl                                        |
+| --limit        | int    | No       |                | Maximum number of URLs to crawl in this run                                 |
+| --http         | str    | No       |                | Re-crawl only pages that previously resulted in this HTTP error (e.g., 503) |
+| --retry-status | str    | No       |                | Comma-separated codes to retry, ignoring `fetched_at` (e.g., `403,429`)     |
+| --depth        | int    | No       |                | Only crawl URLs that remain to be crawled at the specified depth            |
+| --fullhtml     | str    | No       | (land default) | Override the land's HTML-storage policy (`TRUE`/`FALSE`) for this crawl     |
 
 **Examples:**
 ```bash
@@ -405,7 +490,18 @@ python mywi.py land crawl --name="AsthmaResearch" --http=503
 python mywi.py land crawl --name="AsthmaResearch" --depth=2
 python mywi.py land crawl --name="AsthmaResearch" --depth=1 --limit=5
 python mywi.py land crawl --name="AsthmaResearch" --fullhtml=TRUE   # archive the raw HTML
+python mywi.py land crawl --name="AsthmaResearch" --retry-status=403,429   # backfill cascade
 ```
+
+> **Anti-Cloudflare cascade** — if `aiohttp` returns a "retryable" status
+> (`403`, `406`, `429`, `503`, `520-526`, `ERR`), MWI automatically falls
+> back to `curl_cffi` (TLS impersonation, ON by default), then optionally
+> Playwright (`crawl_fallback_playwright=True` to enable, ~3-5 s/page),
+> then archive.org. The strategy that finally provided the HTML is recorded
+> in `expression.fetch_method` (visible in `python mywi.py land list`).
+> Use `--retry-status=403,429` to re-run the cascade on previously crawled
+> URLs without resetting their `fetched_at`. Configuration block:
+> `crawl_fallback_*` keys in `settings-example.py`.
 
 > **Tip (Bash)** — Running multiple small batches can be faster than a single huge crawl. On macOS/Linux you can loop the crawler in one line:
 > ```bash
@@ -715,6 +811,74 @@ python mywi.py land consolidate --name="AsthmaResearch" --depth=0
 - Only pages that have already been crawled (`fetched_at` is set) are affected.
 - For each page, the number of extracted links and media is displayed.
 - This pipeline is especially useful after bulk imports, migrations, or when using third-party clients that may not maintain all MyWI invariants.
+
+---
+
+## URL Normalization Pipeline
+
+Every URL ingested by MWI (seeds, SerpAPI results, links extracted at crawl
+time, links from Mercury Parser) goes through `mwi.url_normalizer.normalize_url`
+**before** being inserted into the database. This guarantees a single
+canonical form per logical page and prevents duplicate Expressions caused by
+URL variants (Wayback snapshots, tracker parameters, anchors, host case).
+
+**Configuration** — see `settings.url_normalization` (and `settings-example.py`).
+Conservative defaults: `unwrap_archive`, `lowercase_host`, `strip_trackers`,
+`normalize_query_order` are ON; `force_https`, `strip_www`,
+`strip_mobile_subdomain` are OFF (require explicit opt-in via env vars
+`MWI_URL_FORCE_HTTPS=true`, `MWI_URL_STRIP_WWW=true`,
+`MWI_URL_STRIP_MOBILE=true`).
+
+**Provenance** — when normalization changes the URL, the original form is
+preserved in `Expression.original_url` (NULL otherwise). Allows retroactive
+auditing without re-crawling.
+
+**Retroactive normalization** — Lands created before this pipeline can be
+brought up to date with:
+
+```bash
+# Always backup first!
+cp data/mwi.db data/mwi.db.bak_$(date +%Y%m%d_%H%M%S)
+
+# Preview (no DB writes)
+python mywi.py land normalize --name=LAND_NAME --dry-run --verbose
+
+# Apply
+python mywi.py land normalize --name=LAND_NAME
+
+# Apply + clear http_status so renamed URLs get re-crawled next time
+python mywi.py land normalize --name=LAND_NAME --reset-status
+```
+
+**What `land normalize` does** for each Expression in the Land:
+
+- If the canonical form is **not** present as another Expression: UPDATE in
+  place, fill `original_url`.
+- If the canonical form **is** already an Expression: remap every
+  `ExpressionLink` (incoming and outgoing) to the canonical, drop self-loops
+  and pre-existing duplicates, then DELETE the redundant Expression
+  (CASCADE removes its Media, Paragraph, TaggedContent — those came from
+  the duplicate's snapshot anyway).
+- Wayback-of-Wayback chains are resolved transitively in one pass.
+
+**Archive.org circuit breaker** — when archive.org is unreachable (a frequent
+occurrence since 2024), the readable pipeline's Wayback fallback opens a
+process-wide breaker after 5 consecutive failures and skips the fallback for
+5 minutes. Saves up to ~10s per expression during outages.
+
+**Working on databases other than `data/mwi.db`** — every CLI command
+accepts a global `--db PATH` flag that overrides the SQLite file location.
+Useful for parallel projects, backups, or files received from collaborators
+that aren't named `mwi.db`:
+
+```bash
+python mywi.py land normalize --name=foo --db /path/to/projectA.db --dry-run
+python mywi.py db migrate --db ./backups/melenchon_v2.db
+python mywi.py land export --name=bar --db /tmp/incoming.db --type=pagecsv
+```
+
+Alternative without code change: `MYWI_DATA_DIR=/some/dir python mywi.py …`
+(the file must then be named `mwi.db` inside that directory).
 
 ---
 

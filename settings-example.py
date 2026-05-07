@@ -23,6 +23,39 @@ parallel_connections = 10  # Async HTTP concurrency for crawling
 
 user_agent = ""  # Optionally set a custom UA
 
+# ─────────────────────────────────────────────────────────────────────────
+# Crawl fallback cascade (sprint-403)
+# ─────────────────────────────────────────────────────────────────────────
+# When the primary aiohttp fetch returns a status that suggests TLS/JS
+# bot detection (Cloudflare 403/429/etc.), MWI retries with progressively
+# heavier strategies. The orchestrator preserves the original status code
+# in expression.http_status — only `expression.fetch_method` (Sprint 4)
+# tells you which strategy provided the body.
+#
+# crawl_fallback_curl_cffi: enable retry with curl_cffi (TLS-impersonating
+#   client). Free, fast, ~70-80% effective on Cloudflare. Required dep:
+#   `pip install curl_cffi` (in requirements.txt).
+crawl_fallback_curl_cffi = True
+crawl_fallback_curl_cffi_impersonate = "chrome120"  # or "safari17_2"
+
+# crawl_fallback_playwright: real headless Chromium fallback. Solves
+# Cloudflare JS challenges (cf_clearance) that curl_cffi cannot.
+# OFF by default because each invocation costs ~3-5 seconds. Turn on
+# only when curl_cffi is not enough for your sites.
+# Requires: `playwright install chromium`.
+crawl_fallback_playwright = False
+crawl_fallback_playwright_max_concurrent = 4   # bounds RAM (1 page ~= 80 MB)
+crawl_fallback_playwright_timeout_sec = 30
+
+# crawl_retry_status_codes: status strings that trigger retry-only
+# strategies (curl_cffi, Playwright). Keep "ERR" to retry on unhandled
+# exceptions during the primary fetch.
+crawl_retry_status_codes = [
+    "403", "406", "429",
+    "503", "520", "521", "523", "526",
+    "ERR",
+]
+
 # Cut Domains
 
 heuristics = {
@@ -54,24 +87,24 @@ media_n_dominant_colors = 5
 # OpenRouter relevance gate (disabled by default)
 openrouter_enabled = os.getenv("MWI_OPENROUTER_ENABLED", "false").lower() == "true"
 openrouter_api_key = os.getenv("MWI_OPENROUTER_API_KEY", "")
-openrouter_model = os.getenv("MWI_OPENROUTER_MODEL", "deepseek/deepseek-chat-v3.1")
+openrouter_model = os.getenv("MWI_OPENROUTER_MODEL", "deepseek/deepseek-v4-flash")
 # Exemples de modèles compatibles OpenRouter (mini/éco)
 # Renseignez `openrouter_model` avec l'un de ces slugs si vous activez la passerelle
 openrouter_model_examples = [
     # OpenAI
-    "openai/gpt-4o-mini",
+    "openai/gpt-mini-latest",
     # Anthropic
     "anthropic/claude-3-haiku",
     # Google
-    "google/gemini-1.5-flash",
+    "google/gemini-3-flash-preview",
     # Meta (Llama 3.x Instruct – 8B)
     "meta-llama/llama-3.1-8b-instruct",
     # Mistral
     "mistralai/mistral-small-latest",
     # Qwen (Alibaba)
     "qwen/qwen2.5-7b-instruct",
-    # Cohere
-    "cohere/command-r-mini",
+    # Deepseek
+    "deepseek/deepseek-v4-flash",
 ]
 openrouter_timeout = int(os.getenv("MWI_OPENROUTER_TIMEOUT", "15"))
 # Bounds to control costs/latency
@@ -173,3 +206,60 @@ similarity_top_k = int(os.getenv('MWI_SIMILARITY_TOP_K', '50'))
 # NLI Classification Thresholds
 nli_entailment_threshold = float(os.getenv('MWI_NLI_ENTAILMENT_THRESHOLD', '0.8'))
 nli_contradiction_threshold = float(os.getenv('MWI_NLI_CONTRADICTION_THRESHOLD', '0.8'))
+
+
+# ────────────────────────────────────────────────────────────────────────
+# URL normalization (sprint-normalise)
+# ────────────────────────────────────────────────────────────────────────
+# Configures the canonicalization pipeline applied to every URL ingested
+# into MWI (seeds, SerpAPI results, links extracted at crawl time, etc.).
+# See mwi/url_normalizer.py and .claude/project/sprint-normalise.md.
+#
+# Conservative defaults: only operations that don't risk breaking existing
+# Lands are enabled by default. force_https / strip_www / strip_mobile
+# require explicit opt-in.
+url_normalization = {
+    "unwrap_archive": True,
+    "lowercase_host": True,
+    "force_https": os.getenv("MWI_URL_FORCE_HTTPS", "false").lower() == "true",
+    "strip_www": os.getenv("MWI_URL_STRIP_WWW", "false").lower() == "true",
+    "strip_mobile_subdomain": os.getenv("MWI_URL_STRIP_MOBILE", "false").lower() == "true",
+    "strip_trackers": [
+        "utm_*", "fbclid", "gclid", "mc_eid", "ref_src", "_ga",
+        "yclid", "_openstat", "wt_*", "msclkid", "igshid", "spm",
+    ],
+    "normalize_query_order": True,
+    "trailing_slash": "preserve",  # 'preserve' | 'strip' | 'add'
+}
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Multi-API search router (sprint-searchrouter)
+# ────────────────────────────────────────────────────────────────────────
+# Configuration for `python mywi.py search …` — a multi-provider URL
+# collector independent from the historical `land urlist` SerpAPI path.
+# Every value can be overridden by an environment variable of the same
+# name (or via a .env file at the project root).
+
+# Self-hosted SearXNG instance — primary, free provider. The default
+# matches the docker-compose published in `docker/searxng/`.
+SEARXNG_BASE_URL = os.getenv("SEARXNG_BASE_URL", "http://localhost:8888")
+
+# Commercial providers — keep these as None unless you have credentials.
+BRAVE_API_KEY = os.getenv("BRAVE_API_KEY")
+SERPER_API_KEY = os.getenv("SERPER_API_KEY")
+SERPAPI_API_KEY = os.getenv("SERPAPI_API_KEY")  # distinct from the historical
+                                                # `serpapi_api_key` (snake-case)
+                                                # used by `land urlist`. The
+                                                # search router falls back to
+                                                # the snake-case key when the
+                                                # UPPER one is unset.
+TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
+
+# Default orchestration strategy:
+#   - "fallback" preserves quotas (try providers in order, stop at first hit).
+#   - "parallel" triangulates (query everyone in parallel and merge results).
+SEARCH_DEFAULT_STRATEGY = os.getenv("SEARCH_DEFAULT_STRATEGY", "fallback")
+
+# Per-provider HTTP timeout in seconds.
+SEARCH_PROVIDER_TIMEOUT = int(os.getenv("SEARCH_PROVIDER_TIMEOUT", "30"))

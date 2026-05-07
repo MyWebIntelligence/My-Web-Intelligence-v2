@@ -1,0 +1,23 @@
+# Rate limiter configuration for SearXNG
+# Reference: https://docs.searxng.org/admin/searx.limiter.html
+
+[real_ip]
+# Number of trusted reverse proxies in front of SearXNG.
+x_for = 0
+# Trusted CIDR ranges for X-Forwarded-For headers.
+ipv4_prefix = 32
+ipv6_prefix = 64
+
+[botdetection.ip_limit]
+# Bypass rate-limit for the loopback interface so MWI calls are never throttled.
+filter_link_local = true
+link_token = false
+
+[botdetection.ip_lists]
+# IPs in this list bypass the limiter entirely.
+pass_ip = [
+  "127.0.0.0/8",
+  "::1/128",
+]
+# IPs in this list are blocked outright.
+block_ip = []

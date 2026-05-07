@@ -80,6 +80,7 @@ The methodology was first publicly presented at DHNord 2016 [@lakel2016dhnord] a
 - **Enunciative link extraction**: Hyperlinks extracted exclusively from readable content, capturing intentional citations rather than technical URL presence
 - **Focus crawling on discourse**: Depth crawling follows only enunciative links, building corpora of discursive exchange rather than web topology
 - **Search engine bootstrapping**: Corpus seeding via SerpAPI (Google, Bing, DuckDuckGo) with temporal filtering
+- **Multi-API search router**: Algorithmic triangulation across up to five providers (self-hosted SearXNG aggregating ~250 engines, plus Brave, Serper, SerpAPI, Tavily) with `fallback` (quota-preserving) and `parallel` (triangulation) strategies. Each query is journaled in dedicated tables (`searchquery`, `searchresultlog`) with a per-provider usage report, enabling reproducible documentation of collection conditions [@rogers2013digital]
 - **Relevance qualification**: Lemma-based scoring with optional LLM validation (OpenRouter) operating on readable content only
 
 ## Paragraph-Level Semantic Analysis

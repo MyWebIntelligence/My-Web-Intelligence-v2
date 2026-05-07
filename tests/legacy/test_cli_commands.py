@@ -79,7 +79,7 @@ def test_land_addterm_addurl_and_crawl_readable_export(fresh_db, tmp_path, monke
     assert ret == 1
     assert model.Expression.select().where(model.Expression.land == land).count() == 2
 
-    async def _fake_crawl_land(land_obj, limit, http, depth, store_html=False):
+    async def _fake_crawl_land(land_obj, limit, http, depth, store_html=False, **kwargs):
         return (1, 0)
 
     monkeypatch.setattr(controller.core, "crawl_land", _fake_crawl_land)
@@ -559,64 +559,13 @@ def test_core_resolve_url_relative(test_env):
 
 # ---------------------------------------------------------------------------
 # SERP API helper coverage
+#
+# `test_core_serpapi_helpers` and `test_core_serpapi_param_builder` were
+# removed when the SerpAPI helpers (`_serpapi_*`, `_build_serpapi_*`) were
+# migrated into `mwi/serpapi_router.py`. Equivalent coverage now lives in
+# `tests/test_16_serpapi_router.py` (per-provider `build_locale_params` /
+# `build_date_filter_params` tests).
 # ---------------------------------------------------------------------------
-
-
-def test_core_serpapi_helpers(test_env):
-    core = test_env["core"]
-
-    page_google = core._serpapi_page_size("google")
-    page_bing = core._serpapi_page_size("bing")
-    page_ddg = core._serpapi_page_size("duckduckgo")
-
-    assert page_google == 100
-    assert page_bing == 50
-    assert page_ddg == 50
-
-    start = core._parse_serpapi_date("2024-01-01")
-    end = core._advance_date(start, "week")
-    assert end == start + core.timedelta(days=7)
-
-    windows = list(core._build_serpapi_windows("2024-01-01", "2024-01-31", "week"))
-    assert windows[0][0] == core.date(2024, 1, 1)
-    assert windows[-1][1] == core.date(2024, 1, 31)
-
-    tbs = core._build_serpapi_tbs(core.date(2024, 1, 1), core.date(2024, 1, 7))
-    assert "cdr" in tbs and "cd_min" in tbs
-
-    assert core._serpapi_google_domain("fr") == "google.fr"
-    assert core._serpapi_bing_market("fr") == "fr-FR"
-    assert core._serpapi_duckduckgo_region("fr") == "fr-fr"
-
-
-def test_core_serpapi_param_builder(monkeypatch, test_env):
-    core = test_env["core"]
-
-    params = core._build_serpapi_params(
-        engine="google",
-        lang="fr",
-        start_index=0,
-        page_size=100,
-        window_start=core.date(2024, 1, 1),
-        window_end=core.date(2024, 1, 7),
-        use_date_filter=False,
-    )
-    assert params["google_domain"] == "google.fr"
-    assert params["num"] == 100
-    assert params["start"] == 0
-
-    params_duck = core._build_serpapi_params(
-        engine="duckduckgo",
-        lang="fr",
-        start_index=5,
-        page_size=50,
-        window_start=core.date(2024, 1, 1),
-        window_end=core.date(2024, 1, 7),
-        use_date_filter=True,
-    )
-    assert params_duck["start"] == 5
-    assert params_duck["m"] == 50
-    assert "df" in params_duck
 
 
 def test_core_serpapi_date_parsing(test_env):

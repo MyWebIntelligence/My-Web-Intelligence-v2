@@ -1,0 +1,106 @@
+# SearXNG configuration tailored for MyWebIntelligence
+# Reference: https://docs.searxng.org/admin/settings/index.html
+
+use_default_settings: true
+
+general:
+  debug: false
+  instance_name: "mwi-searxng"
+  privacypolicy_url: false
+  donation_url: false
+  contact_url: false
+  enable_metrics: false
+
+server:
+  base_url: "http://localhost:8888/"
+  port: 8080
+  bind_address: "0.0.0.0"
+  # Random secret_key — override via env in production
+  secret_key: "mwi-dev-secret-please-change-me"
+  limiter: true
+  image_proxy: false
+  http_protocol_version: "1.1"
+  method: "GET"
+  default_http_headers:
+    X-Content-Type-Options: nosniff
+    X-Download-Options: noopen
+    X-Robots-Tag: noindex, nofollow
+    Referrer-Policy: no-referrer
+
+ui:
+  static_use_hash: true
+  default_locale: "fr"
+  query_in_title: false
+  infinite_scroll: false
+  default_theme: simple
+  theme_args:
+    simple_style: auto
+  search_on_category_select: true
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  default_lang: "fr"
+  ban_time_on_fail: 5
+  max_ban_time_on_fail: 120
+  formats:
+    - html
+    - json
+    - csv
+
+outgoing:
+  request_timeout: 6.0
+  max_request_timeout: 12.0
+  pool_connections: 100
+  pool_maxsize: 20
+  enable_http2: true
+
+# Engines: only general-web engines, image/video/torrent disabled.
+engines:
+  - name: google
+    engine: google
+    shortcut: g
+    use_mobile_ui: false
+    disabled: false
+
+  - name: duckduckgo
+    engine: duckduckgo
+    shortcut: ddg
+    disabled: false
+
+  - name: qwant
+    engine: qwant
+    shortcut: qw
+    disabled: false
+
+  - name: brave
+    engine: brave
+    shortcut: br
+    disabled: false
+
+  - name: mojeek
+    engine: mojeek
+    shortcut: mj
+    disabled: false
+
+  - name: startpage
+    engine: startpage
+    shortcut: sp
+    disabled: false
+
+  # Disabled categories — not relevant for MWI corpus collection.
+  - name: bing images
+    engine: bing_images
+    disabled: true
+  - name: google images
+    engine: google_images
+    disabled: true
+  - name: youtube
+    engine: youtube_noapi
+    disabled: true
+  - name: piratebay
+    engine: piratebay
+    disabled: true
+  - name: 1337x
+    engine: 1337x
+    disabled: true

@@ -36,7 +36,7 @@ class TestLandCrawlMocked:
         )
 
         # Mock async crawl response
-        async def mock_crawl_land(land_obj, limit, http_status, depth, store_html=False):
+        async def mock_crawl_land(land_obj, limit, http_status, depth, store_html=False, **kwargs):
             # Mark expression as fetched
             expr = model.Expression.get(
                 (model.Expression.land == land_obj)
@@ -82,7 +82,7 @@ class TestLandCrawlMocked:
 
         crawl_count = [0]
 
-        async def mock_crawl_land(land_obj, limit, http_status, depth, store_html=False):
+        async def mock_crawl_land(land_obj, limit, http_status, depth, store_html=False, **kwargs):
             # Should only process limit
             count = min(limit or 3, 3)
             crawl_count[0] = count
@@ -113,7 +113,7 @@ class TestLandCrawlMocked:
             core.Namespace(land=name, urls="https://example.com/notfound", path=None)
         )
 
-        async def mock_crawl_land(land_obj, limit, http_status, depth, store_html=False):
+        async def mock_crawl_land(land_obj, limit, http_status, depth, store_html=False, **kwargs):
             expr = model.Expression.get((model.Expression.land == land_obj))
             expr.http_status = "404"
             expr.fetched_at = datetime.now()
@@ -514,3 +514,113 @@ class TestLandConsolidate:
         expr_check = model.Expression.get(model.Expression.id == expr.id)
         # Relevance should be recalculated (> 0 if keywords present)
         assert expr_check.relevance >= 0
+
+
+class TestArchiveUrlCanonicalization:
+    """add_expression / link_expression must unwrap archive URLs at insertion time
+    so the link graph stays consistent (no parallel archive vs canonical pages).
+    """
+
+    def test_add_expression_unwraps_web_archive_url(self, fresh_db):
+        """Inserting a web.archive.org snapshot stores the canonical URL."""
+        m = fresh_db["model"]
+        core = fresh_db["core"]
+        land = m.Land.create(name=rand_name("arc"), description="t", lang="fr")
+
+        archive = "https://web.archive.org/web/20230605162534/https://www.lemonde.fr/article"
+        expr = core.add_expression(land, archive)
+
+        assert expr is not False
+        assert expr.url == "https://www.lemonde.fr/article"
+        assert expr.domain.name == "www.lemonde.fr"
+
+    def test_add_expression_idempotent_archive_then_canonical(self, fresh_db):
+        """Adding the canonical URL after the archive returns the same Expression."""
+        m = fresh_db["model"]
+        core = fresh_db["core"]
+        land = m.Land.create(name=rand_name("arc"), description="t", lang="fr")
+
+        archive = "https://web.archive.org/web/20230605162534/https://www.lemonde.fr/article"
+        canonical = "https://www.lemonde.fr/article"
+
+        expr1 = core.add_expression(land, archive)
+        expr2 = core.add_expression(land, canonical)
+
+        assert expr1.id == expr2.id
+        assert m.Expression.select().where(m.Expression.land == land).count() == 1
+
+    def test_add_expression_idempotent_canonical_then_archive(self, fresh_db):
+        """Adding the archive after the canonical returns the same Expression."""
+        m = fresh_db["model"]
+        core = fresh_db["core"]
+        land = m.Land.create(name=rand_name("arc"), description="t", lang="fr")
+
+        canonical = "https://www.lemonde.fr/article"
+        archive = "https://web.archive.org/web/20230605162534/https://www.lemonde.fr/article"
+
+        expr1 = core.add_expression(land, canonical)
+        expr2 = core.add_expression(land, archive)
+
+        assert expr1.id == expr2.id
+        assert m.Expression.select().where(m.Expression.land == land).count() == 1
+
+    def test_add_expression_unwraps_ghostarchive(self, fresh_db):
+        """Ghostarchive snapshots are unwrapped too."""
+        m = fresh_db["model"]
+        core = fresh_db["core"]
+        land = m.Land.create(name=rand_name("arc"), description="t", lang="fr")
+
+        ghost = "https://ghostarchive.org/archive/12345/https://example.com/page"
+        expr = core.add_expression(land, ghost)
+
+        assert expr.url == "https://example.com/page"
+        # get_domain_name keeps the netloc verbatim (no www. stripping)
+        assert expr.domain.name == "example.com"
+
+    def test_add_expression_passes_through_non_archive_urls(self, fresh_db):
+        """Non-archive URLs are stored as-is (only anchor stripped)."""
+        m = fresh_db["model"]
+        core = fresh_db["core"]
+        land = m.Land.create(name=rand_name("arc"), description="t", lang="fr")
+
+        plain = "https://www.lemonde.fr/article#section"
+        expr = core.add_expression(land, plain)
+
+        assert expr.url == "https://www.lemonde.fr/article"
+
+    def test_link_expression_unwraps_target_url(self, fresh_db):
+        """Links extracted from a Wayback page collapse to the canonical target."""
+        m = fresh_db["model"]
+        core = fresh_db["core"]
+        land = m.Land.create(name=rand_name("arc"), description="t", lang="fr")
+
+        source = core.add_expression(land, "https://www.example.com/source")
+        archive_target = "https://web.archive.org/web/20230605162534/https://www.lemonde.fr/article"
+
+        ok = core.link_expression(land, source, archive_target)
+
+        assert ok is True
+        target = m.Expression.get(m.Expression.url == "https://www.lemonde.fr/article")
+        link = m.ExpressionLink.get((m.ExpressionLink.source == source)
+                                    & (m.ExpressionLink.target == target))
+        assert link is not None
+
+    def test_link_expression_does_not_create_archive_duplicate(self, fresh_db):
+        """A link to the archive form of a known page reuses the canonical Expression."""
+        m = fresh_db["model"]
+        core = fresh_db["core"]
+        land = m.Land.create(name=rand_name("arc"), description="t", lang="fr")
+
+        source = core.add_expression(land, "https://www.example.com/source")
+        canonical_target = core.add_expression(land, "https://www.lemonde.fr/article")
+
+        archive_target = "https://web.archive.org/web/20230605162534/https://www.lemonde.fr/article"
+        core.link_expression(land, source, archive_target)
+
+        # No second Expression for the archive form
+        targets = list(m.Expression.select().where(
+            (m.Expression.land == land)
+            & (m.Expression.url.contains("lemonde.fr"))
+        ))
+        assert len(targets) == 1
+        assert targets[0].id == canonical_target.id

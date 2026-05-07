@@ -92,6 +92,16 @@ class DbController:
             if 'fullhtml' not in land_cols:
                 model.DB.execute_sql("ALTER TABLE land ADD COLUMN fullhtml INTEGER DEFAULT 0")
                 print("[migrate] Added missing column land.fullhtml")
+            # URL provenance (sprint-normalise)
+            if 'original_url' not in cols:
+                model.DB.execute_sql(
+                    "ALTER TABLE expression ADD COLUMN original_url TEXT DEFAULT NULL")
+                print("[migrate] Added missing column expression.original_url")
+            # Cascade fetch audit (sprint-403)
+            if 'fetch_method' not in cols:
+                model.DB.execute_sql(
+                    "ALTER TABLE expression ADD COLUMN fetch_method TEXT DEFAULT NULL")
+                print("[migrate] Added missing column expression.fetch_method")
         except Exception as e:
             # Non bloquant: on loggue et on continue
             print(f"[migrate] Warning: columns check failed: {e}")
@@ -131,6 +141,9 @@ class DbController:
             # Client tagging
             model.Tag,
             model.TaggedContent,
+            # Multi-API search router (sprint-searchrouter)
+            getattr(model, 'SearchQuery', None),
+            getattr(model, 'SearchResultLog', None),
         ]
 
         if core.confirm("Warning, existing data will be lost, type 'Y' to proceed : "):
@@ -509,6 +522,57 @@ class LandController:
 
 
     @staticmethod
+    def normalize(args: core.Namespace):
+        """Apply URL normalization retroactively to an existing Land.
+
+        Uses the same `mwi.url_normalizer` rules as the live ingestion
+        pipeline. Renames URLs in place where possible; merges duplicates
+        (with link remapping) where the canonical form already exists.
+
+        Args:
+            args: Namespace with `name` (required), optional `dry_run`,
+                `limit`, `reset_status`, `verbose`.
+
+        Returns:
+            int: 1 if normalization completed (even with 0 changes), 0 if
+            land not found.
+        """
+        from mwi import normalize_pipeline
+        core.check_args(args, 'name')
+        land = model.Land.get_or_none(model.Land.name == args.name)
+        if land is None:
+            print(f'Land "{args.name}" not found')
+            return 0
+
+        dry_run_raw = core.get_arg_option('dry_run', args, set_type=str, default=None)
+        dry_run = bool(dry_run_raw and str(dry_run_raw).upper() == 'TRUE')
+        reset_raw = core.get_arg_option('reset_status', args, set_type=str, default=None)
+        reset_status = bool(reset_raw and str(reset_raw).upper() == 'TRUE')
+        verbose_raw = core.get_arg_option('verbose', args, set_type=str, default=None)
+        verbose = bool(verbose_raw and str(verbose_raw).upper() == 'TRUE')
+        limit = core.get_arg_option('limit', args, set_type=int, default=0)
+
+        totals = normalize_pipeline.normalize_land(
+            land, dry_run=dry_run, limit=limit,
+            reset_status=reset_status, verbose=verbose)
+
+        verb = 'Would' if dry_run else 'Done.'
+        print(f'\n{verb} renamed: {totals["renamed"]}, merged: {totals["merged"]}')
+        print(f'  Links remapped (incoming): {totals["remapped_in"]}')
+        print(f'  Links dropped  (incoming): {totals["dropped_in"]}')
+        print(f'  Links remapped (outgoing): {totals["remapped_out"]}')
+        print(f'  Links dropped  (outgoing): {totals["dropped_out"]}')
+        print(f'  Cascade-deleted Media: {totals["media_lost"]}')
+        print(f'  Cascade-deleted Paragraph: {totals["paragraphs_lost"]}')
+        print(f'  Cascade-deleted TaggedContent: {totals["tagged_lost"]}')
+        if totals['skipped']:
+            print(f'  Skipped (errors / disappeared): {totals["skipped"]}')
+        if dry_run:
+            print('Run again without --dry-run to apply.')
+        return 1
+
+
+    @staticmethod
     def list(args: core.Namespace):
         """Display information about existing lands.
 
@@ -573,6 +637,25 @@ class LandController:
                     .order_by(model.Expression.http_status)
                 http_statuses = ["%s: %s" % (s.http_status, s.num) for s in select]
 
+                # Cascade fetch method distribution (sprint-403 Sprint 4)
+                fetch_methods = []
+                try:
+                    fm_select = (model.Expression
+                        .select(
+                            model.Expression.fetch_method,
+                            fn.COUNT(model.Expression.id).alias('num'))
+                        .where((model.Expression.land == land)
+                               & (model.Expression.fetched_at.is_null(False)))
+                        .group_by(model.Expression.fetch_method)
+                        .order_by(fn.COUNT(model.Expression.id).desc()))
+                    fetch_methods = [
+                        "%s: %s" % (s.fetch_method or 'unknown', s.num)
+                        for s in fm_select
+                    ]
+                except Exception:
+                    # Pre-migration database: column not yet present
+                    fetch_methods = []
+
                 print("%s - (%s)\n\t%s" % (
                     land.name,
                     land.created_at.strftime("%B %d %Y %H:%M"),
@@ -585,6 +668,9 @@ class LandController:
                     remaining_to_crawl[0]))
                 print("\tStatus codes: %s" % (
                     " - ".join(http_statuses)))
+                if fetch_methods:
+                    print("\tFetch methods: %s" % (
+                        " - ".join(fetch_methods)))
                 # Embedding pipeline summary (land-wide)
                 try:
                     # Paragraphs count
@@ -778,10 +864,14 @@ class LandController:
         lang_list = getattr(args, 'lang', ['fr'])
         lang = lang_list[0] if isinstance(lang_list, list) and lang_list else 'fr'
         engine = (getattr(args, 'engine', 'google') or 'google').lower()
-        allowed_engines = {'google', 'bing', 'duckduckgo'}
-        if engine not in allowed_engines:
-            print(f'[urlist] Unsupported engine "{engine}" — choose google, bing or duckduckgo')
+        # Engine validity and date-filter capability come from the SerpApiRouter,
+        # which is the single source of truth for supported SerpAPI engines.
+        from .serpapi_router import SearchRouter as SerpApiRouter
+        if engine not in SerpApiRouter.engines():
+            supported = ', '.join(sorted(SerpApiRouter.engines()))
+            print(f'[urlist] Unsupported engine "{engine}" — choose {supported}')
             return 0
+        provider = SerpApiRouter.get(engine)
 
         datestart = getattr(args, 'datestart', None)
         dateend = getattr(args, 'dateend', None)
@@ -790,9 +880,15 @@ class LandController:
 
         progress_requested = bool(getattr(args, 'progress', False))
         has_date_range = bool(datestart and dateend)
-        date_capable_engines = {'google', 'duckduckgo'}
-        if engine not in date_capable_engines and has_date_range:
-            print('[urlist] datestart/dateend filters are only supported with --engine=google or --engine=duckduckgo')
+        if has_date_range and not provider.supports_date_filter:
+            date_engines = sorted(
+                e for e in SerpApiRouter.engines()
+                if SerpApiRouter.get(e).supports_date_filter
+            )
+            print(
+                '[urlist] datestart/dateend filters are only supported with '
+                + ' or '.join(f'--engine={e}' for e in date_engines)
+            )
             return 0
         want_progress = progress_requested or has_date_range
 
@@ -831,7 +927,7 @@ class LandController:
                 skipped += 1
                 continue
 
-            raw_date = item.get('date') if engine == 'google' else None
+            raw_date = item.get('date') if provider.parses_result_dates else None
             published_at = core.parse_serp_result_date(raw_date) if raw_date else None
 
             existing = model.Expression.get_or_none(
@@ -952,6 +1048,17 @@ class LandController:
         depth = core.get_arg_option('depth', args, set_type=int, default=None)
         if depth is not None:
             print('Only crawling URLs with depth = %s' % depth)
+
+        # --retry-status: comma-separated codes for cascade backfill (sprint-403 Sprint 5)
+        retry_raw = core.get_arg_option('retry_status', args, set_type=str, default=None)
+        retry_status = None
+        if retry_raw:
+            retry_status = [s.strip() for s in retry_raw.split(',') if s.strip()]
+            if retry_status:
+                print('Retrying expressions with HTTP status in %s' % retry_status)
+            else:
+                retry_status = None
+
         land = model.Land.get_or_none(model.Land.name == args.name)
         if land is None:
             print('Land "%s" not found' % args.name)
@@ -969,7 +1076,9 @@ class LandController:
             print(f'Full HTML storage enabled (source: {source})')
 
         loop = asyncio.get_event_loop()
-        results = loop.run_until_complete(core.crawl_land(land, fetch_limit, http_status, depth, store_html=store_html))
+        results = loop.run_until_complete(core.crawl_land(
+            land, fetch_limit, http_status, depth,
+            store_html=store_html, retry_status=retry_status))
         print("%d expressions processed (%d errors)" % results)
         return 1
 
@@ -1560,4 +1669,319 @@ class HeuristicController:
             feeds, or other domain-specific metadata.
         """
         core.update_heuristic()
+        return 1
+
+
+class SearchController:
+    """Multi-API search router commands (`mywi.py search …`).
+
+    All four verbs (`run`, `list`, `usage`, `check`) follow the existing
+    controller convention: ``@staticmethod``, accept ``args: core.Namespace``,
+    return ``int`` (1 = success, 0 = failure). Heavy imports (router,
+    providers) are lazy so that unrelated commands do not pull aiohttp at
+    process start.
+    """
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _build_router():
+        """Instantiate the router with every provider that is configured."""
+        from .search import SearchRouter
+        from .search.providers.searxng import SearxngProvider
+        from .search.providers.brave import BraveProvider
+        from .search.providers.serper import SerperProvider
+        from .search.providers.serpapi import SerpApiProvider
+        from .search.providers.tavily import TavilyProvider
+
+        router = SearchRouter()
+        for cls in (SearxngProvider, BraveProvider, SerperProvider,
+                    SerpApiProvider, TavilyProvider):
+            try:
+                router.register(cls())
+            except Exception as exc:  # pragma: no cover — defensive
+                print(f"[search] could not init {cls.__name__}: {exc}")
+        return router
+
+    @staticmethod
+    def _all_providers():
+        """Return the canonical (provider_name, class) list — used by `check`."""
+        from .search.providers.searxng import SearxngProvider
+        from .search.providers.brave import BraveProvider
+        from .search.providers.serper import SerperProvider
+        from .search.providers.serpapi import SerpApiProvider
+        from .search.providers.tavily import TavilyProvider
+        return [
+            ("searxng", SearxngProvider),
+            ("brave",   BraveProvider),
+            ("serper",  SerperProvider),
+            ("serpapi", SerpApiProvider),
+            ("tavily",  TavilyProvider),
+        ]
+
+    @staticmethod
+    def _resolve_strategy(args) -> str:
+        """Resolve the strategy with sensible fallbacks.
+
+        Order: CLI ``--strategy`` → ``settings.SEARCH_DEFAULT_STRATEGY``
+        → ``"fallback"``.
+        """
+        strategy = getattr(args, 'strategy', None)
+        if strategy:
+            return strategy
+        return getattr(settings, 'SEARCH_DEFAULT_STRATEGY', 'fallback')
+
+    @staticmethod
+    def _resolve_providers(args):
+        """Parse the optional --providers CSV into a list (or None)."""
+        raw = getattr(args, 'providers', None)
+        if not raw:
+            return None
+        return [p.strip() for p in raw.split(',') if p.strip()]
+
+    # ------------------------------------------------------------------
+    # search check
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def check(args: 'core.Namespace') -> int:
+        """Display a per-provider configured/unconfigured status table."""
+        print("Provider          Configured")
+        print("-" * 32)
+        for name, cls in SearchController._all_providers():
+            try:
+                ok = cls().is_configured()
+            except Exception as exc:  # pragma: no cover — defensive
+                ok = False
+                print(f"{name:<17} ERROR ({exc})")
+                continue
+            mark = "yes" if ok else "no "
+            print(f"{name:<17} {mark}")
+        return 1
+
+    # ------------------------------------------------------------------
+    # search run
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def run(args: 'core.Namespace') -> int:
+        """Execute a multi-API search and persist its results into the Land.
+
+        Required CLI args:
+            --land   Land name.
+            --query  Search query.
+
+        Optional CLI args:
+            --limit       Max URLs per provider (default 20).
+            --strategy    'fallback' (default) or 'parallel'.
+            --language    ISO 639-1 language code (default 'fr').
+            --providers   Comma-separated whitelist.
+        """
+        land_name = getattr(args, 'land', None) or getattr(args, 'name', None)
+        if not land_name:
+            print('[search run] --land is required')
+            return 0
+        query = getattr(args, 'query', None)
+        if not query:
+            print('[search run] --query is required')
+            return 0
+
+        land = model.Land.get_or_none(model.Land.name == land_name)
+        if land is None:
+            print(f'Land "{land_name}" not found')
+            return 0
+
+        limit = core.get_arg_option('limit', args, set_type=int, default=20) or 20
+        strategy = SearchController._resolve_strategy(args)
+        language = (getattr(args, 'language', None) or 'fr')
+        provider_filter = SearchController._resolve_providers(args)
+
+        router = SearchController._build_router()
+        if not router.providers:
+            print('[search run] no provider configured. Run `python mywi.py search check` to diagnose.')
+            return 0
+
+        active = list(router.provider_names)
+        if provider_filter:
+            active = [n for n in active if n in provider_filter]
+        print(f'[search run] strategy={strategy} providers=[{", ".join(active)}] '
+              f'language={language} limit={limit}')
+
+        # Execute the asynchronous search synchronously from the controller.
+        results = asyncio.run(router.search(
+            query,
+            strategy=strategy,
+            num=limit,
+            language=language,
+            providers=provider_filter,
+        ))
+
+        usage_report = router.usage_report()
+        sq = SearchController._persist_results(
+            land=land,
+            query=query,
+            strategy=strategy,
+            language=language,
+            num_requested=limit,
+            results=results,
+            usage_report=usage_report,
+        )
+
+        new_urls, dup_urls = sq.metadata['new'], sq.metadata['duplicates']
+        print(f'[search run] {len(results)} URLs from providers — '
+              f'{new_urls} new in Land, {dup_urls} already present.')
+        print('[search run] usage report:')
+        for name, snap in usage_report.items():
+            print(f'  - {name:<10} calls={snap["calls"]} errors={snap["errors"]} '
+                  f'status={snap["status"]} quota={snap["monthly_quota"]}')
+        return 1
+
+    @staticmethod
+    def _persist_results(*, land, query, strategy, language,
+                         num_requested, results, usage_report):
+        """Insert SearchQuery + per-result SearchResultLog + Expression rows.
+
+        Returns the SearchQuery instance with an ad-hoc ``metadata`` dict
+        (Python attribute, not persisted) tracking the new vs. duplicate
+        URL counts for the console summary.
+        """
+        import datetime
+        import json
+        from .url_normalizer import normalize_url
+
+        with model.DB.atomic():
+            sq = model.SearchQuery.create(
+                land=land,
+                query=query,
+                strategy=strategy,
+                language=language,
+                num_requested=num_requested,
+                num_collected=0,
+                usage_report=json.dumps(usage_report),
+            )
+
+            new_urls = 0
+            duplicates = 0
+            collected = 0
+            for r in results:
+                if not r.url:
+                    continue
+                normalized = normalize_url(r.url) or r.url
+
+                # Pre-check existence so we can report new vs. duplicate.
+                pre_exists = model.Expression.get_or_none(
+                    model.Expression.url == normalized,
+                    model.Expression.land == land,
+                ) is not None
+
+                expression = core.add_expression(land, r.url)
+                if expression is False or expression is None:
+                    # URL not crawlable (PDF, image, scheme filter, …).
+                    continue
+
+                if pre_exists:
+                    duplicates += 1
+                else:
+                    new_urls += 1
+
+                model.SearchResultLog.create(
+                    search_query=sq,
+                    url=expression.url,
+                    title=r.title,
+                    snippet=r.snippet,
+                    providers=r.providers or "",
+                    rank_min=r.rank,
+                    expression=expression,
+                )
+                collected += 1
+
+            sq.num_collected = collected
+            sq.completed_at = datetime.datetime.now()
+            sq.save()
+
+        sq.metadata = {'new': new_urls, 'duplicates': duplicates}
+        return sq
+
+    # ------------------------------------------------------------------
+    # search list
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def list(args: 'core.Namespace') -> int:
+        """List previous search queries for a Land."""
+        land_name = getattr(args, 'land', None) or getattr(args, 'name', None)
+        if not land_name:
+            print('[search list] --land is required')
+            return 0
+        land = model.Land.get_or_none(model.Land.name == land_name)
+        if land is None:
+            print(f'Land "{land_name}" not found')
+            return 0
+
+        rows = (model.SearchQuery
+                .select()
+                .where(model.SearchQuery.land == land)
+                .order_by(model.SearchQuery.created_at.desc()))
+
+        count = rows.count()
+        if count == 0:
+            print(f'[search list] no search query for Land "{land.name}"')
+            return 1
+
+        print(f'{"id":>4}  {"date":<19}  {"strategy":<10}  '
+              f'{"lang":<4}  {"req":>4}  {"got":>4}  query')
+        for sq in rows:
+            date = sq.created_at.strftime("%Y-%m-%d %H:%M:%S") if sq.created_at else "-"
+            print(f'{sq.id:>4}  {date:<19}  {sq.strategy:<10}  '
+                  f'{sq.language:<4}  {sq.num_requested:>4}  '
+                  f'{sq.num_collected:>4}  {sq.query}')
+        return 1
+
+    # ------------------------------------------------------------------
+    # search usage
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def usage(args: 'core.Namespace') -> int:
+        """Aggregate the JSON ``usage_report`` columns of past queries."""
+        import json
+        land_name = getattr(args, 'land', None) or getattr(args, 'name', None)
+        if not land_name:
+            print('[search usage] --land is required')
+            return 0
+        land = model.Land.get_or_none(model.Land.name == land_name)
+        if land is None:
+            print(f'Land "{land_name}" not found')
+            return 0
+
+        agg: dict = {}
+        for sq in model.SearchQuery.select().where(model.SearchQuery.land == land):
+            if not sq.usage_report:
+                continue
+            try:
+                report = json.loads(sq.usage_report)
+            except (TypeError, ValueError):
+                continue
+            for name, snap in report.items():
+                bucket = agg.setdefault(name, {
+                    'calls': 0, 'errors': 0,
+                    'last_status': snap.get('status'),
+                    'monthly_quota': snap.get('monthly_quota'),
+                })
+                bucket['calls'] += int(snap.get('calls') or 0)
+                bucket['errors'] += int(snap.get('errors') or 0)
+                bucket['last_status'] = snap.get('status') or bucket['last_status']
+
+        if not agg:
+            print(f'[search usage] no usage report for Land "{land.name}"')
+            return 1
+
+        print(f'{"provider":<12} {"calls":>6} {"errors":>7} {"last_status":<16} {"quota":>6}')
+        for name, snap in sorted(agg.items()):
+            quota = snap['monthly_quota']
+            quota_str = '-' if quota is None else str(quota)
+            print(f'{name:<12} {snap["calls"]:>6} {snap["errors"]:>7} '
+                  f'{snap["last_status"]:<16} {quota_str:>6}')
         return 1

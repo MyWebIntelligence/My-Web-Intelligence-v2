@@ -9,8 +9,10 @@ from .controller import (
     LandController,
     HeuristicController,
     TagController,
-    EmbeddingController
+    EmbeddingController,
+    SearchController,
 )
+from .serpapi_router import SearchRouter as SerpApiRouter
 
 
 def command_run(args: Any):
@@ -114,6 +116,14 @@ def command_input():
                         type=str,
                         help='Limit crawling to specific http status (re crawling)',
                         nargs='?')
+    parser.add_argument('--retry-status',
+                        type=str,
+                        dest='retry_status',
+                        help='Comma-separated HTTP status codes to retry, ignoring fetched_at. '
+                             'Example: "403,429,406". Useful to backfill the cascade '
+                             'fallback (sprint-403) on previously crawled URLs.',
+                        default=None,
+                        nargs='?')
     parser.add_argument('--depth',
                         type=int,
                         help='Only crawl URLs with the specified depth (for land crawl)',
@@ -144,11 +154,12 @@ def command_input():
                         type=str,
                         help='Search query to fetch URLs from SerpAPI',
                         nargs='?')
+    engine_choices = sorted(SerpApiRouter.engines())
     parser.add_argument('--engine',
                         type=str,
-                        help='Search engine for urlist (google|bing|duckduckgo)',
+                        help='Search engine for urlist (' + '|'.join(engine_choices) + ')',
                         default='google',
-                        choices=['google', 'bing', 'duckduckgo'],
+                        choices=engine_choices,
                         nargs='?')
     parser.add_argument('--datestart',
                         type=str,
@@ -201,11 +212,84 @@ def command_input():
     parser.add_argument('--dryrun',
                         action='store_true',
                         help='Dry run mode - show what would be changed without modifying database')
+    # land normalize options
+    parser.add_argument('--dry-run',
+                        type=str,
+                        dest='dry_run',
+                        help='For land normalize: TRUE to preview, FALSE/absent to apply.',
+                        nargs='?',
+                        const='TRUE',
+                        default=None)
+    parser.add_argument('--reset-status',
+                        type=str,
+                        dest='reset_status',
+                        help='For land normalize: TRUE to clear http_status / fetched_at on renamed expressions.',
+                        nargs='?',
+                        const='TRUE',
+                        default=None)
+    parser.add_argument('--verbose',
+                        type=str,
+                        help='For land normalize: TRUE to print one line per change.',
+                        nargs='?',
+                        const='TRUE',
+                        default=None)
+    parser.add_argument('--db',
+                        type=str,
+                        help='Override the SQLite database path. Accepts any filename '
+                             '(no need to be named mwi.db). Useful to operate on parallel '
+                             'databases without setting MYWI_DATA_DIR.',
+                        default=None)
+    # Multi-API search router (search run|list|usage|check)
+    parser.add_argument('--strategy',
+                        type=str,
+                        choices=['fallback', 'parallel'],
+                        help='Orchestration strategy for `search run` '
+                             '(fallback preserves quotas, parallel triangulates).',
+                        default=None,
+                        nargs='?')
+    parser.add_argument('--language',
+                        type=str,
+                        help='Language code for `search run` (e.g. fr, en).',
+                        default='fr',
+                        nargs='?')
+    parser.add_argument('--providers',
+                        type=str,
+                        help='Comma-separated whitelist of providers for `search run` '
+                             '(e.g. "searxng,brave"). Default: all configured.',
+                        default=None,
+                        nargs='?')
     args = parser.parse_args()
     # Always convert lang to a list
     if hasattr(args, "lang") and isinstance(args.lang, str):
         args.lang = [l.strip() for l in args.lang.split(",") if l.strip()]
+    # Optional: switch the SQLite file before any model operation
+    if getattr(args, 'db', None):
+        _switch_database(args.db)
     dispatch(args)
+
+
+def _switch_database(db_path: str) -> None:
+    """Re-bind the global Peewee database to the given SQLite file.
+
+    Called from command_input when the user passes --db PATH. Preserves
+    the same pragma set as the default initialization in mwi.model.
+    """
+    import os
+    from . import model
+    abs_path = os.path.abspath(db_path)
+    if not os.path.exists(abs_path):
+        raise SystemExit(f'--db: file not found: {abs_path}')
+    pragmas = {
+        'journal_mode': 'wal',
+        'cache_size': -1 * 512000,
+        'foreign_keys': 1,
+        'ignore_check_constrains': 0,
+        'synchronous': 0,
+    }
+    if not model.DB.is_closed():
+        model.DB.close()
+    model.DB.init(abs_path, pragmas=pragmas)
+    print(f'Using database: {abs_path}')
 
 
 def dispatch(args):
@@ -252,6 +336,7 @@ def dispatch(args):
             'addurl':   LandController.addurl,
             'urlist':   LandController.urlist,
             'consolidate': LandController.consolidate,
+            'normalize': LandController.normalize,
             'medianalyse': LandController.medianalyse,
             'seorank':  LandController.seorank,
             # Nested commands for LLM features
@@ -270,7 +355,13 @@ def dispatch(args):
         },
         'heuristic': {
             'update': HeuristicController.update
-        }
+        },
+        'search': {
+            'run':   SearchController.run,
+            'list':  SearchController.list,
+            'usage': SearchController.usage,
+            'check': SearchController.check,
+        },
     }
     controller = controllers.get(args.object)
     if controller:

@@ -332,6 +332,8 @@ python -m pip install -r requirements.txt
 ```
 **Décodage** : `pip install -U` met à jour ; `-r requirements.txt` lit la liste des paquets depuis ce fichier (peewee, aiohttp, beautifulsoup4, nltk…). Comptez 2 à 5 minutes la première fois.
 
+> 💡 **Sur la cascade fetch (sprint-403)** — `requirements.txt` inclut `curl_cffi>=0.7.0`. Cette bibliothèque imite l'empreinte TLS de Chrome 120 et permet à MWI de récupérer les pages bloquées par Cloudflare (codes `403`/`429`) sans lancer de navigateur. Aucune action supplémentaire requise : l'installation est automatique. Si `pip` se plaint sur macOS arm64, exécuter `pip install --upgrade pip` avant de relancer (testé OK avec Python 3.13 + arm64).
+
 ### 3.4 — Générer le fichier `settings.py`
 
 ```bash

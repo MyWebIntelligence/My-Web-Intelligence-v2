@@ -30,6 +30,7 @@ langdetect>=1.0.9
 PyMuPDF>=1.24.4
 pytest>=7.0.0
 playwright>=1.42.0
+curl_cffi>=0.7.0  # TLS-impersonating fallback for Cloudflare-protected sites
 
 # --- Optional ML extras are moved to requirements-ml.txt ---
 # For NLI Cross-Encoder + FAISS recalls, also install:

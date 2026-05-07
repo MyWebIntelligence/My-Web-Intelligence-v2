@@ -38,6 +38,19 @@ import settings
 from . import model
 from .export import Export
 
+
+# Circuit breaker and fetch pipeline live in mwi.fetcher; re-exported here
+# for backwards-compat (tests reach into core._ArchiveOrgBreaker).
+from mwi.fetcher import _ArchiveOrgBreaker, fetch_html, FetchResult  # noqa: E402,F401
+
+# SerpAPI routing lives in mwi.serpapi_router; re-exported here for backwards-compat
+# (controller and tests still reach core.SerpApiError / core.fetch_serpapi_url_list).
+# Note: the new multi-API search router lives under mwi/search/ (a separate package).
+from mwi.serpapi_router import SearchError, SearchRequest, run_search as _run_search  # noqa: E402
+
+# Legacy alias preserved so `except core.SerpApiError` keeps working.
+SerpApiError = SearchError
+
 def _cleanup_nltk_resource(resource: str) -> bool:
     """Remove corrupted NLTK resource artifacts so they can be re-downloaded."""
     removed = False
@@ -167,38 +180,46 @@ async def extract_dynamic_medias(url: str, expression: model.Expression) -> list
         return []
 
     dynamic_medias = []
-    
+
     try:
-        async with async_playwright() as p:
-            # Launch browser in headless mode
-            browser = await p.chromium.launch(headless=True)
-            page = await browser.new_page()
-            
-            # Set user agent to match the one used in regular crawling
-            await page.set_extra_http_headers({"User-Agent": settings.user_agent})
-            
-            # Navigate to the page
-            await page.goto(url, wait_until='networkidle', timeout=30000)
-            
-            # Wait for additional time to let dynamic content load
-            await page.wait_for_timeout(3000)
-            
+        # Borrow a page from the shared BrowserPool (sprint-403 Sprint 3b).
+        # The pool launches Chromium once per process and lends fresh
+        # contexts; user-agent is injected at context creation.
+        from mwi.browser_pool import BrowserPool
+        async with BrowserPool.get().page() as page:
+            # Navigate to the page. ``domcontentloaded`` returns as soon
+            # as the DOM is parsed (typically 1-2s) — much more reliable
+            # than ``networkidle`` on sites with persistent trackers /
+            # ads / polling JS, which would otherwise time out after 30s.
+            await page.goto(url, wait_until='domcontentloaded', timeout=30000)
+
+            # Best-effort wait for the network to settle so lazy-loaded
+            # media has a chance to appear. Bounded to 5s; a timeout here
+            # is non-fatal — we still extract whatever rendered.
+            try:
+                await page.wait_for_load_state('networkidle', timeout=5000)
+            except Exception:
+                pass
+
+            # Small extra delay for late JS rendering.
+            await page.wait_for_timeout(2000)
+
             # Extract media elements after JavaScript execution
             media_selectors = {
                 'img': 'img[src]',
                 'video': 'video[src], video source[src]',
                 'audio': 'audio[src], audio source[src]'
             }
-            
+
             for media_type, selector in media_selectors.items():
                 elements = await page.query_selector_all(selector)
-                
+
                 for element in elements:
                     src = await element.get_attribute('src')
                     if src:
                         # Resolve relative URLs to absolute
                         resolved_url = resolve_url(url, src)
-                        
+
                         # Check if this is a valid media type
                         if media_type == 'img':
                             IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg")
@@ -212,16 +233,16 @@ async def extract_dynamic_medias(url: str, expression: model.Expression) -> list
                                 'url': resolved_url,
                                 'type': media_type
                             })
-            
+
             # Look for lazy-loaded images and other dynamic content
             # Check for data-src, data-lazy-src, and other common lazy loading attributes
             lazy_img_selectors = [
                 'img[data-src]',
-                'img[data-lazy-src]', 
+                'img[data-lazy-src]',
                 'img[data-original]',
                 'img[data-url]'
             ]
-            
+
             for selector in lazy_img_selectors:
                 elements = await page.query_selector_all(selector)
                 for element in elements:
@@ -236,10 +257,7 @@ async def extract_dynamic_medias(url: str, expression: model.Expression) -> list
                                     'type': 'img'
                                 })
                             break  # Stop at first found attribute
-            
-            # Close browser
-            await browser.close()
-            
+
         print(f"Dynamic media extraction found {len(dynamic_medias)} media items for {url}")
         
         # Save found media to database
@@ -386,10 +404,6 @@ def get_arg_option(name: str, args: Namespace, set_type, default):
     return default
 
 
-class SerpApiError(Exception):
-    """Raised when a SerpAPI request or response fails."""
-
-
 def fetch_serpapi_url_list(
     api_key: str,
     query: str,
@@ -401,188 +415,27 @@ def fetch_serpapi_url_list(
     sleep_seconds: float = 1.0,
     progress_hook: Optional[Callable[[Optional[date], Optional[date], int], None]] = None
 ) -> List[Dict[str, Optional[Union[str, int]]]]:
-    """Query SerpAPI for organic results and return URL metadata.
+    """Backwards-compatible wrapper around `mwi.serpapi_router.run_search`.
 
-    The function mirrors the behaviour of the original R helper: it optionally
-    walks a date range in fixed windows, paginates through search result pages,
-    and collects the ``organic_results`` payload.
-
-    Args:
-        api_key: SerpAPI secret key (required).
-        query: Search query sent to SerpAPI.
-        engine: SerpAPI engine used to fetch results (``google|bing|duckduckgo``).
-        lang: Language code that maps to the engine-specific locale parameters.
-        datestart: Optional lower bound (``YYYY-MM-DD``) for the search window.
-        dateend: Optional upper bound (``YYYY-MM-DD``) for the search window.
-        timestep: Window size when iterating between ``datestart`` and
-            ``dateend`` (``day`` | ``week`` | ``month``).
-        sleep_seconds: Base delay between HTTP calls to avoid rate limits.
-        progress_hook: Optional callable invoked after each date window with
-            the start date, end date and number of fetched results.
-
-    Returns:
-        A list of dictionaries containing ``position``, ``title``, ``link`` and
-        ``date`` keys extracted from the SerpAPI response.
+    Engine-specific behaviour, pagination, date windowing and HTTP plumbing now
+    live in `mwi.serpapi_router`. This wrapper preserves the original signature
+    so the controller and the legacy CLI tests (which patch
+    `controller.core.fetch_serpapi_url_list`) keep working unchanged.
 
     Raises:
-        SerpApiError: if the query is empty, the date range is invalid, or the
-            HTTP request/response is not usable.
+        SerpApiError: alias of `mwi.serpapi_router.SearchError`.
     """
-
-    normalized_query = (query or '').strip()
-    if not normalized_query:
-        raise SerpApiError('Query must be a non-empty string')
-
-    engine = (engine or 'google').strip().lower() or 'google'
-    allowed_engines = {'google', 'bing', 'duckduckgo'}
-    if engine not in allowed_engines:
-        raise SerpApiError(f'Unsupported SerpAPI engine "{engine}"')
-
-    lang = (lang or 'fr').strip().lower() or 'fr'
-    timestep = (timestep or 'week').strip().lower() or 'week'
-
-    if bool(datestart) ^ bool(dateend):
-        raise SerpApiError('Both datestart and dateend must be provided together')
-
-    date_capable_engines = {'google', 'duckduckgo'}
-    if (datestart or dateend) and engine not in date_capable_engines:
-        raise SerpApiError('Date filtering is only supported with the google or duckduckgo engines')
-
-    normalized_start: Optional[date] = None
-    normalized_end: Optional[date] = None
-    if datestart and dateend:
-        normalized_start = _parse_serpapi_date(datestart)
-        normalized_end = _parse_serpapi_date(dateend)
-        if normalized_start > normalized_end:
-            raise SerpApiError('datestart must be earlier than or equal to dateend')
-
-    date_windows: List[Tuple[Optional[date], Optional[date]]] = []
-    if engine in date_capable_engines and normalized_start and normalized_end:
-        date_windows = list(_build_serpapi_windows(datestart, dateend, timestep))
-    if not date_windows:
-        date_windows = [(normalized_start, normalized_end)]  # Always run at least once.
-
-    aggregated: List[Dict[str, Optional[Union[str, int]]]] = []
-
-    base_url = getattr(settings, 'serpapi_base_url', 'https://serpapi.com/search')
-    timeout = getattr(settings, 'serpapi_timeout', 15)
-    jitter_floor, jitter_ceil = 0.8, 1.2
-    page_size = _serpapi_page_size(engine)
-
-    for window_start, window_end in date_windows:
-        # Pagination resets for every date window so we can cover the full range.
-        start_index = 0
-        window_count = 0
-        while True:
-            params: Dict[str, Union[str, int]] = {
-                'api_key': api_key,
-                'engine': engine,
-                'q': normalized_query,
-            }
-            params.update(_build_serpapi_params(
-                engine,
-                lang,
-                start_index,
-                page_size,
-                window_start=window_start,
-                window_end=window_end,
-                use_date_filter=bool(window_start and window_end)
-            ))
-
-            if engine == 'google' and window_start and window_end:
-                # Google accepts the date constraint through the tbs parameter.
-                params['tbs'] = _build_serpapi_tbs(window_start, window_end)
-
-            try:
-                response = requests.get(base_url, params=params, timeout=timeout)
-            except requests.RequestException as exc:  # pragma: no cover - network failure
-                raise SerpApiError(f'HTTP error during SerpAPI request: {exc}') from exc
-
-            if response.status_code != 200:
-                snippet = response.text[:200]
-                raise SerpApiError(
-                    f'SerpAPI request failed with status {response.status_code}: {snippet}'
-                )
-
-            try:
-                payload = response.json()
-            except ValueError as exc:
-                raise SerpApiError('Invalid JSON payload returned by SerpAPI') from exc
-
-            if 'error' in payload:
-                message = str(payload.get('error', '')).strip()
-                lowered = message.lower()
-                if engine == 'duckduckgo' and "hasn't returned any results" in lowered:
-                    # DuckDuckGo uses an error payload when no results exist for the window.
-                    break
-                raise SerpApiError(f"SerpAPI error: {message}")
-
-            organic_results = payload.get('organic_results') or []
-            if not organic_results:
-                break
-
-            for entry in organic_results:
-                # Keep a compact structure: position/title/link/date match the R helper output.
-                aggregated.append({
-                    'position': entry.get('position'),
-                    'title': entry.get('title'),
-                    'link': entry.get('link'),
-                    'date': entry.get('date'),
-                })
-                window_count += 1
-
-            serp_pagination = payload.get('serpapi_pagination') or {}
-            next_link = serp_pagination.get('next_link') or serp_pagination.get('next')
-            has_next_page = bool(next_link)
-
-            if not has_next_page:
-                break
-
-            next_offset_raw = serp_pagination.get('next_offset')
-            next_index: Optional[int] = None
-            if next_offset_raw is not None:
-                try:
-                    next_index = int(next_offset_raw)
-                except (TypeError, ValueError):
-                    next_index = None
-
-            if next_index is None and isinstance(next_link, str):
-                try:
-                    parsed = urlparse(next_link)
-                    query_params = parse_qs(parsed.query)
-                except Exception:  # pragma: no cover - defensive
-                    query_params = {}
-
-                for key in ('start', 'first', 'offset'):
-                    values = query_params.get(key)
-                    if not values:
-                        continue
-                    try:
-                        candidate = int(values[0])
-                    except (TypeError, ValueError):
-                        continue
-                    if candidate > start_index:
-                        next_index = candidate
-                        break
-
-            if next_index is not None and next_index > start_index:
-                start_index = next_index
-                continue
-
-            increment = len(organic_results)
-            if increment <= 0:
-                break
-            start_index += increment
-
-            # Light jitter mirrors the original R helper and reduces rate-limit risks.
-            effective_sleep = max(0.0, float(sleep_seconds)) * random.uniform(jitter_floor, jitter_ceil)
-            if effective_sleep > 0:
-                time.sleep(effective_sleep)
-
-        if progress_hook:
-            progress_hook(window_start, window_end, window_count)
-
-    return aggregated
+    return _run_search(SearchRequest(
+        api_key=api_key,
+        query=query,
+        engine=engine,
+        lang=lang,
+        datestart=datestart,
+        dateend=dateend,
+        timestep=timestep,
+        sleep_seconds=sleep_seconds,
+        progress_hook=progress_hook,
+    ))
 
 
 def parse_serp_result_date(value: Optional[str]) -> Optional[datetime]:
@@ -680,305 +533,6 @@ def prefer_earlier_datetime(
     if current_value is None:
         return candidate
     return candidate if candidate < current_value else current_value
-
-
-def _serpapi_page_size(engine: str) -> int:
-    """Return the maximum page size for a given SerpAPI search engine.
-
-    Different search engines support different maximum result counts per page.
-    This function returns the appropriate page size for each engine.
-
-    Args:
-        engine: The search engine name (e.g., 'google', 'bing', 'duckduckgo').
-
-    Returns:
-        int: The maximum page size (100 for Google, 50 for others).
-
-    Notes:
-        - Google supports up to 100 results per page.
-        - Other engines (Bing, DuckDuckGo) default to 50 results per page.
-    """
-    if engine == 'google':
-        return 100
-    return 50
-
-
-def _build_serpapi_params(
-    engine: str,
-    lang: str,
-    start_index: int,
-    page_size: int,
-    window_start: Optional[date] = None,
-    window_end: Optional[date] = None,
-    use_date_filter: bool = False
-) -> Dict[str, Union[str, int]]:
-    """Build engine-specific query parameters for SerpAPI requests.
-
-    This function constructs the appropriate query parameters for different search
-    engines (Google, Bing, DuckDuckGo) with language settings and pagination.
-
-    Args:
-        engine: The search engine name ('google', 'bing', or 'duckduckgo').
-        lang: Language code for localization (e.g., 'fr', 'en').
-        start_index: The starting index for pagination (0-based).
-        page_size: Maximum number of results per page.
-        window_start: Optional start date for date-filtered searches.
-        window_end: Optional end date for date-filtered searches.
-        use_date_filter: Whether date filtering is being applied.
-
-    Returns:
-        Dict[str, Union[str, int]]: A dictionary of query parameters specific to
-            the chosen search engine.
-
-    Notes:
-        - Google uses 'start', 'num', 'gl', 'hl', 'lr' parameters.
-        - Bing uses 'mkt', 'count', 'first' parameters (1-indexed).
-        - DuckDuckGo uses 'kl', 'start', 'm', 'df' parameters.
-        - Date filters are only applied for DuckDuckGo via 'df' parameter.
-    """
-    normalized_lang = (lang or 'fr').strip().lower() or 'fr'
-
-    if engine == 'google':
-        params: Dict[str, Union[str, int]] = {
-            'google_domain': _serpapi_google_domain(normalized_lang),
-            'gl': normalized_lang,
-            'hl': normalized_lang,
-            'lr': f'lang_{normalized_lang}',
-            'safe': 'off',
-            'start': start_index,
-        }
-        if not use_date_filter:
-            params['num'] = page_size
-        return params
-
-    if engine == 'bing':
-        return {
-            'mkt': _serpapi_bing_market(normalized_lang),
-            'count': page_size,
-            'first': start_index + 1,
-        }
-
-    if engine == 'duckduckgo':
-        params = {
-            'kl': _serpapi_duckduckgo_region(normalized_lang),
-            'start': start_index,
-            'm': page_size,
-        }
-        if window_start and window_end:
-            params['df'] = f"{window_start.isoformat()}..{window_end.isoformat()}"
-        return params
-
-    return {}
-
-
-def _build_serpapi_windows(
-    datestart: Optional[str],
-    dateend: Optional[str],
-    timestep: str
-) -> List[Tuple[date, date]]:
-    """Generate inclusive date windows for time-based search iteration.
-
-    This function splits a date range into smaller windows based on the specified
-    timestep, matching the behavior of the original R helper implementation.
-
-    Args:
-        datestart: Start date in YYYY-MM-DD format, or None.
-        dateend: End date in YYYY-MM-DD format, or None.
-        timestep: Window size ('day', 'week', or 'month').
-
-    Returns:
-        List[Tuple[date, date]]: A list of (start_date, end_date) tuples representing
-            inclusive date windows, or empty list if dates are not provided.
-
-    Raises:
-        SerpApiError: If datestart is later than dateend.
-
-    Notes:
-        - Returns empty list if either datestart or dateend is None.
-        - Each window is inclusive of both start and end dates.
-        - Last window may be shorter to fit within the overall date range.
-    """
-
-    if not datestart or not dateend:
-        return []
-
-    start_date = _parse_serpapi_date(datestart)
-    end_date = _parse_serpapi_date(dateend)
-    if start_date > end_date:
-        raise SerpApiError('datestart must be earlier than or equal to dateend')
-
-    current_start = start_date
-    step = timestep.lower()
-    windows: List[Tuple[date, date]] = []
-
-    while current_start <= end_date:
-        next_start = _advance_date(current_start, step)
-        window_end = min(end_date, next_start - timedelta(days=1))
-        windows.append((current_start, window_end))
-        current_start = next_start
-
-    return windows
-
-
-def _advance_date(current: date, timestep: str) -> date:
-    """Advance a date by the specified timestep increment.
-
-    This function adds a time increment to the current date based on the timestep
-    parameter, handling month boundaries correctly.
-
-    Args:
-        current: The date to advance.
-        timestep: The increment type ('day', 'week', or 'month').
-
-    Returns:
-        date: The advanced date.
-
-    Raises:
-        SerpApiError: If timestep is not one of 'day', 'week', or 'month'.
-
-    Notes:
-        - 'day' advances by 1 day.
-        - 'week' advances by 7 days.
-        - 'month' advances by 1 month, handling month-end edge cases correctly.
-    """
-
-    if timestep == 'day':
-        return current + timedelta(days=1)
-    if timestep == 'week':
-        return current + timedelta(weeks=1)
-    if timestep == 'month':
-        year = current.year + (current.month // 12)
-        month = current.month % 12 + 1
-        day = min(current.day, calendar.monthrange(year, month)[1])
-        return date(year, month, day)
-    raise SerpApiError('timestep must be one of: day, week, month')
-
-
-def _parse_serpapi_date(value: str) -> date:
-    """Parse a YYYY-MM-DD string into a date object and validate the format.
-
-    This function converts a date string in ISO format (YYYY-MM-DD) to a Python
-    date object, raising an error if the format is invalid.
-
-    Args:
-        value: A date string in YYYY-MM-DD format.
-
-    Returns:
-        date: The parsed date object.
-
-    Raises:
-        SerpApiError: If the date string is not in valid YYYY-MM-DD format.
-
-    Notes:
-        - Only accepts ISO format (YYYY-MM-DD).
-        - Validates both format and date validity (e.g., rejects 2023-02-30).
-    """
-
-    try:
-        return datetime.strptime(value, '%Y-%m-%d').date()
-    except ValueError as exc:
-        raise SerpApiError(f'Invalid date "{value}" — expected YYYY-MM-DD') from exc
-
-
-def _build_serpapi_tbs(start: date, end: date) -> str:
-    """Build the Google tbs parameter encoding a closed date range.
-
-    This function constructs the Google-specific 'tbs' (to-be-searched) parameter
-    that encodes a custom date range for search filtering.
-
-    Args:
-        start: The start date of the range (inclusive).
-        end: The end date of the range (inclusive).
-
-    Returns:
-        str: A formatted tbs parameter string for Google Search API.
-
-    Notes:
-        - Format: 'cdr:1,cd_min:MM/DD/YYYY,cd_max:MM/DD/YYYY'
-        - 'cdr:1' enables custom date range filtering.
-        - Dates are formatted as MM/DD/YYYY for Google's API.
-    """
-
-    return 'cdr:1,cd_min:{},cd_max:{}'.format(
-        start.strftime('%m/%d/%Y'),
-        end.strftime('%m/%d/%Y')
-    )
-
-
-def _serpapi_google_domain(lang: str) -> str:
-    """Return a Google domain TLD matching the language code.
-
-    This function maps language codes to appropriate Google domain TLDs for
-    localized search results.
-
-    Args:
-        lang: A language code (e.g., 'fr', 'en').
-
-    Returns:
-        str: The Google domain TLD (e.g., 'google.fr', 'google.com').
-
-    Notes:
-        - 'fr' maps to 'google.fr' for French results.
-        - 'en' maps to 'google.com' for English results.
-        - Defaults to 'google.com' for unrecognized language codes.
-    """
-
-    lang = lang.lower()
-    if lang == 'fr':
-        return 'google.fr'
-    if lang == 'en':
-        return 'google.com'
-    return 'google.com'
-
-
-def _serpapi_bing_market(lang: str) -> str:
-    """Return the Bing market code matching the requested language.
-
-    This function maps language codes to Bing market identifiers for localized
-    search results.
-
-    Args:
-        lang: A language code (e.g., 'fr', 'en').
-
-    Returns:
-        str: The Bing market code (e.g., 'fr-FR', 'en-US').
-
-    Notes:
-        - 'fr' maps to 'fr-FR' for French market.
-        - 'en' maps to 'en-US' for English/US market.
-        - Defaults to 'en-US' for unrecognized language codes.
-    """
-
-    mapping = {
-        'fr': 'fr-FR',
-        'en': 'en-US',
-    }
-    return mapping.get(lang, 'en-US')
-
-
-def _serpapi_duckduckgo_region(lang: str) -> str:
-    """Return the DuckDuckGo region code for the given language.
-
-    This function maps language codes to DuckDuckGo region identifiers for
-    localized search results.
-
-    Args:
-        lang: A language code (e.g., 'fr', 'en').
-
-    Returns:
-        str: The DuckDuckGo region code (e.g., 'fr-fr', 'us-en').
-
-    Notes:
-        - 'fr' maps to 'fr-fr' for French region.
-        - 'en' maps to 'us-en' for US English region.
-        - Defaults to 'us-en' for unrecognized language codes.
-    """
-
-    mapping = {
-        'fr': 'fr-fr',
-        'en': 'us-en',
-    }
-    return mapping.get(lang, 'us-en')
 
 
 def fetch_seorank_for_url(url: str, api_key: str) -> Optional[dict]:
@@ -1839,7 +1393,7 @@ def get_keywords(soup: BeautifulSoup) -> str:
     return ""
 
 
-async def crawl_land(land: model.Land, limit: int = 0, http: Optional[str] = None, depth: Optional[int] = None, store_html: bool = False) -> tuple:
+async def crawl_land(land: model.Land, limit: int = 0, http: Optional[str] = None, depth: Optional[int] = None, store_html: bool = False, retry_status: Optional[list] = None) -> tuple:
     """Asynchronously crawl all expressions in a land.
 
     This function orchestrates the crawling process for a land, processing
@@ -1850,6 +1404,11 @@ async def crawl_land(land: model.Land, limit: int = 0, http: Optional[str] = Non
         limit: Maximum number of expressions to crawl (0 for unlimited).
         http: Optional HTTP status filter for recrawling specific expressions.
         depth: Optional depth filter to crawl only expressions at this depth level.
+        store_html: When True, persist raw HTML in expression.html.
+        retry_status: Optional list of HTTP status codes to retry. When provided,
+            selects expressions whose http_status matches any code in the list,
+            ignoring fetched_at. Takes precedence over http. Useful to backfill
+            the cascade fallback (sprint-403 Sprint 5) on previously crawled URLs.
 
     Returns:
         tuple: A tuple of (total_processed, total_errors) counts.
@@ -1870,86 +1429,178 @@ async def crawl_land(land: model.Land, limit: int = 0, http: Optional[str] = Non
     # Track how many expressions we attempted to crawl to enforce --limit
     total_attempted = 0
 
-    # If depth is specified, only process that depth
-    if depth is not None:
-        depths_to_process = [depth]
-    else:
-        # Get distinct depths in ascending order for expressions not yet fetched or matching http filter
+    def _base_filter():
+        """Build the WHERE filter for expression selection.
+
+        Priority: retry_status > http > fetched_at IS NULL.
+        """
+        if retry_status:
+            return (model.Expression.land == land,
+                    model.Expression.http_status.in_(retry_status))
         if http is None:
-            depths_query = model.Expression.select(model.Expression.depth).where(
-                model.Expression.land == land,
-                model.Expression.fetched_at.is_null(True)
-            ).distinct().order_by(model.Expression.depth)
-        else:
-            depths_query = model.Expression.select(model.Expression.depth).where(
-                model.Expression.land == land,
-                model.Expression.http_status == http
-            ).distinct().order_by(model.Expression.depth)
-        depths_to_process = [d.depth for d in depths_query]
+            return (model.Expression.land == land,
+                    model.Expression.fetched_at.is_null(True))
+        return (model.Expression.land == land,
+                model.Expression.http_status == http)
 
-    for current_depth in depths_to_process:
-        print(f"Processing depth {current_depth}")
-
-        if http is None:
-            expressions = model.Expression.select().where(
-                model.Expression.land == land,
-                model.Expression.fetched_at.is_null(True),
-                model.Expression.depth == current_depth
-            )
+    try:
+        # If depth is specified, only process that depth
+        if depth is not None:
+            depths_to_process = [depth]
         else:
+            depths_query = (model.Expression
+                            .select(model.Expression.depth)
+                            .where(*_base_filter())
+                            .distinct()
+                            .order_by(model.Expression.depth))
+            depths_to_process = [d.depth for d in depths_query]
+
+        for current_depth in depths_to_process:
+            print(f"Processing depth {current_depth}")
+
             expressions = model.Expression.select().where(
-                model.Expression.land == land,
-                model.Expression.http_status == http,
-                model.Expression.depth == current_depth
+                *_base_filter(),
+                model.Expression.depth == current_depth,
             )
 
-        expression_count = expressions.count()
-        if expression_count == 0:
-            continue
+            expression_count = expressions.count()
+            if expression_count == 0:
+                continue
 
-        batch_size = settings.parallel_connections
-        batch_count = -(-expression_count // batch_size)
-        last_batch_size = expression_count % batch_size
-        current_offset = 0
+            batch_size = settings.parallel_connections
+            batch_count = -(-expression_count // batch_size)
+            last_batch_size = expression_count % batch_size
+            current_offset = 0
 
-        for current_batch in range(batch_count):
-            print(f"Batch {current_batch + 1}/{batch_count} for depth {current_depth}")
-            # Determine base batch limit from remaining rows in this depth
-            batch_limit = last_batch_size if (current_batch + 1 == batch_count and last_batch_size != 0) else batch_size
-            # Enforce the global --limit on attempts (not only successes)
-            if limit > 0:
-                remaining = max(0, limit - total_attempted)
-                if remaining == 0:
+            for current_batch in range(batch_count):
+                print(f"Batch {current_batch + 1}/{batch_count} for depth {current_depth}")
+                # Determine base batch limit from remaining rows in this depth
+                batch_limit = last_batch_size if (current_batch + 1 == batch_count and last_batch_size != 0) else batch_size
+                # Enforce the global --limit on attempts (not only successes)
+                if limit > 0:
+                    remaining = max(0, limit - total_attempted)
+                    if remaining == 0:
+                        return total_processed, total_errors
+                    effective_batch_limit = min(batch_limit, remaining)
+                else:
+                    effective_batch_limit = batch_limit
+
+                current_expressions_query = expressions.limit(effective_batch_limit).offset(current_offset)
+                current_batch_expressions = list(current_expressions_query)
+                attempted_in_batch = len(current_batch_expressions)
+
+                if attempted_in_batch == 0:
+                    break
+
+                connector = aiohttp.TCPConnector(limit=settings.parallel_connections, ssl=False)
+                async with aiohttp.ClientSession(connector=connector, max_field_size=16384) as session:
+                    tasks = [
+                        crawl_expression_with_media_analysis(expr, dictionary, session, store_html=store_html)
+                        for expr in current_batch_expressions
+                    ]
+                    results = await asyncio.gather(*tasks)
+                    processed_in_batch = sum(results)
+                    total_processed += processed_in_batch
+                    total_errors += (attempted_in_batch - processed_in_batch)
+                    total_attempted += attempted_in_batch
+
+                current_offset += attempted_in_batch
+
+                if limit > 0 and total_attempted >= limit:
                     return total_processed, total_errors
-                effective_batch_limit = min(batch_limit, remaining)
+
+        return total_processed, total_errors
+    finally:
+        # Shutdown the shared BrowserPool if it was started during this crawl
+        # (sprint-403 Sprint 3b). Idempotent — does nothing when the pool
+        # was never instantiated.
+        try:
+            from mwi.browser_pool import BrowserPool, PLAYWRIGHT_AVAILABLE
+            if PLAYWRIGHT_AVAILABLE and BrowserPool._instance is not None:
+                await BrowserPool.get().shutdown()
+                BrowserPool.reset()
+        except Exception as e:
+            print(f"BrowserPool shutdown warning: {e}")
+
+def _extract_content_and_links(raw_html, expression, source_method: str = "aiohttp"):
+    """Run Trafilatura then BeautifulSoup on ``raw_html`` and persist medias.
+
+    Returns ``(content, links)`` where ``content`` is the markdown body
+    (or ``None`` if extraction yielded nothing useful) and ``links`` is a
+    list of outgoing URLs found in the body.
+
+    Side-effects: writes to ``expression.readable`` and inserts ``Media``
+    rows for embedded images. ``source_method`` is only used to phrase
+    the success log line ("aiohttp" vs "archive_org").
+    """
+    if not raw_html:
+        return None, []
+
+    content = None
+    links: list = []
+
+    # 2a. Trafilatura
+    try:
+        extracted_content = trafilatura.extract(
+            raw_html, include_links=True, include_comments=False,
+            include_images=True, output_format='markdown',
+        )
+        readable_html = trafilatura.extract(
+            raw_html, include_links=True, include_comments=False,
+            include_images=True, output_format='html',
+        )
+        if extracted_content and len(extracted_content) > 100:
+            media_lines = []
+            if readable_html:
+                soup_readable = BeautifulSoup(readable_html, 'html.parser')
+                for tag, label in [('img', 'IMAGE'), ('video', 'VIDEO'), ('audio', 'AUDIO')]:
+                    for element in soup_readable.find_all(tag):
+                        src = element.get('src')
+                        if src:
+                            if tag == 'img':
+                                media_lines.append(f"![{label}]({src})")
+                            else:
+                                media_lines.append(f"[{label}: {src}]")
+            content = extracted_content
+            if media_lines:
+                content += "\n\n" + "\n".join(media_lines)
+            if readable_html:
+                soup_readable = BeautifulSoup(readable_html, 'html.parser')
+                extract_medias(soup_readable, expression)
+            img_md_links = re.findall(r'!\[.*?\]\((.*?)\)', content)
+            for img_url in img_md_links:
+                resolved_img_url = resolve_url(str(expression.url), img_url)
+                if not model.Media.select().where(
+                    (model.Media.expression == expression) &
+                    (model.Media.url == resolved_img_url)
+                ).exists():
+                    model.Media.create(expression=expression, url=resolved_img_url, type='img')
+            links = extract_md_links(content)
+            expression.readable = content # type: ignore
+            if source_method == "archive_org":
+                print(f"Archive.org + Trafilatura succeeded for {expression.url}")
             else:
-                effective_batch_limit = batch_limit
+                print(f"Trafilatura succeeded on fetched HTML for {expression.url}")
+    except Exception as e:
+        print(f"Trafilatura failed on raw HTML for {expression.url}: {e}")
 
-            current_expressions_query = expressions.limit(effective_batch_limit).offset(current_offset)
-            current_batch_expressions = list(current_expressions_query)
-            attempted_in_batch = len(current_batch_expressions)
+    # 2b. BeautifulSoup fallback on the same HTML
+    if not content:
+        try:
+            soup = BeautifulSoup(raw_html, 'html.parser')
+            clean_html(soup)
+            text_content = get_readable(soup)
+            if text_content and len(text_content) > 100:
+                content = text_content
+                urls = [a.get('href') for a in soup.find_all('a') if is_crawlable(a.get('href'))]
+                links = urls
+                expression.readable = content # type: ignore
+                print(f"BeautifulSoup fallback succeeded for {expression.url}")
+        except Exception as e:
+            print(f"BeautifulSoup fallback failed for {expression.url}: {e}")
 
-            if attempted_in_batch == 0:
-                break
+    return content, links
 
-            connector = aiohttp.TCPConnector(limit=settings.parallel_connections, ssl=False)
-            async with aiohttp.ClientSession(connector=connector, max_field_size=16384) as session:
-                tasks = [
-                    crawl_expression_with_media_analysis(expr, dictionary, session, store_html=store_html)
-                    for expr in current_batch_expressions
-                ]
-                results = await asyncio.gather(*tasks)
-                processed_in_batch = sum(results)
-                total_processed += processed_in_batch
-                total_errors += (attempted_in_batch - processed_in_batch)
-                total_attempted += attempted_in_batch
-
-            current_offset += attempted_in_batch
-
-            if limit > 0 and total_attempted >= limit:
-                return total_processed, total_errors
-
-    return total_processed, total_errors
 
 async def crawl_expression_with_media_analysis(expression: model.Expression, dictionary, session: aiohttp.ClientSession, store_html: bool = False):
     """Crawl and process an expression with integrated media analysis.
@@ -1975,143 +1626,23 @@ async def crawl_expression_with_media_analysis(expression: model.Expression, dic
         - Sets fetched_at timestamp on the expression.
     """
     print(f"Crawling expression #{expression.id} with media analysis: {expression.url}") # type: ignore
-    content = None
-    raw_html = None
-    links = []
-    status_code_str = "000"  # Default to client error
     expression.fetched_at = model.datetime.datetime.now() # type: ignore
 
-    # Step 1: Direct HTTP request to get status and content
-    try:
-        async with session.get(expression.url,
-                               headers={"User-Agent": settings.user_agent},
-                               timeout=aiohttp.ClientTimeout(total=15)) as response:
-            status_code_str = str(response.status)
-            if response.status == 200 and 'html' in response.headers.get('content-type', ''):
-                raw_html = await response.text()
-            else:
-                print(f"Direct request for {expression.url} returned status {status_code_str}")
+    # Step 1+3 (fetch + URL-based fallbacks): delegated to mwi.fetcher
+    fetch_result = await fetch_html(str(expression.url), session=session)
+    expression.http_status = fetch_result.status_code # type: ignore
+    expression.fetch_method = fetch_result.method_used # type: ignore
+    raw_html = fetch_result.html
 
-    except aiohttp.ClientError as e:
-        print(f"ClientError for {expression.url}: {e}. Status: 000.")
-        status_code_str = "000"
-    except Exception as e:
-        print(f"Generic exception during initial fetch for {expression.url}: {e}")
-        status_code_str = "ERR"
+    # Step 2: extract content from whichever raw_html we got (live or archived)
+    content, links = _extract_content_and_links(
+        raw_html, expression, source_method=fetch_result.method_used,
+    )
 
-    expression.http_status = str(status_code_str) # type: ignore
+    if not content and fetch_result.html is None:
+        print(f"All extraction methods failed for {expression.url}. Final status: {expression.http_status}")
 
-    # Step 2: Try to extract content if we got HTML from the direct request
-    if raw_html:
-        # 2a. Trafilatura on the fetched HTML
-        try:
-            extracted_content = trafilatura.extract(raw_html, include_links=True, include_comments=False, include_images=True, output_format='markdown')
-            readable_html = trafilatura.extract(raw_html, include_links=True, include_comments=False, include_images=True, output_format='html')
-            if extracted_content and len(extracted_content) > 100:
-                # Extraction des médias du readable HTML (corps du texte)
-                media_lines = []
-                if readable_html:
-                    soup_readable = BeautifulSoup(readable_html, 'html.parser')
-                    for tag, label in [('img', 'IMAGE'), ('video', 'VIDEO'), ('audio', 'AUDIO')]:
-                        for element in soup_readable.find_all(tag):
-                            src = element.get('src')
-                            if src:
-                                if tag == 'img':
-                                    media_lines.append(f"![{label}]({src})")
-                                else:
-                                    media_lines.append(f"[{label}: {src}]")
-                content = extracted_content
-                if media_lines:
-                    content += "\n\n" + "\n".join(media_lines)
-                # Enregistrer les médias du readable dans la table Media
-                # 1. Depuis le HTML (si balises <img> présentes)
-                if readable_html:
-                    soup_readable = BeautifulSoup(readable_html, 'html.parser')
-                    extract_medias(soup_readable, expression)
-                # 2. Depuis le markdown (pour les images converties en markdown)
-                img_md_links = re.findall(r'!\[.*?\]\((.*?)\)', content)
-                for img_url in img_md_links:
-                    # Résoudre l'URL relative en URL absolue
-                    resolved_img_url = resolve_url(str(expression.url), img_url)
-                    # Vérifier si déjà présent (éviter doublons)
-                    if not model.Media.select().where((model.Media.expression == expression) & (model.Media.url == resolved_img_url)).exists():
-                        model.Media.create(expression=expression, url=resolved_img_url, type='img')
-                links = extract_md_links(content)
-                expression.readable = content # type: ignore
-                print(f"Trafilatura succeeded on fetched HTML for {expression.url}")
-        except Exception as e:
-            print(f"Trafilatura failed on raw HTML for {expression.url}: {e}")
-
-        # 2b. BeautifulSoup as a fallback on the same HTML
-        if not content:
-            try:
-                soup = BeautifulSoup(raw_html, 'html.parser')
-                clean_html(soup)
-                text_content = get_readable(soup)
-                if text_content and len(text_content) > 100:
-                    content = text_content
-                    urls = [a.get('href') for a in soup.find_all('a') if is_crawlable(a.get('href'))]
-                    links = urls
-                    expression.readable = content # type: ignore
-                    print(f"BeautifulSoup fallback succeeded for {expression.url}")
-            except Exception as e:
-                print(f"BeautifulSoup fallback failed for {expression.url}: {e}")
-
-    # Step 3: If no content yet (e.g., non-200 status, or parsing failed), try URL-based fallbacks
-    if not content:
-        # 3b. Archive.org (if Mercury also fails)
-        if not content:
-            try:
-                print(f"Trying URL-based fallback: archive.org for {expression.url}")
-                archive_data_url = f"http://archive.org/wayback/available?url={expression.url}"
-                archive_response = await asyncio.to_thread(lambda: requests.get(archive_data_url, timeout=10))
-                archive_response.raise_for_status()
-                archive_data = archive_response.json()
-                archived_url = archive_data.get('archived_snapshots', {}).get('closest', {}).get('url')
-                if archived_url:
-                    downloaded = await asyncio.wait_for(
-                        asyncio.to_thread(trafilatura.fetch_url, archived_url),
-                        timeout=settings.default_timeout
-                    )
-                    if downloaded:
-                        raw_html = downloaded
-                        extracted_content = trafilatura.extract(downloaded, include_links=True, include_images=True, output_format='markdown')
-                        readable_html = trafilatura.extract(downloaded, include_links=True, include_images=True, output_format='html')
-                        if extracted_content and len(extracted_content) > 100:
-                            # Extraction des médias du readable HTML (corps du texte archivé)
-                            media_lines = []
-                            if readable_html:
-                                soup_readable = BeautifulSoup(readable_html, 'html.parser')
-                                for tag, label in [('img', 'IMAGE'), ('video', 'VIDEO'), ('audio', 'AUDIO')]:
-                                    for element in soup_readable.find_all(tag):
-                                        src = element.get('src')
-                                        if src:
-                                            if tag == 'img':
-                                                media_lines.append(f"![{label}]({src})")
-                                            else:
-                                                media_lines.append(f"[{label}: {src}]")
-                            content = extracted_content
-                            if media_lines:
-                                content += "\n\n" + "\n".join(media_lines)
-                            # Enregistrer les médias du readable archivé dans la table Media
-                            # 1. Depuis le HTML (si balises <img> présentes)
-                            if readable_html:
-                                soup_readable = BeautifulSoup(readable_html, 'html.parser')
-                                extract_medias(soup_readable, expression)
-                            # 2. Depuis le markdown (pour les images converties en markdown)
-                            img_md_links = re.findall(r'!\[.*?\]\((.*?)\)', content)
-                            for img_url in img_md_links:
-                                # Résoudre l'URL relative en URL absolue
-                                resolved_img_url = resolve_url(str(expression.url), img_url)
-                                if not model.Media.select().where((model.Media.expression == expression) & (model.Media.url == resolved_img_url)).exists():
-                                    model.Media.create(expression=expression, url=resolved_img_url, type='img')
-                            links = extract_md_links(content)
-                            expression.readable = content # type: ignore
-                            print(f"Archive.org + Trafilatura succeeded for {expression.url}")
-            except Exception as e:
-                print(f"Archive.org fallback failed for {expression.url}: {e}")
-
-    # Final processing and saving
+    # Step 4: post-processing (language, relevance, links, media) when content available
     if content:
         soup = BeautifulSoup(raw_html if raw_html else content, 'html.parser')
         expression.title = str(get_title(soup) or expression.url) # type: ignore
@@ -2167,7 +1698,9 @@ async def crawl_expression_with_media_analysis(expression: model.Expression, dic
         expression.save()
         return 1
     else:
-        print(f"All extraction methods failed for {expression.url}. Final status: {expression.http_status}")
+        if fetch_result.html is not None:
+            # We had HTML but extraction yielded nothing usable
+            print(f"All extraction methods failed for {expression.url}. Final status: {expression.http_status}")
         expression.save()
         return 0
 
@@ -2314,143 +1847,17 @@ async def crawl_expression(expression: model.Expression, dictionary, session: ai
         - Deprecated in favor of crawl_expression_with_media_analysis.
     """
     print(f"Crawling expression #{expression.id}: {expression.url}") # type: ignore
-    content = None
-    raw_html = None
-    links = []
-    status_code_str = "000"  # Default to client error
     expression.fetched_at = model.datetime.datetime.now() # type: ignore
 
-    # Step 1: Direct HTTP request to get status and content
-    try:
-        async with session.get(expression.url,
-                               headers={"User-Agent": settings.user_agent},
-                               timeout=aiohttp.ClientTimeout(total=15)) as response:
-            status_code_str = str(response.status)
-            if response.status == 200 and 'html' in response.headers.get('content-type', ''):
-                raw_html = await response.text()
-            else:
-                print(f"Direct request for {expression.url} returned status {status_code_str}")
+    fetch_result = await fetch_html(str(expression.url), session=session)
+    expression.http_status = fetch_result.status_code # type: ignore
+    expression.fetch_method = fetch_result.method_used # type: ignore
+    raw_html = fetch_result.html
 
-    except aiohttp.ClientError as e:
-        print(f"ClientError for {expression.url}: {e}. Status: 000.")
-        status_code_str = "000"
-    except Exception as e:
-        print(f"Generic exception during initial fetch for {expression.url}: {e}")
-        status_code_str = "ERR"
+    content, links = _extract_content_and_links(
+        raw_html, expression, source_method=fetch_result.method_used,
+    )
 
-    expression.http_status = str(status_code_str) # type: ignore
-
-    # Step 2: Try to extract content if we got HTML from the direct request
-    if raw_html:
-        # 2a. Trafilatura on the fetched HTML
-        try:
-            extracted_content = trafilatura.extract(raw_html, include_links=True, include_comments=False, include_images=True, output_format='markdown')
-            readable_html = trafilatura.extract(raw_html, include_links=True, include_comments=False, include_images=True, output_format='html')
-            if extracted_content and len(extracted_content) > 100:
-                # Extraction des médias du readable HTML (corps du texte)
-                media_lines = []
-                if readable_html:
-                    soup_readable = BeautifulSoup(readable_html, 'html.parser')
-                    for tag, label in [('img', 'IMAGE'), ('video', 'VIDEO'), ('audio', 'AUDIO')]:
-                        for element in soup_readable.find_all(tag):
-                            src = element.get('src')
-                            if src:
-                                if tag == 'img':
-                                    media_lines.append(f"![{label}]({src})")
-                                else:
-                                    media_lines.append(f"[{label}: {src}]")
-                content = extracted_content
-                if media_lines:
-                    content += "\n\n" + "\n".join(media_lines)
-                # Enregistrer les médias du readable dans la table Media
-                # 1. Depuis le HTML (si balises <img> présentes)
-                if readable_html:
-                    soup_readable = BeautifulSoup(readable_html, 'html.parser')
-                    extract_medias(soup_readable, expression)
-                # 2. Depuis le markdown (pour les images converties en markdown)
-                img_md_links = re.findall(r'!\[.*?\]\((.*?)\)', content)
-                for img_url in img_md_links:
-                    # Résoudre l'URL relative en URL absolue
-                    resolved_img_url = resolve_url(str(expression.url), img_url)
-                    # Vérifier si déjà présent (éviter doublons)
-                    if not model.Media.select().where((model.Media.expression == expression) & (model.Media.url == resolved_img_url)).exists():
-                        model.Media.create(expression=expression, url=resolved_img_url, type='img')
-                links = extract_md_links(content)
-                expression.readable = content # type: ignore
-                print(f"Trafilatura succeeded on fetched HTML for {expression.url}")
-        except Exception as e:
-            print(f"Trafilatura failed on raw HTML for {expression.url}: {e}")
-
-        # 2b. BeautifulSoup as a fallback on the same HTML
-        if not content:
-            try:
-                soup = BeautifulSoup(raw_html, 'html.parser')
-                clean_html(soup)
-                text_content = get_readable(soup)
-                if text_content and len(text_content) > 100:
-                    content = text_content
-                    urls = [a.get('href') for a in soup.find_all('a') if is_crawlable(a.get('href'))]
-                    links = urls
-                    expression.readable = content # type: ignore
-                    print(f"BeautifulSoup fallback succeeded for {expression.url}")
-            except Exception as e:
-                print(f"BeautifulSoup fallback failed for {expression.url}: {e}")
-
-    # Step 3: If no content yet (e.g., non-200 status, or parsing failed), try URL-based fallbacks
-    if not content:
-        # 3b. Archive.org (if Mercury also fails)
-        if not content:
-            try:
-                print(f"Trying URL-based fallback: archive.org for {expression.url}")
-                archive_data_url = f"http://archive.org/wayback/available?url={expression.url}"
-                archive_response = await asyncio.to_thread(lambda: requests.get(archive_data_url, timeout=10))
-                archive_response.raise_for_status()
-                archive_data = archive_response.json()
-                archived_url = archive_data.get('archived_snapshots', {}).get('closest', {}).get('url')
-                if archived_url:
-                    downloaded = await asyncio.wait_for(
-                        asyncio.to_thread(trafilatura.fetch_url, archived_url),
-                        timeout=settings.default_timeout
-                    )
-                    if downloaded:
-                        raw_html = downloaded
-                        extracted_content = trafilatura.extract(downloaded, include_links=True, include_images=True, output_format='markdown')
-                        readable_html = trafilatura.extract(downloaded, include_links=True, include_images=True, output_format='html')
-                        if extracted_content and len(extracted_content) > 100:
-                            # Extraction des médias du readable HTML (corps du texte archivé)
-                            media_lines = []
-                            if readable_html:
-                                soup_readable = BeautifulSoup(readable_html, 'html.parser')
-                                for tag, label in [('img', 'IMAGE'), ('video', 'VIDEO'), ('audio', 'AUDIO')]:
-                                    for element in soup_readable.find_all(tag):
-                                        src = element.get('src')
-                                        if src:
-                                            if tag == 'img':
-                                                media_lines.append(f"![{label}]({src})")
-                                            else:
-                                                media_lines.append(f"[{label}: {src}]")
-                            content = extracted_content
-                            if media_lines:
-                                content += "\n\n" + "\n".join(media_lines)
-                            # Enregistrer les médias du readable archivé dans la table Media
-                            # 1. Depuis le HTML (si balises <img> présentes)
-                            if readable_html:
-                                soup_readable = BeautifulSoup(readable_html, 'html.parser')
-                                extract_medias(soup_readable, expression)
-                            # 2. Depuis le markdown (pour les images converties en markdown)
-                            img_md_links = re.findall(r'!\[.*?\]\((.*?)\)', content)
-                            for img_url in img_md_links:
-                                # Résoudre l'URL relative en URL absolue
-                                resolved_img_url = resolve_url(str(expression.url), img_url)
-                                if not model.Media.select().where((model.Media.expression == expression) & (model.Media.url == resolved_img_url)).exists():
-                                    model.Media.create(expression=expression, url=resolved_img_url, type='img')
-                            links = extract_md_links(content)
-                            expression.readable = content # type: ignore
-                            print(f"Archive.org + Trafilatura succeeded for {expression.url}")
-            except Exception as e:
-                print(f"Archive.org fallback failed for {expression.url}: {e}")
-
-    # Final processing and saving
     if content:
         soup = BeautifulSoup(raw_html if raw_html else content, 'html.parser')
         expression.title = str(get_title(soup) or expression.url) # type: ignore
@@ -2458,12 +1865,10 @@ async def crawl_expression(expression: model.Expression, dictionary, session: ai
         expression.keywords = str(get_keywords(soup)) if get_keywords(soup) else None # type: ignore
         html_lang = str(soup.html.get('lang', '')) if soup.html else ''
         expression.lang = detect_content_language(content, html_lang)  # type: ignore
-        # Check language compatibility BEFORE any relevance calculation
         if expression.lang and not is_language_compatible(expression.lang, expression.land.lang):  # type: ignore
             expression.relevance = 0  # type: ignore
             print(f"Language mismatch for expression #{expression.id}: lang='{expression.lang}' not in land langs='{expression.land.lang}'")  # type: ignore
         else:
-            # Compute relevance with OpenRouter gate when enabled
             try:
                 from .llm_openrouter import is_relevant_via_openrouter
                 if getattr(settings, 'openrouter_enabled', False) and settings.openrouter_api_key and settings.openrouter_model:
@@ -2482,7 +1887,6 @@ async def crawl_expression(expression: model.Expression, dictionary, session: ai
             expression.approved_at = model.datetime.datetime.now() # type: ignore
         model.ExpressionLink.delete().where(model.ExpressionLink.source == expression.id).execute() # type: ignore
 
-        # Extract dynamic media using headless browser (only for approved expressions)
         if (expression.relevance is not None and expression.relevance > 0 and # type: ignore
             settings.dynamic_media_extraction and PLAYWRIGHT_AVAILABLE):
             try:
@@ -2509,19 +1913,6 @@ async def crawl_expression(expression: model.Expression, dictionary, session: ai
         print(f"All extraction methods failed for {expression.url}. Final status: {expression.http_status}")
         expression.save()
         return 0
-
-    # Step 4: Analyze media if enabled
-    if settings.media_analysis:
-        try:
-            media_analysis_results = await analyze_media(expression, session)
-            if media_analysis_results:
-                print(f"Media analysis found {len(media_analysis_results)} media items for #{expression.id}") # type: ignore
-            else:
-                print(f"No media found for #{expression.id}") # type: ignore
-        except Exception as e:
-            print(f"Media analysis failed for #{expression.id}: {e}") # type: ignore
-
-    return 1
 
 async def analyze_media(expression: model.Expression, session: aiohttp.ClientSession) -> list:
     """Analyze and extract detailed metadata for media associated with an expression.
@@ -2643,13 +2034,20 @@ def add_expression(land: model.Land, url: str, depth=0) -> Union[model.Expressio
             or retrieved, False if the URL is not crawlable.
 
     Notes:
-        - Automatically removes URL anchors before processing.
+        - Applies the full URL normalization pipeline (mwi.url_normalizer)
+          before insertion. This includes anchor removal, recursive archive
+          unwrapping, host lowercasing, tracker stripping and (if enabled)
+          scheme / www / mobile-subdomain canonicalization.
+        - When normalization changes the URL, the original form is recorded
+          in `Expression.original_url` for provenance.
         - Checks if URL is crawlable using is_crawlable().
         - Creates or retrieves the associated Domain object.
         - Returns existing expression if URL already exists in the land.
         - Returns False for non-crawlable URLs (PDFs, images, etc.).
     """
-    url = remove_anchor(url)
+    from mwi.url_normalizer import normalize_url
+    raw_url = url
+    url = normalize_url(url)
     if is_crawlable(url):
         domain_name = get_domain_name(url)
         domain = model.Domain.get_or_create(name=domain_name)[0]
@@ -2657,7 +2055,12 @@ def add_expression(land: model.Land, url: str, depth=0) -> Union[model.Expressio
             model.Expression.url == url,
             model.Expression.land == land)
         if expression is None:
-            expression = model.Expression.create(land=land, domain=domain, url=url, depth=depth)
+            expression = model.Expression.create(
+                land=land,
+                domain=domain,
+                url=url,
+                original_url=(raw_url if raw_url != url else None),
+                depth=depth)
         return expression
     return False
 
@@ -2665,48 +2068,11 @@ def add_expression(land: model.Land, url: str, depth=0) -> Union[model.Expressio
 def unwrap_archive_url(url: str) -> str:
     """Extract the original URL from an archive.org or ghostarchive.org URL.
 
-    Args:
-        url: The URL to check and potentially unwrap.
-
-    Returns:
-        str: The original URL if it's an archive URL, otherwise the input URL unchanged.
-
-    Notes:
-        - Handles web.archive.org format: https://web.archive.org/web/{timestamp}/{original_url}
-        - Handles ghostarchive.org format: https://ghostarchive.org/archive/{id}/{original_url}
-        - Preserves query strings and fragments from the original URL
+    Backwards-compatible wrapper around mwi.url_normalizer._unwrap_archive
+    (recursive). Kept for callers outside the canonical pipeline.
     """
-    parsed = urlparse(url)
-
-    # Handle web.archive.org URLs
-    if parsed.netloc in ('web.archive.org', 'archive.org'):
-        # Pattern: https://web.archive.org/web/20221026155732/https://example.com/page?query
-        # Also handles image URLs with im_ suffix: /web/20241211122618im_/https://...
-        # Work on the full URL path + query + fragment to preserve everything
-        full_path = parsed.path
-        if parsed.query:
-            full_path += '?' + parsed.query
-        if parsed.fragment:
-            full_path += '#' + parsed.fragment
-
-        match = re.search(r'/web/\d+(?:[a-z]+_)?/(.+)$', full_path)
-        if match:
-            return match.group(1)
-
-    # Handle ghostarchive.org URLs
-    elif parsed.netloc == 'ghostarchive.org':
-        # Pattern: https://ghostarchive.org/archive/12345/https://example.com/page
-        full_path = parsed.path
-        if parsed.query:
-            full_path += '?' + parsed.query
-        if parsed.fragment:
-            full_path += '#' + parsed.fragment
-
-        match = re.search(r'/archive/[^/]+/(.+)$', full_path)
-        if match:
-            return match.group(1)
-
-    return url
+    from mwi.url_normalizer import _unwrap_archive
+    return _unwrap_archive(url)
 
 
 def get_domain_name(url: str) -> str:
