@@ -24,6 +24,18 @@ parallel_connections = 10  # Async HTTP concurrency for crawling
 user_agent = ""  # Optionally set a custom UA
 
 # ─────────────────────────────────────────────────────────────────────────
+# Languages (sprint-multilang)
+# ─────────────────────────────────────────────────────────────────────────
+# Lands are created with `land create --lang=fr` (comma-separated list for
+# multilingual lands, e.g. --lang=fr,en). Tokenization and stemming follow
+# the land's language(s). Supported stemming languages (Snowball, ISO
+# 639-1): ar, da, de, en, es, fi, fr, hu, it, nl, no, pt, ro, ru, sv —
+# any other code falls back to lowercase identity (no stemming). ar/hu/ro
+# have no NLTK punkt model and use a unicode fallback tokenizer. For
+# non-French lands created before this feature, run:
+#   python mywi.py db migrate && python mywi.py land relemm --name=LAND
+
+# ─────────────────────────────────────────────────────────────────────────
 # Crawl fallback cascade (sprint-403)
 # ─────────────────────────────────────────────────────────────────────────
 # When the primary aiohttp fetch returns a status that suggests TLS/JS
@@ -55,6 +67,15 @@ crawl_retry_status_codes = [
     "503", "520", "521", "523", "526",
     "ERR",
 ]
+
+# fullhtml_max_size_kb: maximum size (in KB) of the raw HTML stored in
+# expression.html when --fullhtml is active (sprint-html E). Pages above
+# this threshold are truncated at the cap to protect the SQLite WAL cache
+# from pathological pages (single-page-apps with embedded base64 PDFs,
+# >50 MB JSON dumps, etc.). Set to 0 to disable the cap entirely.
+# Defaults to 5 MB which fits 99 % of HTML pages while keeping a 100 k
+# URL Land under ~500 GB worst case.
+fullhtml_max_size_kb = 5120
 
 # Cut Domains
 

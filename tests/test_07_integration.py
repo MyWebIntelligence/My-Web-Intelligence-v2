@@ -352,7 +352,7 @@ class TestErrorHandling:
         )
 
         # Mock crawl avec HTML malformé
-        async def mock_crawl_malformed(land_obj, limit, http_status, depth):
+        async def mock_crawl_malformed(land_obj, limit, http_status, depth, **kwargs):
             expr = model.Expression.get(
                 (model.Expression.land == land_obj)
                 & (model.Expression.url == "https://example.com/malformed")

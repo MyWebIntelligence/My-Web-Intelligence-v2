@@ -144,11 +144,13 @@ class TestPlaywrightStrategy:
 
 class TestDefaultChainOptIn:
     def test_playwright_off_by_default(self):
-        # No setting → off
-        async def _build():
-            async with aiohttp.ClientSession() as s:
-                return default_chain(s)
-        chain = run(_build())
+        # Setting absent/False → off. Patch explicitly: the developer's
+        # settings.py may enable it (crawl_fallback_playwright = True).
+        with patch('mwi.fetcher.settings.crawl_fallback_playwright', False, create=True):
+            async def _build():
+                async with aiohttp.ClientSession() as s:
+                    return default_chain(s)
+            chain = run(_build())
         names = [s.name for s in chain]
         assert "playwright" not in names
 
@@ -234,9 +236,9 @@ class TestThreeTierCascade:
         """aiohttp 403 → curl_cffi still 403 → Playwright 200.
 
         Final FetchResult must:
-          * status_code == "403" (truth from the live URL)
+          * status_code == "200" (Playwright actually delivered the page)
           * html from Playwright
-          * method_used == "playwright"
+          * method_used == "playwright" (signals primary aiohttp failed)
         """
         aio_session = _MockAioSession(_MockAiohttpResponse(403, 'text/html', ''))
         curl_session = _FakeCurlSession(_FakeCurlResponse(403, ''))
@@ -254,7 +256,7 @@ class TestThreeTierCascade:
             result = run(fetch_html('https://hard-cf.test',
                                     session=aio_session,
                                     strategies=strategies))
-        assert result.status_code == "403"
+        assert result.status_code == "200"
         assert result.html == '<html>browser saved us</html>'
         assert result.method_used == "playwright"
 

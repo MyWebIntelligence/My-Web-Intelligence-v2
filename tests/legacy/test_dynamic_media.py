@@ -29,6 +29,9 @@ pytestmark = pytest.mark.skipif(
     reason=f"Required imports not available: {IMPORT_ERROR if not IMPORTS_AVAILABLE else ''}"
 )
 
+@pytest.mark.asyncio
+@pytest.mark.playwright
+@pytest.mark.integration
 async def test_dynamic_media_extraction():
     """
     Test l'extraction dynamique des médias sur une page web
@@ -91,6 +94,7 @@ async def test_dynamic_media_extraction():
     print("=== Test terminé ===")
     return True
 
+@pytest.mark.asyncio
 async def test_url_resolution():
     """
     Test la fonction de résolution des URLs
@@ -113,6 +117,7 @@ async def test_url_resolution():
         print(f"     Résultat: {result}")
         print(f"     Attendu:  {expected}")
         print()
+        assert result == expected
     
     print("=== Test de résolution terminé ===\n")
 

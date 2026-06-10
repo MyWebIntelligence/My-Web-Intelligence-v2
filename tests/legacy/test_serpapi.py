@@ -61,6 +61,8 @@ def test_fetch_serpapi_url_list_builds_params(monkeypatch):
     params = captured[0]["params"]
     assert params["tbs"] == "cdr:1,cd_min:01/01/2024,cd_max:01/07/2024"
     assert params["gl"] == "fr"
-    assert params["num"] == 100
+    # Legacy parity (serpapi_router.GoogleProvider): when a date filter is
+    # active, Google ignores `num`, so the router deliberately omits it.
+    assert "num" not in params
     assert params["start"] == 0
     assert captured[0]["timeout"] == getattr(core.settings, "serpapi_timeout", 15)

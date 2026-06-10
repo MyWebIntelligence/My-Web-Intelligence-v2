@@ -138,8 +138,10 @@ def command_input():
                         default=None)
     parser.add_argument('--lang',
                         type=str,
-                        help='Language of the project (default: fr)',
-                        default='fr',
+                        help='Language(s) of the project, comma-separated '
+                             '(default: fr for land create; the land\'s '
+                             'primary language for land urlist).',
+                        default=None,
                         nargs='?')
     parser.add_argument('--merge',
                         type=str,
@@ -208,7 +210,25 @@ def command_input():
                         nargs='?')
     parser.add_argument('--force',
                         action='store_true',
-                        help='Force include expressions with previous LLM verdict = non (for land llm validate)')
+                        help='Force: re-validate previous "non" verdicts (land llm validate), '
+                             'refresh existing data (land seorank), '
+                             'skip confirmation (embedding reset)')
+    # Media maintenance verbs (land media_stats / preview_deletion / reanalyze)
+    parser.add_argument('--minwidth',
+                        type=int,
+                        help='Minimum media width in pixels (default: settings.media_min_width)',
+                        nargs='?')
+    parser.add_argument('--minheight',
+                        type=int,
+                        help='Minimum media height in pixels (default: settings.media_min_height)',
+                        nargs='?')
+    parser.add_argument('--maxsize',
+                        type=float,
+                        help='Maximum media file size in MB (default: settings.media_max_file_size)',
+                        nargs='?')
+    parser.add_argument('--suppress',
+                        action='store_true',
+                        help='For land reanalyze: delete non-conforming media after confirmation')
     parser.add_argument('--dryrun',
                         action='store_true',
                         help='Dry run mode - show what would be changed without modifying database')
@@ -249,8 +269,9 @@ def command_input():
                         nargs='?')
     parser.add_argument('--language',
                         type=str,
-                        help='Language code for `search run` (e.g. fr, en).',
-                        default='fr',
+                        help='Language code for `search run` (e.g. fr, en). '
+                             'Default: the land\'s primary language.',
+                        default=None,
                         nargs='?')
     parser.add_argument('--providers',
                         type=str,
@@ -333,11 +354,15 @@ def dispatch(args):
             'readable': LandController.readable,
             'export':   LandController.export,
             'addterm':  LandController.addterm,
+            'relemm':   LandController.relemm,
             'addurl':   LandController.addurl,
             'urlist':   LandController.urlist,
             'consolidate': LandController.consolidate,
             'normalize': LandController.normalize,
             'medianalyse': LandController.medianalyse,
+            'media_stats': LandController.media_stats,
+            'preview_deletion': LandController.preview_deletion,
+            'reanalyze': LandController.reanalyze,
             'seorank':  LandController.seorank,
             # Nested commands for LLM features
             'llm': {

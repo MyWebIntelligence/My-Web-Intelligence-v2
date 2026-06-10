@@ -241,6 +241,7 @@ docker exec -it mwi bash
 
 *   If using a local development setup, ensure your virtual environment is activated (e.g., `(venv)` prefix in your prompt).
 *   Arguments like `LAND_NAME` or `TERMS` are placeholders; replace them with your actual values.
+*   The tutorial notebook (`docs/mwi_tutorial.ipynb`) additionally requires `pip install pandas jupyter` — these are intentionally **not** in `requirements.txt` (notebook-only dependencies).
 
 ```bash
 # macOS / Linux
@@ -311,6 +312,10 @@ The detailed view shows, for each land:
 - **Fetch methods distribution** (sprint-403): which strategy provided the HTML
   for each crawled page — `aiohttp`, `curl_cffi`, `playwright`, `archive_org`,
   or `unknown` for pages crawled before the migration.
+- **Full HTML storage** (sprint-html): policy `ON|OFF` and the count + cumulative
+  size of expressions whose raw HTML is archived in `expression.html`. Only
+  shown when the policy is on or some legacy data exists. Example:
+  `Full HTML: policy=ON — 156544 expressions stored (3812.7 MB)`.
 - Embedding pipeline summary (paragraphs / embeddings / pseudolinks).
 
 ---
@@ -463,6 +468,41 @@ Delete an entire land or only expressions below a relevance threshold.
 | --maxrel | int    | No       |         | Only delete expressions with relevance < maxrel     |
 
 
+## Multilingual Lands
+
+Relevance scoring is language-aware: tokenization and stemming use the
+language(s) declared on the land (`--lang`), not just French.
+
+```bash
+# Single-language English land
+python mywi.py land create --name="EnglishTopic" --desc="..." --lang=en
+
+# Multilingual land: one lemma per language for every term (union matching)
+python mywi.py land create --name="BilingualTopic" --desc="..." --lang=fr,en
+python mywi.py land addterm --land="BilingualTopic" --terms="work, policy"
+```
+
+Key facts:
+
+- **Supported stemming languages** (Snowball, ISO 639-1): `ar`, `da`, `de`,
+  `en`, `es`, `fi`, `fr`, `hu`, `it`, `nl`, `no`, `pt`, `ro`, `ru`, `sv`.
+  Unsupported languages fall back to lowercase identity (no stemming).
+- **Tokenization** uses the per-language NLTK punkt model when available;
+  `ar`, `hu` and `ro` have no punkt model and use a unicode-aware fallback
+  tokenizer (Cyrillic, Arabic and Greek scripts are fully supported).
+- Each page is tokenized and stemmed in **its own language** when it belongs
+  to the land's languages, otherwise in the land's primary language.
+- `search run` and `land urlist` inherit the land's primary language when
+  `--language` / `--lang` is not given.
+- **Existing non-French lands** created before this feature were lemmatized
+  with the French stemmer. Fix them with:
+
+  ```bash
+  python mywi.py db migrate                      # adds word.lang (migration 011)
+  python mywi.py land relemm --name="EnglishTopic"  # re-stems terms + recomputes relevance
+  ```
+
+
 ## Data Collection
 
 ### 1. Crawl Land URLs
@@ -494,7 +534,7 @@ python mywi.py land crawl --name="AsthmaResearch" --retry-status=403,429   # bac
 ```
 
 > **Anti-Cloudflare cascade** — if `aiohttp` returns a "retryable" status
-> (`403`, `406`, `429`, `503`, `520-526`, `ERR`), MWI automatically falls
+> (`403`, `406`, `429`, `503`, `520`, `521`, `523`, `526`, `ERR`), MWI automatically falls
 > back to `curl_cffi` (TLS impersonation, ON by default), then optionally
 > Playwright (`crawl_fallback_playwright=True` to enable, ~3-5 s/page),
 > then archive.org. The strategy that finally provided the HTML is recorded
@@ -502,6 +542,26 @@ python mywi.py land crawl --name="AsthmaResearch" --retry-status=403,429   # bac
 > Use `--retry-status=403,429` to re-run the cascade on previously crawled
 > URLs without resetting their `fetched_at`. Configuration block:
 > `crawl_fallback_*` keys in `settings-example.py`.
+
+> **Full HTML archiving (`--fullhtml`, sprint-html)** — when active,
+> the raw HTML returned by the cascade is persisted in `expression.html`
+> **before** any extraction step. This means a page that successfully
+> downloaded but failed Trafilatura/BeautifulSoup parsing (Cloudflare
+> interstitials, JS-only sites, broken markup) is still archived —
+> exactly the cases for which you typically enable the option.
+> Storage size is capped at `settings.fullhtml_max_size_kb`
+> (default 5 MB per page) to protect the SQLite WAL cache from
+> pathological pages; set the cap to `0` to disable. Audit the
+> archive size at any time with `python mywi.py land list --name=X`
+> (line `Full HTML: policy=ON — N stored (X.Y MB)`) or directly
+> in SQL:
+> ```sql
+> SELECT fetch_method,
+>        SUM(CASE WHEN html IS NOT NULL THEN 1 ELSE 0 END) AS with_html,
+>        COUNT(*) AS total
+>   FROM expression WHERE land_id=?
+>   GROUP BY fetch_method;
+> ```
 
 > **Tip (Bash)** — Running multiple small batches can be faster than a single huge crawl. On macOS/Linux you can loop the crawler in one line:
 > ```bash
@@ -670,6 +730,23 @@ python mywi.py land medianalyse --name="AsthmaResearch" --depth=2 --minrel=0.5
 - Configuration for media analysis (e.g., `media_min_width`, `media_max_file_size`) can be found in `settings.py`.
 - The results, including dimensions, file size, format, dominant colors, EXIF data, and perceptual hash, are stored in the database.
 
+**Media maintenance verbs:**
+
+```bash
+# Aggregate statistics: totals, formats, dimension/size buckets, duplicates by hash
+python mywi.py land media_stats --name=LAND_NAME
+
+# Pure dry-run: count + up to 20 example URLs of non-conforming media (deletes nothing)
+python mywi.py land preview_deletion --name=LAND_NAME [--minwidth=N] [--minheight=N] [--maxsize=MB]
+
+# Re-analyze media (never-analyzed / errored first);
+# --suppress deletes non-conforming media AFTER confirmation
+python mywi.py land reanalyze --name=LAND_NAME [--limit=N] [--minwidth=N] [--minheight=N] [--maxsize=MB] [--suppress]
+```
+
+Criteria defaults come from `settings.media_min_width`, `media_min_height`
+and `media_max_file_size`.
+
 ---
 
 ### 5. Crawl Domains
@@ -683,13 +760,14 @@ python mywi.py domain crawl [--limit=NUMBER] [--http=HTTP_STATUS_CODE]
 | Option   | Type   | Required | Default | Description                                                                 |
 |----------|--------|----------|---------|-----------------------------------------------------------------------------|
 | --limit  | int    | No       |         | Maximum number of domains to crawl in this run                              |
-| --http   | str    | No       |         | Re-crawl only domains that previously resulted in this HTTP error (e.g., 503) |
+| --http   | str    | No       |         | Re-crawl only domains that previously resulted in this HTTP error (e.g., 503). `ERR` matches **all** failure statuses (`ERR_*`, `ARC_NO_HTML`, `REQ_NO_HTML`, `000`) |
 
 **Examples:**
 ```bash
 python mywi.py domain crawl
 python mywi.py domain crawl --limit=5
 python mywi.py domain crawl --http=404
+python mywi.py domain crawl --http=ERR   # retry every failed domain
 ```
 
 ---
@@ -731,6 +809,12 @@ python mywi.py land export --name="MyResearchTopic" --type=EXPORT_TYPE [--minrel
   - `*_pageslinks.csv`: All expression links (source_id, source_url, source_domain_id, target_id, target_url, target_domain_id)
   - `*_domainnodes.csv`: Domain nodes with aggregations (id, name, title, description, http_status, nbexpressions, average_relevance, first_expression_date, last_expression_date)
   - `*_domainlinks.csv`: Aggregated inter-domain links (source_domain_id, source_domain_name, target_domain_id, target_domain_name, link_count)
+- `htmldump` (sprint-html E): Zip archive of the raw HTML stored via
+  `--fullhtml`. Contains one `{expression_id}.html` per expression where
+  `html IS NOT NULL` plus a `manifest.csv` listing
+  `id, url, http_status, fetch_method, fetched_at, relevance, size_bytes`
+  for downstream replication tooling. Skips expressions with no stored HTML;
+  honors `--minrel` like other exports.
 
 **Examples:**
 ```bash
@@ -740,6 +824,7 @@ python mywi.py land export --name="AsthmaResearch" --type=pseudolinks
 python mywi.py land export --name="AsthmaResearch" --type=pseudolinkspage
 python mywi.py land export --name="AsthmaResearch" --type=pseudolinksdomain
 python mywi.py land export --name="AsthmaResearch" --type=nodelinkcsv --minrel=1
+python mywi.py land export --name="AsthmaArchive"  --type=htmldump --minrel=1
 ```
 
 ---

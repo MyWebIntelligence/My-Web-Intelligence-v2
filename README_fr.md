@@ -267,6 +267,9 @@ python mywi.py land list
 ```
 
 - Remplacez les placeholders (`LAND`, `TERMS`, `https://…`) par vos valeurs.
+- Le notebook tutoriel (`docs/mwi_tutorial.ipynb`) requiert en plus
+  `pip install pandas jupyter` — volontairement hors `requirements.txt`
+  (dépendances réservées au notebook).
 
 ---
 
@@ -396,6 +399,42 @@ python mywi.py land delete --name="MonProjet" --maxrel=0.5
 
 ---
 
+## Lands multilingues
+
+Le scoring de pertinence est paramétré par la **langue du Land** :
+tokenisation et stemming ne sont plus limités au français.
+
+```bash
+# Land anglophone
+python mywi.py land create --name="SujetAnglais" --desc="..." --lang=en
+
+# Land bilingue : un lemme par langue pour chaque terme (matching par union)
+python mywi.py land create --name="SujetBilingue" --desc="..." --lang=fr,en
+python mywi.py land addterm --land="SujetBilingue" --terms="travail, work"
+```
+
+Points clés :
+
+- **15 langues de stemming** (Snowball, ISO 639-1) : `ar`, `da`, `de`, `en`,
+  `es`, `fi`, `fr`, `hu`, `it`, `nl`, `no`, `pt`, `ro`, `ru`, `sv`.
+  Langue non supportée → identité minuscule (pas de stemming).
+- **Tokenisation** : modèle punkt NLTK par langue quand il existe ;
+  `ar`, `hu` et `ro` n'ont pas de modèle punkt et utilisent un tokenizer
+  unicode (cyrillique, arabe, grec pris en charge).
+- Chaque page est tokenisée/stemmée dans **sa propre langue** si elle
+  appartient aux langues du Land, sinon dans la langue primaire du Land.
+- `search run` et `land urlist` héritent de la langue primaire du Land
+  quand `--language` / `--lang` n'est pas fourni.
+- **Lands non francophones créés avant cette fonctionnalité** : leurs lemmes
+  ont été calculés avec le stemmer français. Pour les corriger :
+
+  ```bash
+  python mywi.py db migrate                        # ajoute word.lang (migration 011)
+  python mywi.py land relemm --name="SujetAnglais" # re-stemme + recalcule la pertinence
+  ```
+
+---
+
 ## Collecte de données
 
 ### 1. Crawler les URLs du land
@@ -414,7 +453,7 @@ python mywi.py land crawl --name="MonProjet" [--limit N] [--http CODE] [--retry-
 > `for i in {1..100}; do python mywi.py land crawl --name="MonProjet" --depth=0 --limit=100; done`
 
 > **Cascade anti-Cloudflare (sprint-403)** — quand `aiohttp` reçoit un code
-> "rattrapable" (`403`, `406`, `429`, `503`, `520-526`, `ERR`), MWI bascule
+> "rattrapable" (`403`, `406`, `429`, `503`, `520`, `521`, `523`, `526`, `ERR`), MWI bascule
 > automatiquement sur `curl_cffi` (TLS chrome120, ON par défaut), puis
 > Playwright optionnel (`crawl_fallback_playwright=True`, ~3-5 s/page),
 > puis archive.org. La stratégie utilisée est enregistrée dans
@@ -423,6 +462,27 @@ python mywi.py land crawl --name="MonProjet" [--limit N] [--http CODE] [--retry-
 > déjà crawlées sans réinitialiser leur `fetched_at`. Config détaillée :
 > `settings-example.py` (bloc `crawl_fallback_*`) et
 > `.claude/rules/Pipelines.md` §3.5.
+
+> **Archivage HTML brut (`--fullhtml`, sprint-html)** — quand l'option est
+> active, le HTML retourné par la cascade est persisté dans
+> `expression.html` **avant** toute extraction. Une page téléchargée mais
+> dont Trafilatura/BeautifulSoup ne peuvent rien extraire (interstitiels
+> Cloudflare, sites JS-only, markup cassé) est **archivée quand même** —
+> exactement les cas pour lesquels on active généralement l'option.
+> Le stockage est plafonné à `settings.fullhtml_max_size_kb` (défaut 5 MB
+> par page) ; mettre à `0` pour désactiver le plafond. La commande
+> `python mywi.py land list --name=X` affiche la politique active et le
+> volume cumulé via la ligne `Full HTML: policy=ON — N stored (X.Y MB)`.
+> Audit SQL :
+> ```sql
+> SELECT fetch_method,
+>        SUM(CASE WHEN html IS NOT NULL THEN 1 ELSE 0 END) AS with_html,
+>        COUNT(*) AS total
+>   FROM expression WHERE land_id=?
+>   GROUP BY fetch_method;
+> ```
+> Voir `.claude/rules/Pipelines.md` §3.6 pour le détail.
+> Export dédié : `--type=htmldump` (zip + manifest CSV).
 
 ### 2. Extraire un contenu lisible (pipeline Mercury)
 
@@ -455,11 +515,31 @@ python mywi.py land medianalyse --name="MonProjet" [--depth D] [--minrel R]
 
 Télécharge, mesure (dimensions/taille), extrait couleurs & EXIF, calcule hash, NSFW, consigne les erreurs.
 
+Verbes de maintenance média :
+
+```bash
+# Statistiques agrégées : totaux, formats, dimensions, tailles, doublons par hash
+python mywi.py land media_stats --name="MonProjet"
+
+# Dry-run pur : compte + 20 exemples de médias non conformes (rien n'est supprimé)
+python mywi.py land preview_deletion --name="MonProjet" [--minwidth N] [--minheight N] [--maxsize MB]
+
+# Re-analyse (médias jamais analysés / en erreur d'abord) ;
+# --suppress supprime les non-conformes APRÈS confirmation
+python mywi.py land reanalyze --name="MonProjet" [--limit N] [--minwidth N] [--minheight N] [--maxsize MB] [--suppress]
+```
+
+Les critères par défaut viennent de `settings.media_min_width`,
+`media_min_height` et `media_max_file_size`.
+
 ### 5. Crawl des domaines
 
 ```bash
 python mywi.py domain crawl [--limit N] [--http CODE]
 ```
+
+`--http=ERR` matche **tous** les statuts d'échec (`ERR_*`, `ARC_NO_HTML`,
+`REQ_NO_HTML`, `000`) — pratique pour relancer tous les domaines en erreur.
 
 ---
 

@@ -652,11 +652,14 @@ class MercuryReadablePipeline:
         )
 
         # Mapping des champs à vérifier
+        # Note (sprint-multilang, P2 fix): Mercury's `direction` is a text
+        # direction ('ltr'/'rtl'), NOT a language code. It used to be written
+        # into Expression.lang, polluting the data. Language detection at
+        # crawl time (detect_content_language) is authoritative for `lang`.
         field_mapping = {
             'title': mercury_result.title,
             'description': mercury_result.excerpt,
             'readable': mercury_result.markdown,
-            'lang': mercury_result.direction,
             'published_at': self._parse_date(mercury_result.date_published)
         }
 

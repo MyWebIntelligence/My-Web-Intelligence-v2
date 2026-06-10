@@ -244,6 +244,11 @@ class Word(BaseModel):
         term (CharField): The original word form. Maximum 30 characters.
         lemma (CharField): The normalized/lemmatized form of the word.
             Maximum 30 characters.
+        lang (CharField): ISO 639-1 language code used to compute the lemma
+            (sprint-multilang, migration 011). The logical key is
+            (term, lang): the same term yields one Word row per language,
+            each carrying the lemma stemmed for that language. Defaults to
+            'fr' (all pre-migration rows were stemmed in French).
 
     Notes:
         Lemmatization is typically performed using NLTK or similar tools.
@@ -252,6 +257,7 @@ class Word(BaseModel):
     """
     term = CharField(max_length=30)
     lemma = CharField(max_length=30)
+    lang = CharField(max_length=10, default='fr')
 
 
 class LandDictionary(BaseModel):

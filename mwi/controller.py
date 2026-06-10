@@ -14,6 +14,25 @@ from . import core
 from . import model
 
 
+def _get_event_loop():
+    """Return the current event loop, creating one if none is set.
+
+    Since Python 3.12, `asyncio.get_event_loop()` raises RuntimeError when
+    the policy has no current loop (e.g. after an `asyncio.run()` call
+    elsewhere in the process). Controllers are synchronous entry points,
+    so transparently provisioning a fresh loop is the correct behaviour.
+    """
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_closed():
+            raise RuntimeError('event loop is closed')
+        return loop
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        return loop
+
+
 class DbController:
     """
     Db controller class
@@ -155,90 +174,6 @@ class DbController:
             return 1
 
     @staticmethod
-    def medianalyse(args: core.Namespace):
-        """Perform sequential batch media analysis for a land.
-
-        Analyzes all media files associated with expressions in the specified
-        land. Processes images to extract metadata, dimensions, colors, EXIF
-        data, and perceptual hashes. Results are stored in the Media table.
-
-        Args:
-            args: Namespace object containing command-line arguments. Required
-                argument is 'name' (land name). Optional arguments include
-                'depth' (maximum expression depth) and 'minrel' (minimum
-                relevance score).
-
-        Returns:
-            int: 1 if analysis completed successfully, 0 if land not found.
-
-        Notes:
-            Uses MediaAnalyzer with settings from the configuration module.
-            Processing is sequential (single connection) to avoid overloading
-            servers. Can be interrupted with KeyboardInterrupt. Analysis
-            metadata is stored with timestamp and error information if applicable.
-        """
-        core.check_args(args, 'name')
-        depth = core.get_arg_option('depth', args, set_type=int, default=0)
-        minrel = core.get_arg_option('minrel', args, set_type=float, default=0.0)
-        from .media_analyzer import MediaAnalyzer
-        from datetime import datetime
-        
-        land = model.Land.get_or_none(model.Land.name == args.name)
-        if land is None:
-            print(f'Land "{args.name}" introuvable')
-            return 0
-        
-        query = model.Expression.select().where(model.Expression.land == land)
-        if depth > 0:
-            query = query.where(model.Expression.depth <= depth)
-        if minrel > 0:
-            query = query.where(model.Expression.relevance >= minrel)
-            
-        expressions = list(query)
-        print(f'Début de l\'analyse médias pour le land "{land.name}" avec {len(expressions)} expressions')
-        
-        async def process():
-            connector = aiohttp.TCPConnector(limit=1, ssl=False)
-            async with aiohttp.ClientSession(connector=connector) as session:
-                analyzer = MediaAnalyzer(session, {
-                    'user_agent': settings.user_agent,
-                    'min_width': settings.media_min_width,
-                    'min_height': settings.media_min_height,
-                    'max_file_size': settings.media_max_file_size,
-                    'download_timeout': settings.media_download_timeout,
-                    'max_retries': settings.media_max_retries,
-                    'analyze_content': settings.media_analyze_content,
-                    'extract_colors': settings.media_extract_colors,
-                    'extract_exif': settings.media_extract_exif,
-                    'n_dominant_colors': settings.media_n_dominant_colors
-                })
-                for expr in expressions:
-                    if not hasattr(expr, 'medias'):
-                        continue
-                    for media in expr.medias:
-                        print(f'Analyse média #{media.id}: {media.url}')
-                        result = await analyzer.analyze_image(str(media.url))
-                        for field, value in result.items():
-                            if hasattr(media, field) and field != 'error':
-                                setattr(media, field, value)
-                        media.analyzed_at = datetime.now()
-                        if 'error' in result:
-                            media.analysis_error = result['error']
-                        media.save()
-                        print('  =>', 'Erreur:' + str(result.get('error', '')) if 'error' in result else 'OK')
-
-        if sys.platform == 'win32':
-            asyncio.set_event_loop(asyncio.ProactorEventLoop())
-        loop = asyncio.get_event_loop()
-        
-        try:
-            loop.run_until_complete(process())
-        except KeyboardInterrupt:
-            print('Analyse interrompue par l\'utilisateur')
-
-        return 1
-
-    @staticmethod
     def fix_archive_domains(args: core.Namespace):
         """Fix expressions that have archive.org domains instead of their original domains.
 
@@ -261,7 +196,7 @@ class DbController:
             - Reports progress every 100 expressions
             - Can be run multiple times safely (idempotent)
         """
-        dryrun = core.get_arg_option('dryrun', args, set_type=bool, default=False)
+        dryrun = core.get_dryrun(args)
         limit = core.get_arg_option('limit', args, set_type=int, default=0)
 
         # Find all expressions with archive domains
@@ -369,7 +304,9 @@ class LandController:
 
         Args:
             args: Namespace object containing command-line arguments. Required
-                argument is 'name' (land name).
+                argument is 'name' (land name). Optional arguments 'depth'
+                (max expression depth) and 'minrel' (minimum relevance) filter
+                the expressions whose media get analyzed (sprint-multilang, B2).
 
         Returns:
             int: 1 if analysis completed successfully, 0 if land not found or
@@ -385,20 +322,287 @@ class LandController:
         if not land:
             print(f'Land "{args.name}" introuvable')
             return 0
-            
-        print(f'Début analyse média pour {args.name}')
-        from .media_analyzer import MediaAnalyzer
-        loop = asyncio.get_event_loop()
+
+        depth = core.get_arg_option('depth', args, set_type=int, default=None)
+        minrel = core.get_arg_option('minrel', args, set_type=int, default=None)
+        active_filters = []
+        if depth is not None:
+            active_filters.append(f'depth<={depth}')
+        if minrel is not None:
+            active_filters.append(f'relevance>={minrel}')
+        suffix = f" [{', '.join(active_filters)}]" if active_filters else ''
+        print(f'Début analyse média pour {args.name}{suffix}')
+        loop = _get_event_loop()
         if sys.platform == 'win32':
             asyncio.set_event_loop(asyncio.ProactorEventLoop())
-            
+
         try:
-            result = loop.run_until_complete(core.medianalyse_land(land))
+            result = loop.run_until_complete(
+                core.medianalyse_land(land, depth=depth, minrel=minrel))
             print(f"Analyse terminée : {result['processed']} médias traités")
             return 1
         except Exception as e:
             print(f"Erreur lors de l'analyse : {str(e)}")
             return 0
+
+    @staticmethod
+    def _media_base_query(land):
+        """Base Media query for a land (joined on Expression)."""
+        return (model.Media.select()
+                .join(model.Expression)
+                .where(model.Expression.land == land))
+
+    @staticmethod
+    def _media_filter_criteria(args):
+        """Resolve --minwidth/--minheight/--maxsize, falling back to settings.
+
+        Returns:
+            tuple: (min_width, min_height, max_file_size_bytes). A value of 0
+                disables the corresponding constraint (same convention as
+                Media.is_conforming).
+        """
+        min_width = core.get_arg_option('minwidth', args, set_type=int,
+                                        default=getattr(settings, 'media_min_width', 0) or 0)
+        min_height = core.get_arg_option('minheight', args, set_type=int,
+                                         default=getattr(settings, 'media_min_height', 0) or 0)
+        maxsize_mb = core.get_arg_option('maxsize', args, set_type=float, default=None)
+        if maxsize_mb is not None:
+            max_file_size = int(maxsize_mb * 1024 * 1024)
+        else:
+            max_file_size = getattr(settings, 'media_max_file_size', 0) or 0
+        return min_width, min_height, max_file_size
+
+    @staticmethod
+    def media_stats(args: core.Namespace):
+        """Display aggregate media statistics for a land (sprint-multilang, C/P7).
+
+        Prints totals (analyzed / errors), the distribution by format, by
+        dimension buckets and by file-size buckets, and the number of
+        duplicate groups detected through the perceptual image hash.
+
+        Args:
+            args: Namespace object containing command-line arguments. Required
+                argument is 'name' (land name).
+
+        Returns:
+            int: 1 on success, 0 if land not found.
+        """
+        core.check_args(args, 'name')
+        land = model.Land.get_or_none(model.Land.name == args.name)
+        if land is None:
+            print('Land "%s" not found' % args.name)
+            return 0
+        from peewee import fn
+
+        base = LandController._media_base_query(land)
+        total = base.count()
+        analyzed = base.where(model.Media.analyzed_at.is_null(False)).count()
+        errors = base.where(model.Media.analysis_error.is_null(False)).count()
+        print(f'Media stats for land "{land.name}":')
+        print(f'  Total: {total} — analyzed: {analyzed} — errors: {errors}')
+
+        fmt_rows = (model.Media
+                    .select(model.Media.format, fn.COUNT(model.Media.id).alias('n'))
+                    .join(model.Expression)
+                    .where(model.Expression.land == land)
+                    .group_by(model.Media.format)
+                    .order_by(fn.COUNT(model.Media.id).desc()))
+        print('  By format:')
+        for row in fmt_rows:
+            print(f'    {row.format or "unknown"}: {row.n}')
+
+        # Buckets are mutually exclusive: 'unknown' captures any NULL
+        # dimension, the others only apply to fully-measured media.
+        dims_known = (model.Media.width.is_null(False)
+                      & model.Media.height.is_null(False))
+        dim_buckets = [
+            ('unknown', model.Media.width.is_null(True) | model.Media.height.is_null(True)),
+            ('small (<200px)', dims_known
+                               & ((model.Media.width < 200) | (model.Media.height < 200))),
+            ('medium', dims_known
+                       & (model.Media.width >= 200) & (model.Media.height >= 200)
+                       & ((model.Media.width < 1000) | (model.Media.height < 1000))),
+            ('large (>=1000px)', dims_known
+                                 & (model.Media.width >= 1000) & (model.Media.height >= 1000)),
+        ]
+        print('  By dimensions:')
+        for label, cond in dim_buckets:
+            print(f'    {label}: {base.where(cond).count()}')
+
+        size_buckets = [
+            ('unknown', model.Media.file_size.is_null(True)),
+            ('<100KB', model.Media.file_size < 100 * 1024),
+            ('100KB-1MB', (model.Media.file_size >= 100 * 1024)
+                          & (model.Media.file_size < 1024 * 1024)),
+            ('>=1MB', model.Media.file_size >= 1024 * 1024),
+        ]
+        print('  By file size:')
+        for label, cond in size_buckets:
+            print(f'    {label}: {base.where(cond).count()}')
+
+        duplicates = (model.Media
+                      .select(model.Media.image_hash, fn.COUNT(model.Media.id).alias('n'))
+                      .join(model.Expression)
+                      .where((model.Expression.land == land)
+                             & (model.Media.image_hash.is_null(False)))
+                      .group_by(model.Media.image_hash)
+                      .having(fn.COUNT(model.Media.id) > 1))
+        dup_groups = duplicates.count()
+        dup_medias = sum(row.n for row in duplicates)
+        print(f'  Duplicates: {dup_groups} group(s), {dup_medias} media')
+        return 1
+
+    @staticmethod
+    def preview_deletion(args: core.Namespace):
+        """Preview which media would be deleted by the given criteria (dry-run).
+
+        Pure dry-run (sprint-multilang, C/P7): counts the analyzed media that
+        do NOT conform to --minwidth/--minheight/--maxsize (defaults come from
+        settings.media_min_width/media_min_height/media_max_file_size) and
+        prints up to 20 example URLs. Never deletes anything. Media not yet
+        analyzed are excluded and reported separately.
+
+        Args:
+            args: Namespace object containing command-line arguments. Required
+                argument is 'name' (land name). Optional: 'minwidth',
+                'minheight' (pixels), 'maxsize' (MB).
+
+        Returns:
+            int: 1 on success, 0 if land not found.
+        """
+        core.check_args(args, 'name')
+        land = model.Land.get_or_none(model.Land.name == args.name)
+        if land is None:
+            print('Land "%s" not found' % args.name)
+            return 0
+        min_width, min_height, max_file_size = LandController._media_filter_criteria(args)
+
+        base = LandController._media_base_query(land)
+        unanalyzed = base.where(model.Media.analyzed_at.is_null(True)).count()
+        analyzed_query = base.where(model.Media.analyzed_at.is_null(False))
+
+        conditions = None
+        if min_width > 0:
+            cond = model.Media.width.is_null(True) | (model.Media.width < min_width)
+            conditions = cond if conditions is None else (conditions | cond)
+        if min_height > 0:
+            cond = model.Media.height.is_null(True) | (model.Media.height < min_height)
+            conditions = cond if conditions is None else (conditions | cond)
+        if max_file_size > 0:
+            cond = model.Media.file_size > max_file_size
+            conditions = cond if conditions is None else (conditions | cond)
+
+        if conditions is None:
+            print('[preview_deletion] No criteria given (flags or settings) — nothing would be deleted')
+            return 1
+
+        non_conforming = analyzed_query.where(conditions)
+        count = non_conforming.count()
+        criteria = (f'min_width={min_width}px, min_height={min_height}px, '
+                    f'max_size={max_file_size} bytes')
+        print(f'[preview_deletion] DRY RUN for land "{land.name}" ({criteria})')
+        print(f'[preview_deletion] {count} media would be deleted '
+              f'({unanalyzed} not yet analyzed, excluded — run land medianalyse first)')
+        for media in non_conforming.limit(20):
+            print(f'  - #{media.id} {media.url} '
+                  f'({media.width}x{media.height}, {media.file_size} bytes)')
+        print('[preview_deletion] Nothing was deleted (dry run).')
+        return 1
+
+    @staticmethod
+    def reanalyze(args: core.Namespace):
+        """Re-run media analysis for a land, optionally deleting non-conforming media.
+
+        Re-analyzes the land's media, prioritizing those never analyzed
+        (analyzed_at NULL) or in error (analysis_error not NULL). With
+        --suppress, media that fail Media.is_conforming() against
+        --minwidth/--minheight/--maxsize (defaults from settings) are deleted
+        AFTER an explicit confirmation (sprint-multilang, C/P7).
+
+        Args:
+            args: Namespace object containing command-line arguments. Required
+                argument is 'name' (land name). Optional: 'minwidth',
+                'minheight', 'maxsize', 'suppress', 'limit' (max number of
+                media re-analyzed in this run).
+
+        Returns:
+            int: 1 on success, 0 if land not found or deletion not confirmed.
+        """
+        core.check_args(args, 'name')
+        land = model.Land.get_or_none(model.Land.name == args.name)
+        if land is None:
+            print('Land "%s" not found' % args.name)
+            return 0
+        min_width, min_height, max_file_size = LandController._media_filter_criteria(args)
+        suppress = bool(getattr(args, 'suppress', False))
+        limit = core.get_arg_option('limit', args, set_type=int, default=0)
+
+        from .media_analyzer import MediaAnalyzer
+
+        medias = (LandController._media_base_query(land)
+                  .order_by(
+                      # never-analyzed and errored media first
+                      model.Media.analyzed_at.is_null(False).asc(),
+                      model.Media.analysis_error.is_null(True).asc(),
+                      model.Media.id.asc()))
+        if limit and limit > 0:
+            medias = medias.limit(limit)
+
+        async def process():
+            count = 0
+            async with aiohttp.ClientSession() as session:
+                analyzer = MediaAnalyzer(session, {
+                    'user_agent': settings.user_agent,
+                    'min_width': settings.media_min_width,
+                    'min_height': settings.media_min_height,
+                    'max_file_size': settings.media_max_file_size,
+                    'download_timeout': settings.media_download_timeout,
+                    'max_retries': settings.media_max_retries,
+                    'analyze_content': settings.media_analyze_content,
+                    'extract_colors': settings.media_extract_colors,
+                    'extract_exif': settings.media_extract_exif,
+                    'n_dominant_colors': settings.media_n_dominant_colors
+                })
+                for media in medias:
+                    print(f'Reanalyzing media #{media.id}: {media.url}')
+                    result = await analyzer.analyze_image(str(media.url))
+                    for field, value in result.items():
+                        if hasattr(media, field) and field != 'error':
+                            setattr(media, field, value)
+                    media.analyzed_at = model.datetime.datetime.now()
+                    media.analysis_error = result.get('error') if 'error' in result else None
+                    media.save()
+                    count += 1
+            return count
+
+        # asyncio.run creates a fresh loop (Proactor is the Windows default
+        # since Python 3.8), avoiding 'Event loop is closed' on reuse.
+        processed = asyncio.run(process())
+        print(f'[reanalyze] {processed} media re-analyzed')
+
+        if not suppress:
+            return 1
+
+        to_delete = [media.id for media in
+                     LandController._media_base_query(land)
+                         .where(model.Media.analyzed_at.is_null(False))
+                     if not media.is_conforming(min_width, min_height, max_file_size)]
+        if not to_delete:
+            print('[reanalyze] No non-conforming media to delete')
+            return 1
+        if not core.confirm(
+                f"This will DELETE {len(to_delete)} non-conforming media "
+                f"from land '{land.name}'. Type 'Y' to proceed: "):
+            print('Aborted')
+            return 0
+        # Delete in chunks: a single IN(...) clause binds one SQL variable
+        # per id and would hit SQLITE_MAX_VARIABLE_NUMBER on large lands.
+        deleted = 0
+        for start in range(0, len(to_delete), 500):
+            chunk = to_delete[start:start + 500]
+            deleted += model.Media.delete().where(model.Media.id.in_(chunk)).execute()
+        print(f'[reanalyze] {deleted} non-conforming media deleted')
+        return 1
 
     @staticmethod
     def seorank(args: core.Namespace):
@@ -508,7 +712,7 @@ class LandController:
         else:
             if sys.platform == 'win32':
                 asyncio.set_event_loop(asyncio.ProactorEventLoop())
-            loop = asyncio.get_event_loop()
+            loop = _get_event_loop()
             results = loop.run_until_complete(
                 core.consolidate_land(land, fetch_limit, depth, min_relevance)
             )
@@ -544,8 +748,7 @@ class LandController:
             print(f'Land "{args.name}" not found')
             return 0
 
-        dry_run_raw = core.get_arg_option('dry_run', args, set_type=str, default=None)
-        dry_run = bool(dry_run_raw and str(dry_run_raw).upper() == 'TRUE')
+        dry_run = core.get_dryrun(args)
         reset_raw = core.get_arg_option('reset_status', args, set_type=str, default=None)
         reset_status = bool(reset_raw and str(reset_raw).upper() == 'TRUE')
         verbose_raw = core.get_arg_option('verbose', args, set_type=str, default=None)
@@ -599,6 +802,7 @@ class LandController:
             model.Land.name,
             model.Land.created_at,
             model.Land.description,
+            model.Land.fullhtml,
             fn.GROUP_CONCAT(model.Word.term.distinct()).alias('words'),
             fn.COUNT(model.Expression.id.distinct()).alias('num_all')
         ) \
@@ -671,6 +875,24 @@ class LandController:
                 if fetch_methods:
                     print("\tFetch methods: %s" % (
                         " - ".join(fetch_methods)))
+                # Full HTML storage stats (sprint-html C — D4)
+                # Show when land has the policy on, OR when at least one
+                # expression already has HTML stored (legacy data).
+                try:
+                    n_html, total_bytes = model.DB.execute_sql(
+                        "SELECT COUNT(*), COALESCE(SUM(LENGTH(html)), 0) "
+                        "FROM expression "
+                        "WHERE land_id=? AND html IS NOT NULL",
+                        (land.id,)
+                    ).fetchone()
+                    if land.fullhtml or n_html > 0:
+                        size_mb = total_bytes / (1024 * 1024)
+                        policy = "ON" if land.fullhtml else "OFF"
+                        print("\tFull HTML: policy=%s — %d expressions stored (%.1f MB)" % (
+                            policy, n_html, size_mb))
+                except Exception:
+                    # Pre-migration database: html column not yet present
+                    pass
                 # Embedding pipeline summary (land-wide)
                 try:
                     # Paragraphs count
@@ -732,7 +954,13 @@ class LandController:
         """
         core.check_args(args, ('name', 'desc'))
         # Store lang as comma-separated string
-        lang_str = ",".join(args.lang) if isinstance(args.lang, list) else str(args.lang)
+        raw_lang = getattr(args, 'lang', None)
+        if isinstance(raw_lang, list):
+            lang_str = ",".join(raw_lang) or 'fr'
+        elif raw_lang:
+            lang_str = str(raw_lang)
+        else:
+            lang_str = 'fr'
         # Parse --fullhtml option (default FALSE for new lands)
         fullhtml_raw = core.get_arg_option('fullhtml', args, set_type=str, default=None)
         store_html = fullhtml_raw.upper() == 'TRUE' if fullhtml_raw else False
@@ -760,8 +988,10 @@ class LandController:
 
         Notes:
             Each term is stemmed to create a lemma using the core.stem_word
-            function. Words are stored with both original term and lemma forms.
-            After adding terms, land_relevance is called to update expression
+            function, once per language of the land (sprint-multilang): a
+            land with lang='fr,en' creates one Word per language for each
+            term, so the dictionary holds the union of fr+en lemmas. After
+            adding terms, land_relevance is called to update expression
             scores based on the new dictionary.
         """
         core.check_args(args, ('land', 'terms'))
@@ -769,15 +999,75 @@ class LandController:
         if land is None:
             print('Land "%s" not found' % args.land)
         else:
+            land_langs = [l.strip().lower() for l in
+                          str(land.lang or 'fr').split(',') if l.strip()] or ['fr']
             for term in core.split_arg(args.terms):
                 with model.DB.atomic():
-                    lemma = ' '.join([core.stem_word(w) for w in term.split(' ')])
-                    word, _ = model.Word.get_or_create(term=term, lemma=lemma)
-                    model.LandDictionary.create(land=land.id, word=word.id)
+                    for lang in land_langs:
+                        lemma = ' '.join([core.stem_word(w, lang) for w in term.split(' ')])
+                        word, _ = model.Word.get_or_create(
+                            term=term, lang=lang, defaults={'lemma': lemma})
+                        model.LandDictionary.get_or_create(land=land.id, word=word.id)
                     print('Term "%s" created in land %s' % (term, args.land))
             core.land_relevance(land)
             return 1
         return 0
+
+    @staticmethod
+    def relemm(args: core.Namespace):
+        """Re-lemmatize a land's dictionary using the land's language(s).
+
+        Retro-fit verb (sprint-multilang, D5) for lands created before
+        multilingual stemming: their terms were lemmatized with the French
+        stemmer regardless of the land language. This verb rebuilds one
+        Word per (term, lang) for every language of the land, relinks the
+        LandDictionary, purges Words no longer linked to any land, then
+        recomputes relevance for the whole land.
+
+        Args:
+            args: Namespace object containing command-line arguments.
+                Required argument is 'name' (land name).
+
+        Returns:
+            int: 1 if re-lemmatization completed, 0 if land not found.
+
+        Notes:
+            Idempotent: running it twice yields the same dictionary and
+            the same relevance scores.
+        """
+        core.check_args(args, 'name')
+        land = model.Land.get_or_none(model.Land.name == args.name)
+        if land is None:
+            print('Land "%s" not found' % args.name)
+            return 0
+        land_langs = [l.strip().lower() for l in
+                      str(land.lang or 'fr').split(',') if l.strip()] or ['fr']
+        terms = sorted({str(w.term) for w in core.get_land_dictionary(land)})
+        if not terms:
+            print(f'No terms in land "{args.name}" dictionary — nothing to do')
+            return 1
+        print(f'Re-lemmatizing {len(terms)} term(s) for language(s): {", ".join(land_langs)}')
+        with model.DB.atomic():
+            model.LandDictionary.delete().where(model.LandDictionary.land == land).execute()
+            for term in terms:
+                for lang in land_langs:
+                    lemma = ' '.join(core.stem_word(w, lang) for w in term.split(' '))
+                    word, created = model.Word.get_or_create(
+                        term=term, lang=lang, defaults={'lemma': lemma})
+                    if not created and str(word.lemma) != lemma:
+                        word.lemma = lemma
+                        word.save()
+                    model.LandDictionary.get_or_create(land=land.id, word=word.id)
+            orphans = (model.Word.delete()
+                       .where(model.Word.id.not_in(
+                           model.LandDictionary.select(model.LandDictionary.word)))
+                       .execute())
+            if orphans:
+                print(f'Purged {orphans} orphan word(s) no longer linked to any land')
+        print('Dictionary re-lemmatized, recomputing relevance '
+              '(may take a while on large lands)...')
+        core.land_relevance(land)
+        return 1
 
     @staticmethod
     def addurl(args: core.Namespace):
@@ -849,10 +1139,17 @@ class LandController:
         """
         core.check_args(args, ('name', 'query'))
 
-        # API key lookup mirrors other integrations (settings first, then env var).
-        api_key = getattr(settings, 'serpapi_api_key', '') or os.getenv('MWI_SERPAPI_API_KEY', '')
+        # API key lookup aligned with the search router's SerpAPI adapter
+        # (sprint-multilang, D-4): UPPER first (env, then settings), then the
+        # legacy snake_case settings key and MWI_* env var.
+        api_key = (os.getenv('SERPAPI_API_KEY', '')
+                   or getattr(settings, 'SERPAPI_API_KEY', '')
+                   or getattr(settings, 'serpapi_api_key', '')
+                   or os.getenv('MWI_SERPAPI_API_KEY', ''))
         if not api_key:
-            print('[urlist] SerpAPI key missing — set settings.serpapi_api_key or MWI_SERPAPI_API_KEY')
+            print('[urlist] SerpAPI key missing — set SERPAPI_API_KEY '
+                  '(settings or env) or the legacy settings.serpapi_api_key / '
+                  'MWI_SERPAPI_API_KEY')
             return 0
 
         land = model.Land.get_or_none(model.Land.name == args.name)
@@ -861,8 +1158,15 @@ class LandController:
             return 0
 
         # CLI stores languages as a list; keep the first entry for the request.
-        lang_list = getattr(args, 'lang', ['fr'])
-        lang = lang_list[0] if isinstance(lang_list, list) and lang_list else 'fr'
+        # When --lang is not provided, inherit the land's primary language
+        # (sprint-multilang, A7).
+        lang_list = getattr(args, 'lang', None)
+        if isinstance(lang_list, str):
+            lang_list = [l.strip() for l in lang_list.split(',') if l.strip()]
+        if isinstance(lang_list, list) and lang_list:
+            lang = lang_list[0]
+        else:
+            lang = str(land.lang or 'fr').split(',')[0].strip() or 'fr'
         engine = (getattr(args, 'engine', 'google') or 'google').lower()
         # Engine validity and date-filter capability come from the SerpApiRouter,
         # which is the single source of truth for supported SerpAPI engines.
@@ -1072,10 +1376,11 @@ class LandController:
         else:
             store_html = bool(land.fullhtml)
             source = "land default"
-        if store_html:
-            print(f'Full HTML storage enabled (source: {source})')
+        # Sprint-html C — symmetric feedback so the user always sees which
+        # policy will apply, including --fullhtml=FALSE override scenarios.
+        print(f'Full HTML storage: {"ON" if store_html else "OFF"} (source: {source})')
 
-        loop = asyncio.get_event_loop()
+        loop = _get_event_loop()
         results = loop.run_until_complete(core.crawl_land(
             land, fetch_limit, http_status, depth,
             store_html=store_html, retry_status=retry_status))
@@ -1135,7 +1440,7 @@ class LandController:
         if sys.platform == 'win32':
             asyncio.set_event_loop(asyncio.ProactorEventLoop())
         
-        loop = asyncio.get_event_loop()
+        loop = _get_event_loop()
         results = loop.run_until_complete(
             run_readable_pipeline(land, fetch_limit, depth_limit, merge_strategy, llm_enabled)
         )
@@ -1174,7 +1479,8 @@ class LandController:
         core.check_args(args, ('name', 'type'))
         valid_types = ['pagecsv', 'fullpagecsv', 'nodecsv', 'pagegexf',
                        'nodegexf', 'mediacsv', 'corpus', 'pseudolinks',
-                       'pseudolinkspage', 'pseudolinksdomain', 'nodelinkcsv']
+                       'pseudolinkspage', 'pseudolinksdomain', 'nodelinkcsv',
+                       'htmldump']
 
         if isinstance(args.minrel, int) and (args.minrel >= 0):
             minimum_relevance = args.minrel
@@ -1527,6 +1833,13 @@ class EmbeddingController:
             if pcount == 0:
                 print(f'No paragraphs to delete for land {land_name}')
                 return 1
+            # Confirmation required (sprint-multilang, D-1); --force bypasses it
+            force = bool(getattr(args, 'force', False))
+            if not force and not core.confirm(
+                    f"This will delete embeddings data for land '{land_name}' "
+                    f"(paragraphs={pcount}). Type 'Y' to proceed: "):
+                print('Aborted')
+                return 0
             # Explicitly delete similarities, embeddings, then paragraphs
             with model.DB.atomic():
                 sim_deleted = (model.ParagraphSimilarity
@@ -1553,7 +1866,8 @@ class EmbeddingController:
             if total == 0:
                 print('No embedding-related rows to delete (database already clean)')
                 return 1
-            if not core.confirm(f"This will delete ALL embeddings data (paragraphs={pc}, embeddings={ec}, similarities={sc}). Type 'Y' to proceed: "):
+            force = bool(getattr(args, 'force', False))
+            if not force and not core.confirm(f"This will delete ALL embeddings data (paragraphs={pc}, embeddings={ec}, similarities={sc}). Type 'Y' to proceed: "):
                 print('Aborted')
                 return 0
             with model.DB.atomic():
@@ -1776,7 +2090,8 @@ class SearchController:
         Optional CLI args:
             --limit       Max URLs per provider (default 20).
             --strategy    'fallback' (default) or 'parallel'.
-            --language    ISO 639-1 language code (default 'fr').
+            --language    ISO 639-1 language code (default: the land's
+                          primary language; 'fr' as last resort).
             --providers   Comma-separated whitelist.
         """
         land_name = getattr(args, 'land', None) or getattr(args, 'name', None)
@@ -1795,7 +2110,9 @@ class SearchController:
 
         limit = core.get_arg_option('limit', args, set_type=int, default=20) or 20
         strategy = SearchController._resolve_strategy(args)
-        language = (getattr(args, 'language', None) or 'fr')
+        # Default to the land's primary language (sprint-multilang, A7).
+        language = (getattr(args, 'language', None)
+                    or str(land.lang or 'fr').split(',')[0].strip().lower() or 'fr')
         provider_filter = SearchController._resolve_providers(args)
 
         router = SearchController._build_router()

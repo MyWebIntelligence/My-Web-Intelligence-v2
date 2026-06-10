@@ -197,7 +197,9 @@ class TestCascadeWithCurlCffi:
         assert result.html == '<html>fast</html>'
 
     def test_aiohttp_403_triggers_curl_cffi(self):
-        """403 from aiohttp + 200 from curl_cffi → preserve 403, return curl HTML."""
+        """403 from aiohttp + 200 from curl_cffi → report 200, return curl HTML.
+        The signal "primary aiohttp failed" survives via method_used='curl_cffi'.
+        """
         aio_session = _MockAioSession(_MockResponse(403, 'text/html', ''))
         fake_curl = _FakeCurlSession(_FakeCurlResponse(
             200, '<html>chrome rescued</html>',
@@ -211,7 +213,7 @@ class TestCascadeWithCurlCffi:
             result = run(fetch_html('https://forb.test',
                                     session=aio_session,
                                     strategies=strategies))
-        assert result.status_code == "403"               # live URL stayed 403
+        assert result.status_code == "200"               # rescue status reported
         assert result.html == '<html>chrome rescued</html>'
         assert result.method_used == "curl_cffi"
 

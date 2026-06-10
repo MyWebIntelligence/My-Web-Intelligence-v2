@@ -26,8 +26,9 @@ The format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.
   `SERPAPI_API_KEY`, `TAVILY_API_KEY`, `SEARCH_DEFAULT_STRATEGY`,
   `SEARCH_PROVIDER_TIMEOUT`. All optional — adapters with no key are
   silently skipped.
-- 64 new tests (`tests/test_17` → `tests/test_25`), 89 % coverage on
-  `mwi/search/`.
+- 81 new tests (`tests/test_17` → `tests/test_25`), 89 % coverage on
+  `mwi/search/`. One additional integration test is skipped by design
+  when no live SearXNG instance is reachable.
 
 ### Changed
 

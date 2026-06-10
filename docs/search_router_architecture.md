@@ -200,7 +200,17 @@ neutral and the database canonicalisation centralised.
 
 ## 7. Database schema
 
-Two tables created by `migrations/010_add_search_tables.py`:
+Two tables created by `migrations/010_add_search_tables.py`.
+
+> **Note on table names** — the tables are named `searchquery` and
+> `searchresultlog` (single-word, no underscore). This is the Peewee ORM
+> default (`ClassName.lower()`) since neither model overrides
+> `Meta.table_name`. The early specification draft used the snake_case
+> names `search_query` / `search_result_log`; the implementation
+> consciously kept the Peewee default to avoid a custom `Meta` block.
+> When writing audit SQL by hand, use `searchquery` / `searchresultlog`
+> (the names above are authoritative — `sqlite3 data/mwi.db ".tables"`
+> confirms).
 
 ```sql
 CREATE TABLE searchquery (

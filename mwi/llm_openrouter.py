@@ -28,7 +28,7 @@ def _get_land_terms(land: model.Land) -> List[str]:
 
 
 def build_relevance_prompt(land: model.Land, expression: model.Expression, readable_text: str) -> str:
-    """Build a French-language LLM prompt for relevance evaluation.
+    """Build the LLM prompt for relevance evaluation, in the land's language.
 
     Args:
         land: Land object containing project context.
@@ -39,29 +39,49 @@ def build_relevance_prompt(land: model.Land, expression: model.Expression, reada
         Formatted prompt string requesting yes/no relevance judgment.
 
     Note:
-        Prompt is in French and instructs the LLM to respond only with
-        "oui" or "non" without additional commentary.
+        Sprint-multilang (D7): the historical French template is kept when
+        the land's primary language is French (zero behaviour change for
+        existing lands); every other language gets an English template
+        (lingua franca of LLMs). The response parser accepts both
+        oui/non and yes/no (see _normalize_yesno).
     """
     terms = ", ".join(_get_land_terms(land))
     title = str(getattr(expression, "title", "") or "")
     desc = str(getattr(expression, "description", "") or "")
     url = str(getattr(expression, "url", "") or "")
     land_desc = str(getattr(land, "description", "") or "")
+    primary_lang = str(getattr(land, "lang", "") or "fr").split(',')[0].split('-')[0].strip().lower()
 
-    prompt = (
-        "Dans le cadre de la constitution d'un corpus de pages Web à des fins d'analyse de contenu, "
-        "nous voulons savoir si la page crawlée est pertinente pour le projet ou non.\n"
-        "Le projet a les caractéristiques suivantes :\n"
-        f"- Nom du projet : {land.name}\n"
-        f"- Description : {land_desc}\n"
-        f"- Mots clés : {terms}\n"
-        "La page suivante :\n"
-        f"- URL = {url}\n"
-        f"- Titre : {title}\n"
-        f"- Description : {desc}\n"
-        f"- Readable (extrait) : {readable_text}\n"
-        "Tu répondras ABSOLUMENT et uniquement par \"oui\" ou \"non\" sans aucun commentaire."
-    )
+    if primary_lang == 'fr':
+        prompt = (
+            "Dans le cadre de la constitution d'un corpus de pages Web à des fins d'analyse de contenu, "
+            "nous voulons savoir si la page crawlée est pertinente pour le projet ou non.\n"
+            "Le projet a les caractéristiques suivantes :\n"
+            f"- Nom du projet : {land.name}\n"
+            f"- Description : {land_desc}\n"
+            f"- Mots clés : {terms}\n"
+            "La page suivante :\n"
+            f"- URL = {url}\n"
+            f"- Titre : {title}\n"
+            f"- Description : {desc}\n"
+            f"- Readable (extrait) : {readable_text}\n"
+            "Tu répondras ABSOLUMENT et uniquement par \"oui\" ou \"non\" sans aucun commentaire."
+        )
+    else:
+        prompt = (
+            "We are building a corpus of web pages for content analysis and need "
+            "to know whether the crawled page is relevant to the project or not.\n"
+            "The project has the following characteristics:\n"
+            f"- Project name: {land.name}\n"
+            f"- Description: {land_desc}\n"
+            f"- Keywords: {terms}\n"
+            "The page under review:\n"
+            f"- URL = {url}\n"
+            f"- Title: {title}\n"
+            f"- Description: {desc}\n"
+            f"- Readable (excerpt): {readable_text}\n"
+            "You MUST answer with \"yes\" or \"no\" only, without any commentary."
+        )
     return prompt
 
 
@@ -78,9 +98,12 @@ def _normalize_yesno(text: str) -> str:
         Handles both French (oui/non) and English (yes/no) responses.
     """
     t = (text or "").strip().lower()
-    if t.startswith("non") or t == "no":
+    # startswith (not equality): models often answer "Yes." / "No, ..." —
+    # critical since English prompts became the default for non-fr lands
+    # (sprint-multilang, D7).
+    if t.startswith("non") or t.startswith("no"):
         return "non"
-    if t.startswith("oui") or t == "yes":
+    if t.startswith("oui") or t.startswith("yes"):
         return "oui"
     return "?"
 

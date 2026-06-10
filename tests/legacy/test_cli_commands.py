@@ -138,7 +138,7 @@ def test_land_consolidate_and_medianalyse(fresh_db, monkeypatch):
     async def _fake_consolidate_land(land_obj, limit, depth, min_rel):
         return (2, 0)
 
-    async def _fake_medianalyse_land(land_obj):
+    async def _fake_medianalyse_land(land_obj, depth=None, minrel=None):
         return {"processed": 0}
 
     monkeypatch.setattr(controller.core, "consolidate_land", _fake_consolidate_land)
@@ -477,18 +477,23 @@ def test_core_nltk_ensure_tokenizers(monkeypatch, test_env):
     core = test_env["core"]
 
     calls = []
+    downloaded = set()
 
     class DummyData:
         path = []
 
         def find(self, resource):
             calls.append(("find", resource))
+            # Succeed once the resource has been "downloaded"
+            if resource.split('/')[-1] in downloaded:
+                return True
             raise LookupError
 
     dummy_data = DummyData()
 
     def fake_download(resource, quiet=True):
         calls.append(("download", resource, quiet))
+        downloaded.add(resource)
         return True
 
     monkeypatch.setattr(core.nltk, "data", dummy_data)
@@ -884,39 +889,9 @@ def _create_land_with_terms(controller, core, model, name=None, terms=None):
     return model.Land.get(model.Land.name == land_name)
 
 
-def test_core_process_expression_content(monkeypatch, fresh_db):
-    core = fresh_db["core"]
-    controller = fresh_db["controller"]
-    model = fresh_db["model"]
-
-    land = _create_land_with_terms(controller, core, model, terms=["science", "enfant"])
-    expression = core.add_expression(land, "https://example.com/article")
-    assert expression
-    dictionary = core.get_land_dictionary(land)
-
-    html = """
-    <html lang="fr">
-      <head>
-        <title>Science news</title>
-        <meta name="description" content="Desc" />
-      </head>
-      <body>
-        <p>Science pour enfant.</p>
-        <img src="/img.png" />
-        <a href="https://example.com/other">Other</a>
-      </body>
-    </html>
-    """
-
-    monkeypatch.setattr(core, "extract_metadata", lambda url: {"title": "Better title", "description": "Better", "keywords": "science"})
-    monkeypatch.setattr(core.settings, "archive", False, raising=False)
-    monkeypatch.setattr(core.settings, "openrouter_enabled", False, raising=False)
-
-    processed = core.process_expression_content(expression, html, dictionary)
-    assert processed.title == "Better title"
-    assert processed.lang == "fr"
-    assert processed.relevance >= 1
-    assert model.Media.select().where(model.Media.expression == processed).count() >= 1
+# test_core_process_expression_content removed by sprint-html D —
+# the function was orphaned (no production caller, replaced by
+# crawl_expression_with_media_analysis + _extract_content_and_links).
 
 
 def test_core_extract_medias_html_and_markdown(fresh_db):
@@ -1121,25 +1096,25 @@ async def test_core_extract_dynamic_medias(monkeypatch, fresh_db):
         async def close(self):
             self.closed = True
 
-    class DummyBrowser:
-        async def new_page(self):
-            return DummyPage()
-
-        async def close(self):
-            return None
-
-    class DummyChromium:
-        async def launch(self, headless=True):
-            return DummyBrowser()
-
-    class DummyContext:
+    # extract_dynamic_medias borrows pages from the shared BrowserPool
+    # (sprint-403 Sprint 3b) — mock the pool, not async_playwright.
+    class DummyPageCM:
         async def __aenter__(self):
-            return SimpleNamespace(chromium=DummyChromium())
+            return DummyPage()
 
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
-    monkeypatch.setattr(core, "async_playwright", lambda: DummyContext())
+    class DummyPool:
+        @classmethod
+        def get(cls):
+            return cls()
+
+        def page(self):
+            return DummyPageCM()
+
+    import mwi.browser_pool as browser_pool_module
+    monkeypatch.setattr(browser_pool_module, "BrowserPool", DummyPool)
 
     medias = await core.extract_dynamic_medias("https://example.com", expression)
     assert any(item.endswith(".png") for item in medias)

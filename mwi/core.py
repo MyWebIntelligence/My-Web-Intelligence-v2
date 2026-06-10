@@ -23,7 +23,6 @@ import aiohttp # type: ignore
 import nltk # type: ignore
 import requests
 from bs4 import BeautifulSoup
-from nltk.stem.snowball import FrenchStemmer # type: ignore
 from nltk.tokenize import word_tokenize # type: ignore
 from peewee import IntegrityError, JOIN, SQL
 import trafilatura # type: ignore
@@ -50,6 +49,32 @@ from mwi.serpapi_router import SearchError, SearchRequest, run_search as _run_se
 
 # Legacy alias preserved so `except core.SerpApiError` keeps working.
 SerpApiError = SearchError
+
+
+def _maybe_truncate_html(raw_html: str) -> str:
+    """Truncate raw HTML to settings.fullhtml_max_size_kb if needed.
+
+    Sprint-html E, hardened by sprint-multilang D-3: the cap is enforced
+    in UTF-8 **bytes**, not characters — a multi-byte page can exceed the
+    byte cap while staying under it in characters. Returns the original
+    string when the cap is 0, missing or the body fits within the limit.
+    Logs a one-line warning so operators can audit which URLs hit the cap.
+    """
+    cap_kb = getattr(settings, 'fullhtml_max_size_kb', 0) or 0
+    if cap_kb <= 0 or not raw_html:
+        return raw_html
+    cap_bytes = cap_kb * 1024
+    # UTF-8 encodes a character in at most 4 bytes: below cap/4 characters
+    # the page necessarily fits — skip the encode cost for most pages.
+    if len(raw_html) * 4 <= cap_bytes:
+        return raw_html
+    encoded = raw_html.encode('utf-8')
+    if len(encoded) <= cap_bytes:
+        return raw_html
+    print(f"[fullhtml] Truncating HTML "
+          f"({len(encoded) / 1024:.1f} KB > {cap_kb} KB cap)")
+    return encoded[:cap_bytes].decode('utf-8', errors='ignore')
+
 
 def _cleanup_nltk_resource(resource: str) -> bool:
     """Remove corrupted NLTK resource artifacts so they can be re-downloaded."""
@@ -131,10 +156,11 @@ if not _NLTK_OK:
     print("Warning: NLTK 'punkt'/'punkt_tab' not available; using a simple tokenizer fallback.")
 
 def _simple_word_tokenize(text: str) -> List[str]:
-    """Provide a simple fallback tokenizer for French when NLTK data is unavailable.
+    """Provide a simple unicode-aware fallback tokenizer.
 
-    This lightweight tokenizer extracts sequences of letters (including accented
-    characters) from the input text and returns them as lowercase tokens.
+    This lightweight tokenizer extracts letter sequences from the input text
+    in any script (Latin, Cyrillic, Arabic, Greek, CJK, ...) and returns them
+    as lowercase tokens.
 
     Args:
         text: The text to tokenize. Non-string inputs are converted to strings.
@@ -143,14 +169,15 @@ def _simple_word_tokenize(text: str) -> List[str]:
         list: A list of lowercase word tokens containing only letter sequences.
 
     Notes:
-        - Used as a fallback when NLTK's punkt tokenizer is unavailable.
-        - Supports basic Latin-1 accented characters (À-ÖØ-öø-ÿ).
-        - Removes all non-letter characters (numbers, punctuation, etc.).
+        - Used when NLTK's punkt tokenizer is unavailable, or for languages
+          without a punkt model (see `_PUNKT_LANGS`).
+        - `[^\\W\\d_]` matches unicode letters only (no digits, punctuation
+          or underscore).
     """
     if not isinstance(text, str):
         text = str(text)
-    # Keep only letter sequences (incl. basic Latin-1 accents)
-    return re.findall(r"[A-Za-zÀ-ÖØ-öø-ÿ]+", text.lower())
+    # Keep only letter sequences, all unicode scripts included
+    return re.findall(r"[^\W\d_]+", text.lower(), re.UNICODE)
 
 
 async def extract_dynamic_medias(url: str, expression: model.Expression) -> list:
@@ -377,6 +404,25 @@ def split_arg(arg: str) -> list:
     """
     args = arg.split(",")
     return [a.strip() for a in args if a]
+
+
+def get_dryrun(args: Namespace) -> bool:
+    """Read the dry-run flag whichever spelling was used.
+
+    Two flags coexist in the CLI (sprint-multilang, D-5): `--dryrun`
+    (store_true, dest `dryrun`) and `--dry-run` (str 'TRUE', dest
+    `dry_run`). This helper accepts both so every command honours
+    either spelling.
+
+    Returns:
+        bool: True when a dry run was requested.
+    """
+    raw = getattr(args, 'dryrun', None)
+    if raw is None or raw is False:
+        raw = getattr(args, 'dry_run', None)
+    if isinstance(raw, str):
+        return raw.strip().upper() == 'TRUE'
+    return bool(raw)
 
 
 def get_arg_option(name: str, args: Namespace, set_type, default):
@@ -740,28 +786,53 @@ def update_seorank_for_land(
     return processed, updated
 
 
-def stem_word(word: str) -> str:
-    """Stem a word using NLTK Snowball FrenchStemmer.
+# ISO 639-1 -> NLTK Snowball stemmer names (sprint-multilang, D1)
+_SNOWBALL_LANGS = {
+    'ar': 'arabic',  'da': 'danish',   'de': 'german',    'en': 'english',
+    'es': 'spanish', 'fi': 'finnish',  'fr': 'french',    'hu': 'hungarian',
+    'it': 'italian', 'nl': 'dutch',    'no': 'norwegian', 'pt': 'portuguese',
+    'ro': 'romanian', 'ru': 'russian', 'sv': 'swedish',
+}
+_stemmers: dict = {}
 
-    This function reduces a French word to its root form (stem) using the NLTK
-    Snowball stemmer for French. The stemmer is cached as a function attribute.
+# ISO 639-1 -> punkt model names shipped in nltk_data/tokenizers/punkt_tab
+# (sprint-multilang, D2). Languages without a punkt model (ar, hu, ro, ...)
+# fall back to _simple_word_tokenize, which is unicode-aware.
+_PUNKT_LANGS = {
+    'cs': 'czech', 'da': 'danish', 'de': 'german', 'el': 'greek',
+    'en': 'english', 'es': 'spanish', 'et': 'estonian', 'fi': 'finnish',
+    'fr': 'french', 'it': 'italian', 'ml': 'malayalam', 'nl': 'dutch',
+    'no': 'norwegian', 'pl': 'polish', 'pt': 'portuguese', 'ru': 'russian',
+    'sl': 'slovene', 'sv': 'swedish', 'tr': 'turkish',
+}
+
+
+def stem_word(word: str, lang: str = 'fr') -> str:
+    """Stem a word with the NLTK Snowball stemmer for the given language.
 
     Args:
         word: The word to stem.
+        lang: ISO 639-1 language code (e.g. 'fr', 'en', 'de'). Regional
+            variants ('en-US') are reduced to their base code. Defaults
+            to 'fr' to preserve the historical French-only behaviour.
 
     Returns:
-        str: The stemmed word in lowercase.
+        str: The stemmed word in lowercase. For languages without a
+            Snowball stemmer, returns the lowercased word unchanged
+            (better no stemming than wrong-language stemming).
 
     Notes:
-        - Uses NLTK's Snowball French Stemmer.
-        - The stemmer instance is cached in the function's attributes.
-        - Input is automatically converted to lowercase before stemming.
-        - Designed specifically for French language processing.
+        - Stemmer instances are cached per language in `_stemmers`.
+        - SnowballStemmer is imported lazily to preserve the `_NLTK_OK`
+          fallback path when NLTK data is unavailable.
     """
-    if not hasattr(stem_word, "stemmer"):
-        setattr(stem_word, "stemmer", FrenchStemmer())
-    # The following line uses getattr which is safe
-    return str(getattr(stem_word, "stemmer").stem(word.lower()))
+    name = _SNOWBALL_LANGS.get((lang or 'fr').split('-')[0].strip().lower())
+    if name is None:
+        return word.lower()
+    if name not in _stemmers:
+        from nltk.stem.snowball import SnowballStemmer  # type: ignore
+        _stemmers[name] = SnowballStemmer(name)
+    return str(_stemmers[name].stem(word.lower()))
 
 
 def is_language_compatible(expression_lang: str, land_langs: str) -> bool:
@@ -953,7 +1024,15 @@ def crawl_domains(limit: int = 0, http: Optional[str] = None):
     if limit > 0:
         domains_query = domains_query.limit(limit)
     if http is not None: # If http is specified, we are likely recrawling specific statuses
-        domains_query = domains_query.where(model.Domain.http_status == http)
+        if str(http).strip().upper() == 'ERR':
+            # Match every failure status (sprint-multilang, D-2): the real
+            # values are prefixed codes (ERR_TRAFI, ERR_ARCHIVE, ERR_UNKNOWN,
+            # ERR_ALL_FAILED, ...) plus ARC_NO_HTML / REQ_NO_HTML / 000.
+            domains_query = domains_query.where(
+                (model.Domain.http_status.startswith('ERR')) |
+                (model.Domain.http_status.in_(['000', 'ARC_NO_HTML', 'REQ_NO_HTML'])))
+        else:
+            domains_query = domains_query.where(model.Domain.http_status == http)
     else: # Default: crawl domains not yet fetched
         domains_query = domains_query.where(model.Domain.fetched_at.is_null())
 
@@ -1634,6 +1713,15 @@ async def crawl_expression_with_media_analysis(expression: model.Expression, dic
     expression.fetch_method = fetch_result.method_used # type: ignore
     raw_html = fetch_result.html
 
+    # Persist raw HTML *before* extraction — invariant set by sprint-html
+    # Sprint A: storage must not depend on the success of Trafilatura/BS4.
+    # If the cascade returned any HTML, archive it, even when extraction
+    # later yields no readable content (CF interstitial, JS-only sites).
+    # Sprint E: truncate at settings.fullhtml_max_size_kb (default 5 MB)
+    # to protect the SQLite WAL cache from pathological oversized pages.
+    if store_html and raw_html:
+        expression.html = _maybe_truncate_html(raw_html)  # type: ignore
+
     # Step 2: extract content from whichever raw_html we got (live or archived)
     content, links = _extract_content_and_links(
         raw_html, expression, source_method=fetch_result.method_used,
@@ -1693,8 +1781,6 @@ async def crawl_expression_with_media_analysis(expression: model.Expression, dic
             print(f"Linking {len(links)} expressions to #{expression.id}") # type: ignore
             for link in links:
                 link_expression(expression.land, expression, link) # type: ignore
-        if store_html and raw_html:
-            expression.html = raw_html  # type: ignore
         expression.save()
         return 1
     else:
@@ -1854,6 +1940,10 @@ async def crawl_expression(expression: model.Expression, dictionary, session: ai
     expression.fetch_method = fetch_result.method_used # type: ignore
     raw_html = fetch_result.html
 
+    # Persist raw HTML *before* extraction (sprint-html Sprint A + E)
+    if store_html and raw_html:
+        expression.html = _maybe_truncate_html(raw_html)  # type: ignore
+
     content, links = _extract_content_and_links(
         raw_html, expression, source_method=fetch_result.method_used,
     )
@@ -1905,8 +1995,6 @@ async def crawl_expression(expression: model.Expression, dictionary, session: ai
             print(f"Linking {len(links)} expressions to #{expression.id}") # type: ignore
             for link in links:
                 link_expression(expression.land, expression, link) # type: ignore
-        if store_html and raw_html:
-            expression.html = raw_html  # type: ignore
         expression.save()
         return 1
     else:
@@ -2192,120 +2280,6 @@ def is_crawlable(url: str):
         return False
 
 
-def process_expression_content(expression: model.Expression, html: str, dictionary, store_html: bool = False) -> model.Expression:
-    """Process and extract metadata from HTML content for an expression.
-
-    This function extracts title, description, keywords, language, and content
-    from HTML, calculates relevance, and extracts media elements.
-
-    Args:
-        expression: The Expression database object to update.
-        html: The raw HTML content to process.
-        dictionary: The land's word dictionary for relevance scoring.
-
-    Returns:
-        model.Expression: The updated Expression object.
-
-    Notes:
-        - Extracts metadata using BeautifulSoup and enhanced extraction helpers.
-        - Calculates relevance score based on land dictionary word matches.
-        - Extracts language from HTML lang attribute.
-        - Falls back to domain-based title if no title is found.
-        - Extracts media elements (images, videos, audio) from content.
-        - Uses Trafilatura to extract clean readable content.
-        - Updates expression.title, description, keywords, lang, content, and relevance.
-    """
-    print(f"Processing expression #{expression.id}") # type: ignore
-    soup = BeautifulSoup(html, 'html.parser')
-
-    html_lang = str(soup.html.get('lang', '')) if soup.html else ''
-
-    # Extract basic metadata from the soup object first
-    expression.title = str(soup.title.string.strip()) if soup.title and soup.title.string else '' # type: ignore
-    expression.description = str(get_meta_content(soup, 'description')) if get_meta_content(soup, 'description') else None # type: ignore
-    expression.keywords = str(get_meta_content(soup, 'keywords')) if get_meta_content(soup, 'keywords') else None # type: ignore
-    
-    print(f"Initial metadata from HTML for expression {expression.id}: title={bool(expression.title)}, " # type: ignore
-          f"description={bool(expression.description)}, keywords={bool(expression.keywords)}")
-    
-    # Try to enhance with more robust metadata extraction
-    try:
-        metadata = extract_metadata(str(expression.url)) # Ensure url is str
-        
-        # Only override if we got better metadata
-        if metadata['title']:
-            expression.title = str(metadata['title']) # type: ignore
-        if metadata['description']:
-            expression.description = str(metadata['description']) # type: ignore
-        if metadata['keywords']:
-            expression.keywords = str(metadata['keywords']) # type: ignore
-            
-        print(f"Enhanced metadata for expression {expression.id}: title={bool(metadata['title'])}, " # type: ignore
-              f"description={bool(metadata['description'])}, keywords={bool(metadata['keywords'])}")
-    except Exception as e:
-        print(f"Error enhancing metadata for expression {expression.id}: {str(e)}") # type: ignore
-    
-    # Ensure title has at least an empty string, but leave description and keywords as null if not found
-    domain_name = expression.domain.name if expression.domain else urlparse(str(expression.url)).netloc # Ensure url is str
-    expression.title = str(expression.title or f"Content from {domain_name}") # type: ignore
-    
-    print(f"Final expression metadata to save: title={bool(expression.title)}, " # type: ignore
-          f"description={bool(expression.description)}, keywords={bool(expression.keywords)}")
-
-    clean_html(soup)
-
-    if settings.archive is True:
-        loc = path.join(settings.data_location, 'lands/%s/%s') \
-              % (expression.land.id, expression.id) # Use .id instead of .get_id() # type: ignore
-        with open(loc, 'w', encoding="utf-8") as html_file:
-            html_file.write(html.strip())
-        html_file.close()
-
-    if store_html:
-        expression.html = html.strip()  # type: ignore
-
-    readable_content = get_readable(soup)
-    if not readable_content.strip():
-        expression.readable = f"<!-- RAW HTML -->\n{html}" # type: ignore
-    else:
-        expression.readable = readable_content # type: ignore
-
-    # Detect language from content (more reliable than <html lang>)
-    expression.lang = detect_content_language(str(expression.readable or ''), html_lang)  # type: ignore
-
-    # Check language compatibility BEFORE any relevance calculation
-    if expression.lang and not is_language_compatible(expression.lang, expression.land.lang):  # type: ignore
-        expression.relevance = 0 # type: ignore
-        print(f"Language mismatch for expression #{expression.id}: lang='{expression.lang}' not in land langs='{expression.land.lang}'")  # type: ignore
-    else:
-        # Compute relevance with OpenRouter gate when enabled
-        try:
-            from .llm_openrouter import is_relevant_via_openrouter
-            if getattr(settings, 'openrouter_enabled', False) and settings.openrouter_api_key and settings.openrouter_model:
-                verdict = is_relevant_via_openrouter(expression.land, expression)  # type: ignore
-                if verdict is False:
-                    expression.relevance = 0  # type: ignore
-                else:
-                    expression.relevance = expression_relevance(dictionary, expression)  # type: ignore
-            else:
-                expression.relevance = expression_relevance(dictionary, expression)  # type: ignore
-        except Exception as e:
-            print(f"OpenRouter gate error for {expression.url}: {e}")
-            expression.relevance = expression_relevance(dictionary, expression)  # type: ignore
-
-    if expression.relevance is not None and expression.relevance > 0: # type: ignore
-        print(f"Expression #{expression.id} approved") # type: ignore
-        extract_medias(soup, expression)
-        expression.approved_at = model.datetime.datetime.now() # type: ignore
-        if expression.depth is not None and expression.depth < 3: # type: ignore
-            urls = [a.get('href') for a in soup.find_all('a') if is_crawlable(a.get('href'))]
-            print(f"Linking {len(urls)} expression to #{expression.id}") # type: ignore
-            for url in urls:
-                link_expression(expression.land, expression, url) # type: ignore
-
-    return expression
-
-
 def extract_medias(content, expression: model.Expression):
     """Extract media references from HTML or Markdown content and save to database.
 
@@ -2504,6 +2478,23 @@ def land_relevance(land: model.Land):
             expression.save()
 
 
+def _resolve_text_lang(expression: model.Expression) -> str:
+    """Resolve the language to use for tokenizing/stemming an expression.
+
+    Sprint-multilang (D4). Returns the expression's detected language when it
+    belongs to the land's accepted languages, otherwise the land's primary
+    language. Always returns a base ISO 639-1 code (e.g. 'en', never 'en-US').
+    """
+    land_langs = [l.strip().lower() for l in
+                  str(expression.land.lang or 'fr').split(',') if l.strip()]
+    expr_lang = str(expression.lang or '').split('-')[0].strip().lower()
+    if expr_lang:
+        for land_lang in land_langs:
+            if land_lang.split('-')[0] == expr_lang:
+                return expr_lang
+    return land_langs[0].split('-')[0] if land_langs else 'fr'
+
+
 def expression_relevance(dictionary, expression: model.Expression) -> int:
     """Calculate expression relevance score based on land dictionary word matches.
 
@@ -2519,23 +2510,30 @@ def expression_relevance(dictionary, expression: model.Expression) -> int:
 
     Notes:
         - Title matches are weighted 10x more than content matches.
-        - Uses French word tokenization and stemming for matching.
+        - Tokenization and stemming use the language resolved by
+          `_resolve_text_lang` (expression language if accepted by the land,
+          otherwise the land's primary language). Sprint-multilang.
+        - The text is matched against ALL dictionary lemmas (multilingual
+          union, see Word.lang).
         - Matches whole words only (word boundaries).
         - Returns 0 if title or readable content is missing.
-        - Falls back to simple tokenizer if NLTK is unavailable.
+        - Falls back to the unicode tokenizer if NLTK or the language's punkt
+          model is unavailable.
     """
     lemmas = [w.lemma for w in dictionary]
     title_relevance = [0]
     content_relevance = [0]
+    text_lang = _resolve_text_lang(expression)
+    punkt_lang = _PUNKT_LANGS.get(text_lang)
 
     def get_relevance(text, weight) -> list:
         if not isinstance(text, str): # Ensure text is a string
             text = str(text)
-        if _NLTK_OK:
-            tokens = word_tokenize(text, language='french')
+        if _NLTK_OK and punkt_lang:
+            tokens = word_tokenize(text, language=punkt_lang)
         else:
             tokens = _simple_word_tokenize(text)
-        stems = [stem_word(w) for w in tokens]
+        stems = [stem_word(w, text_lang) for w in tokens]
         stemmed_text = " ".join(stems)
         return [sum(weight for _ in re.finditer(r'\b%s\b' % re.escape(lemma), stemmed_text)) for lemma in lemmas]
 
@@ -2655,7 +2653,9 @@ def delete_media(land: model.Land, max_width: int = 0, max_height: int = 0, max_
     expressions = model.Expression.select().where(model.Land == land)
     model.Media.delete().where(model.Media.expression << expressions)
 
-async def medianalyse_land(land: model.Land) -> dict:
+async def medianalyse_land(land: model.Land,
+                           depth: Optional[int] = None,
+                           minrel: Optional[int] = None) -> dict:
     """Analyze all media items associated with expressions in a land.
 
     This async function processes all media in a land, extracting metadata and
@@ -2663,6 +2663,10 @@ async def medianalyse_land(land: model.Land) -> dict:
 
     Args:
         land: The Land object whose media should be analyzed.
+        depth: When set, only analyze media of expressions with
+            Expression.depth <= depth (sprint-multilang, B1).
+        minrel: When set, only analyze media of expressions with
+            Expression.relevance >= minrel (sprint-multilang, B1).
 
     Returns:
         dict: A dictionary containing analysis results with processed count.
@@ -2694,7 +2698,11 @@ async def medianalyse_land(land: model.Land) -> dict:
         })
         
         medias = model.Media.select().join(model.Expression).where(model.Expression.land == land)
-        
+        if depth is not None:
+            medias = medias.where(model.Expression.depth <= depth)
+        if minrel is not None:
+            medias = medias.where(model.Expression.relevance >= minrel)
+
         for media in medias:
             print(f'Analyse de {media.url}')
             result = await analyzer.analyze_image(media.url)

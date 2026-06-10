@@ -83,6 +83,8 @@ class Export:
             filename += '.gexf'
         elif export_type.endswith('corpus'):
             filename += '.zip'
+        elif export_type == 'htmldump':
+            filename += '.zip'
         return call_write(filename)
 
     def get_sql_cursor(self, sql, column_map):
@@ -1254,3 +1256,58 @@ class Export:
                    id=row.get('id'), domain=row.get('domain'), url=row.get('url'))
 
         return dedent(metadata)
+
+    def write_htmldump(self, filename) -> int:
+        """Export raw HTML archives as a zip with one .html per expression.
+
+        Sprint-html E. Each expression with a non-NULL `html` column and
+        `relevance >= self.relevance` is written as `{id}.html` inside the
+        zip. A `manifest.csv` next to it lists id, url, http_status,
+        fetch_method, fetched_at and byte size for downstream tooling.
+
+        Args:
+            filename: Output zip path (the .zip extension is already in
+                place — see `Export.write()` dispatch).
+
+        Returns:
+            int: Number of .html files written. 0 if no expression in the
+                Land has stored HTML.
+
+        Notes:
+            Skips expressions where ``html IS NULL``. Useful to share a
+            reproducible corpus archive of crawled HTML for replication
+            (R, Python, Gephi, manual audit). The relevance filter
+            mirrors other exports — pass ``--minrel=0`` to include all.
+        """
+        import zipfile
+        import csv
+        import io
+
+        rows = (model.Expression
+                .select(model.Expression, model.Domain.name.alias('domain_name'))
+                .join(model.Domain)
+                .where((model.Expression.land == self.land)
+                       & (model.Expression.html.is_null(False))
+                       & (model.Expression.relevance >= self.relevance)))
+
+        n = 0
+        with zipfile.ZipFile(filename, 'w', zipfile.ZIP_DEFLATED) as zf:
+            manifest = io.StringIO()
+            writer = csv.writer(manifest)
+            writer.writerow([
+                'id', 'url', 'http_status', 'fetch_method',
+                'fetched_at', 'relevance', 'size_bytes',
+            ])
+            for expr in rows:
+                html = expr.html or ''
+                zf.writestr(f"{expr.id}.html", html)
+                writer.writerow([
+                    expr.id, expr.url, expr.http_status,
+                    expr.fetch_method,
+                    expr.fetched_at.isoformat() if expr.fetched_at else '',
+                    expr.relevance,
+                    len(html.encode('utf-8')),
+                ])
+                n += 1
+            zf.writestr('manifest.csv', manifest.getvalue())
+        return n

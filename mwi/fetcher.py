@@ -39,6 +39,14 @@ class _ArchiveOrgBreaker:
     recovered service can be used again. A single success outside the
     cooldown also closes it.
 
+    Failure semantics: only true service failures (network exception,
+    timeout, snapshot download empty) increment the counter. The
+    ``archived_snapshots: {}`` response — meaning "Wayback has no
+    snapshot for this URL" — is a *neutral* outcome (the API answered
+    correctly, it just had no data) and does NOT trip the breaker.
+    Otherwise a Land full of dead URLs without Wayback coverage would
+    open the breaker even when archive.org is perfectly healthy.
+
     Thread-safe in CPython for these simple read/writes (GIL).
     """
     failures: int = 0
@@ -395,7 +403,10 @@ class ArchiveOrgStrategy(FetchStrategy):
                             .get('url')
             )
             if not archived_url:
-                _ArchiveOrgBreaker.record_failure()
+                # Service answered correctly: Wayback simply has no snapshot
+                # for this URL. This is a neutral outcome, not a service
+                # failure — do not trip the breaker on Lands full of dead
+                # URLs without archive coverage.
                 return None
 
             downloaded = await asyncio.wait_for(
@@ -461,9 +472,13 @@ async def fetch_html(url: str,
         previous status code is in ``retry_codes``.
       * Other strategies (e.g. archive.org) run whenever no HTML has been
         recovered yet.
-      * The ``status_code`` of the returned :class:`FetchResult` is
-        always the first attempt's (the live URL's reality), even when
-        a fallback strategy provided the HTML body.
+      * The ``status_code`` of the returned :class:`FetchResult` reflects
+        the strategy that actually delivered the HTML. If aiohttp returned
+        403 but curl_cffi rescued the page with a 200, we report 200 and
+        ``method_used='curl_cffi'``. The caller can detect "primary
+        failed" via ``method_used != 'aiohttp'``. When all strategies
+        fail, we report the first attempt's status (the live URL's
+        reality).
     """
     if strategies is None:
         strategies = default_chain(session)
@@ -486,15 +501,6 @@ async def fetch_html(url: str,
             first_result = result
         last_status = result.status_code
         if result.html:
-            if first_result is not result:
-                # A fallback rescued us — preserve the live URL's status.
-                return FetchResult(
-                    url=url,
-                    status_code=first_result.status_code,
-                    html=result.html,
-                    method_used=result.method_used,
-                    error=None,
-                )
             return result
 
     if first_result is not None:

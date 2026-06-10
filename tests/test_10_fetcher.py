@@ -156,6 +156,36 @@ class TestArchiveOrgStrategy:
         assert result.method_used == 'archive_org'
         assert _ArchiveOrgBreaker.failures == 0  # success closes
 
+    def test_no_snapshot_does_not_trip_breaker(self):
+        """Wayback answering 'no snapshot for this URL' is a neutral
+        outcome — the API worked, it just has no data. A Land full of
+        dead URLs without archive coverage must NOT open the breaker
+        and lock out URLs that DO have snapshots.
+        """
+        class _MockArchiveResp:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {'archived_snapshots': {}}
+
+        with patch('mwi.fetcher.requests.get', return_value=_MockArchiveResp()):
+            for _ in range(_ArchiveOrgBreaker.OPEN_THRESHOLD + 3):
+                result = run(ArchiveOrgStrategy().fetch('https://dead.test'))
+                assert result is None
+        assert _ArchiveOrgBreaker.failures == 0
+        assert not _ArchiveOrgBreaker.is_open()
+
+    def test_network_error_still_trips_breaker(self):
+        """Real archive.org outages (network exception, timeout) must
+        keep tripping the breaker — that's the original purpose."""
+        with patch('mwi.fetcher.requests.get',
+                   side_effect=Exception('archive.org timeout')):
+            for _ in range(_ArchiveOrgBreaker.OPEN_THRESHOLD):
+                result = run(ArchiveOrgStrategy().fetch('https://x.test'))
+                assert result is None
+        assert _ArchiveOrgBreaker.is_open()
+
 
 # ---------------------------------------------------------------------------
 # fetch_html orchestrator
@@ -173,10 +203,11 @@ class TestFetchHtmlOrchestrator:
         assert result.html == '<html>live</html>'
         assert result.method_used == 'aiohttp'
 
-    def test_403_then_archive_preserves_status_code(self):
+    def test_403_then_archive_reports_rescue_status(self):
         """When the live URL is forbidden but archive.org rescues us, the
-        recorded status_code must still be '403' so the corpus reflects
-        reality. The HTML comes from the archive, method_used reports it.
+        recorded status_code reflects the rescue (200), not the original
+        403. The signal "primary aiohttp failed" is preserved via
+        method_used != 'aiohttp'.
         """
         session = _MockSession(_MockResponse(403, 'text/html', ''))
 
@@ -193,7 +224,7 @@ class TestFetchHtmlOrchestrator:
         with patch('mwi.fetcher.requests.get', return_value=_MockArchiveResp()):
             with patch('trafilatura.fetch_url', return_value=snapshot_html):
                 result = run(fetch_html('https://forb.test', session=session))
-        assert result.status_code == '403'           # original status preserved
+        assert result.status_code == '200'           # rescue status reported
         assert result.html == snapshot_html          # archive's HTML
         assert result.method_used == 'archive_org'   # who provided the body
 

@@ -3,6 +3,8 @@
 .*/
 # Ignore les fichiers de configuration courants commençant par un point.
 .env
+.env.*
+!.env.example
 
 # Fichiers de configuration locaux et secrets
 # Ces fichiers ne doivent jamais être partagés.

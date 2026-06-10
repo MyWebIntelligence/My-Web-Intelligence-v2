@@ -265,7 +265,7 @@ Le corpus Mélenchon (~13 000 seeds) correspond à une surveillance longitudinal
 Pour chaque URL, MWI :
 
 1. envoie une requête HTTP avec `aiohttp` (asynchrone, plusieurs URLs en parallèle) ;
-2. **si le serveur renvoie un code rattrapable** (`403`, `406`, `429`, `503`, `520-526`, `ERR`) — typiquement Cloudflare qui détecte l'empreinte TLS de Python — MWI bascule automatiquement sur une **cascade de stratégies** : `curl_cffi` (TLS impersonation Chrome 120), puis Playwright (si `crawl_fallback_playwright=True`), puis `archive.org` ;
+2. **si le serveur renvoie un code rattrapable** (`403`, `406`, `429`, `503`, `520`, `521`, `523`, `526`, `ERR`) — typiquement Cloudflare qui détecte l'empreinte TLS de Python — MWI bascule automatiquement sur une **cascade de stratégies** : `curl_cffi` (TLS impersonation Chrome 120), puis Playwright (si `crawl_fallback_playwright=True`), puis `archive.org` ;
 3. nettoie le HTML pour en extraire le titre, le texte, et la liste des liens et médias ;
 4. enregistre tout dans la base : `expression.title`, `expression.readable`, `expression.relevance`, plus `expression.fetch_method` (qui a fourni le HTML : `aiohttp` / `curl_cffi` / `playwright` / `archive_org`), plus une ligne par lien dans `expressionlink`, plus une ligne par média dans `media` ;
 5. les URLs trouvées dans les pages sont insérées comme nouvelles expressions à `depth+1`, prêtes pour le prochain `crawl`.
