@@ -153,6 +153,7 @@ seorank_request_delay = 1.0  # polite sleep between API calls
 serpapi_api_key = os.getenv("MWI_SERPAPI_API_KEY", "")
 serpapi_base_url = "https://serpapi.com/search"
 serpapi_timeout = 15  # seconds
+serpapi_max_retries = 3  # attempts per request on timeout / 429 / 5xx (backoff 2s, 4s, 8s…)
 
 
 # --- Embedding Settings ---

@@ -164,6 +164,98 @@ def test_run_search_aggregates_pages(monkeypatch):
     assert results[-1]["link"] == "https://example.com/200"
 
 
+class _FakeResponse:
+    def __init__(self, status_code=200, payload=None, text=""):
+        self.status_code = status_code
+        self._payload = payload if payload is not None else {}
+        self.text = text
+
+    def json(self):
+        return self._payload
+
+
+def test_http_get_retries_transient_then_succeeds(monkeypatch):
+    calls = []
+
+    def fake_get(url, params=None, timeout=None):
+        calls.append(1)
+        if len(calls) < 3:
+            raise search.requests.exceptions.ReadTimeout("Read timed out.")
+        return _FakeResponse(payload={"ok": True})
+
+    monkeypatch.setattr(search.requests, "get", fake_get)
+    monkeypatch.setattr(search.time, "sleep", lambda _s: None)
+
+    assert search._http_get({"q": "x"}) == {"ok": True}
+    assert len(calls) == 3
+
+
+def test_http_get_client_error_fails_fast(monkeypatch):
+    # 400 (bad param) / 401 (bad key) must not be retried: retrying cannot
+    # fix them and burns quota.
+    calls = []
+
+    def fake_get(url, params=None, timeout=None):
+        calls.append(1)
+        return _FakeResponse(status_code=400, text="Unsupported `xx` country")
+
+    monkeypatch.setattr(search.requests, "get", fake_get)
+    monkeypatch.setattr(search.time, "sleep", lambda _s: None)
+
+    with pytest.raises(search.SearchError) as exc_info:
+        search._http_get({"q": "x"})
+    assert not isinstance(exc_info.value, search.TransientSearchError)
+    assert len(calls) == 1
+
+
+def test_http_get_exhausted_retries_raises_transient(monkeypatch):
+    def fake_get(url, params=None, timeout=None):
+        raise search.requests.exceptions.ConnectionError(
+            "Max retries exceeded with url: /search?api_key=SECRET&q=x"
+        )
+
+    monkeypatch.setattr(search.requests, "get", fake_get)
+    monkeypatch.setattr(search.time, "sleep", lambda _s: None)
+
+    with pytest.raises(search.TransientSearchError) as exc_info:
+        search._http_get({"q": "x"})
+    # The api_key must never leak into error messages.
+    assert "SECRET" not in str(exc_info.value)
+    assert "api_key=***" in str(exc_info.value)
+
+
+def test_run_search_skips_failed_window_and_keeps_results(monkeypatch):
+    # A window lost after retries is skipped; results from other windows
+    # survive (each SerpAPI call was billed — losing them wastes quota).
+    def fake_http_get(params):
+        if "cd_min:01/01/2024" in str(params.get("tbs", "")):
+            raise search.TransientSearchError("Read timed out")
+        return _build_payload(range(1, 4))
+
+    monkeypatch.setattr(search, "_http_get", fake_http_get)
+    monkeypatch.setattr(search, "_jitter_sleep", lambda _b: None)
+
+    results = run_search(SearchRequest(
+        api_key="fake", query="x", engine="google",
+        datestart="2024-01-01", dateend="2024-02-29", timestep="month",
+    ))
+    assert len(results) == 3  # February survived January's failure
+
+
+def test_run_search_raises_when_all_windows_fail(monkeypatch):
+    def fake_http_get(params):
+        raise search.TransientSearchError("Read timed out")
+
+    monkeypatch.setattr(search, "_http_get", fake_http_get)
+    monkeypatch.setattr(search, "_jitter_sleep", lambda _b: None)
+
+    with pytest.raises(SearchError):
+        run_search(SearchRequest(
+            api_key="fake", query="x", engine="google",
+            datestart="2024-01-01", dateend="2024-02-29", timestep="month",
+        ))
+
+
 def test_run_search_gl_optin(monkeypatch):
     # No gl by default (language-only search); explicit request.gl flows
     # through to the SerpAPI params.

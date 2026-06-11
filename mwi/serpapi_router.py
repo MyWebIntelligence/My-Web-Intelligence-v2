@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import calendar
 import random
+import re
 import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -31,6 +32,12 @@ import settings
 
 class SearchError(Exception):
     """Raised when a search request or response fails."""
+
+
+class TransientSearchError(SearchError):
+    """A retryable failure (timeout, connection error, 429/5xx) that
+    persisted after all retry attempts. `run_search` skips the current
+    date window on this error instead of aborting the whole collection."""
 
 
 SearchResult = Dict[str, Optional[Union[str, int]]]
@@ -381,29 +388,60 @@ def _build_windows(
 # HTTP helpers
 # ---------------------------------------------------------------------------
 
+# Statuses worth retrying: rate limit and server-side hiccups. Client
+# errors (400 bad param, 401/403 bad key) fail fast — retrying cannot fix
+# them and would burn quota.
+_RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+
+
+def _redact_key(text: str) -> str:
+    """Mask the api_key if it leaks into an error message (requests
+    ConnectionError messages can embed the full request URL)."""
+    return re.sub(r"api_key=[^&\s]+", "api_key=***", text)
+
+
 def _http_get(params: Dict[str, Union[str, int]]) -> dict:
     """Issue the SerpAPI GET request and return the parsed JSON payload.
 
-    Centralised so tests can monkey-patch a single seam.
+    Centralised so tests can monkey-patch a single seam. Transient
+    failures (timeout, connection error, 429/5xx) are retried with
+    exponential backoff: a single network hiccup must not abort a long
+    multi-window collection whose earlier calls already spent quota.
+    Raises `TransientSearchError` once attempts are exhausted so the
+    orchestrator can skip the current window instead of aborting.
     """
     base_url = getattr(settings, "serpapi_base_url", "https://serpapi.com/search")
     timeout = getattr(settings, "serpapi_timeout", 15)
+    max_attempts = max(1, int(getattr(settings, "serpapi_max_retries", 3)))
 
-    try:
-        response = requests.get(base_url, params=params, timeout=timeout)
-    except requests.RequestException as exc:  # pragma: no cover - network failure
-        raise SearchError(f"HTTP error during SerpAPI request: {exc}") from exc
+    last_error = "SerpAPI request failed"
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = requests.get(base_url, params=params, timeout=timeout)
+        except requests.RequestException as exc:
+            last_error = _redact_key(f"HTTP error during SerpAPI request: {exc}")
+        else:
+            if response.status_code == 200:
+                try:
+                    return response.json()
+                except ValueError as exc:
+                    raise SearchError("Invalid JSON payload returned by SerpAPI") from exc
+            snippet = _redact_key(response.text[:200])
+            last_error = (
+                f"SerpAPI request failed with status {response.status_code}: {snippet}"
+            )
+            if response.status_code not in _RETRYABLE_STATUS:
+                raise SearchError(last_error)
+        if attempt < max_attempts:
+            backoff = 2.0 * (2 ** (attempt - 1))  # 2s, 4s, 8s…
+            print(
+                f"[serpapi] attempt {attempt}/{max_attempts} failed, retrying "
+                f"in {backoff:.0f}s — {last_error}",
+                flush=True,
+            )
+            time.sleep(backoff)
 
-    if response.status_code != 200:
-        snippet = response.text[:200]
-        raise SearchError(
-            f"SerpAPI request failed with status {response.status_code}: {snippet}"
-        )
-
-    try:
-        return response.json()
-    except ValueError as exc:
-        raise SearchError("Invalid JSON payload returned by SerpAPI") from exc
+    raise TransientSearchError(last_error)
 
 
 def _jitter_sleep(base: float) -> None:
@@ -457,57 +495,88 @@ def run_search(request: SearchRequest) -> List[SearchResult]:
     aggregated: List[SearchResult] = []
     lang = (request.lang or "fr").strip().lower() or "fr"
     gl = (request.gl or "").strip() or None
+    failed_windows: List[str] = []
 
     for window_start, window_end in date_windows:
         start_index = 0
         window_count = 0
         use_date_filter = bool(window_start and window_end)
 
-        while True:
-            params: Dict[str, Union[str, int]] = {
-                "api_key": request.api_key,
-                "engine": provider.name,
-                "q": normalized_query,
-            }
-            params.update(provider.build_locale_params(
-                lang,
-                start_index,
-                provider.page_size,
-                use_date_filter=use_date_filter,
-                gl=gl,
-            ))
-            if use_date_filter:
-                params.update(provider.build_date_filter_params(window_start, window_end))
+        try:
+            while True:
+                params: Dict[str, Union[str, int]] = {
+                    "api_key": request.api_key,
+                    "engine": provider.name,
+                    "q": normalized_query,
+                }
+                params.update(provider.build_locale_params(
+                    lang,
+                    start_index,
+                    provider.page_size,
+                    use_date_filter=use_date_filter,
+                    gl=gl,
+                ))
+                if use_date_filter:
+                    params.update(provider.build_date_filter_params(window_start, window_end))
 
-            payload = _http_get(params)
+                payload = _http_get(params)
 
-            if "error" in payload:
-                message = str(payload.get("error", "")).strip()
-                if provider.is_empty_window_error(message):
+                if "error" in payload:
+                    message = str(payload.get("error", "")).strip()
+                    if provider.is_empty_window_error(message):
+                        break
+                    raise SearchError(f"SerpAPI error: {message}")
+
+                organic = payload.get("organic_results") or []
+                if not organic:
                     break
-                raise SearchError(f"SerpAPI error: {message}")
 
-            organic = payload.get("organic_results") or []
-            if not organic:
-                break
+                for entry in organic:
+                    aggregated.append({
+                        "position": entry.get("position"),
+                        "title": entry.get("title"),
+                        "link": entry.get("link"),
+                        "date": entry.get("date"),
+                    })
+                    window_count += 1
 
-            for entry in organic:
-                aggregated.append({
-                    "position": entry.get("position"),
-                    "title": entry.get("title"),
-                    "link": entry.get("link"),
-                    "date": entry.get("date"),
-                })
-                window_count += 1
+                next_index = provider.extract_next_index(payload, start_index, len(organic))
+                if next_index is None or next_index <= start_index:
+                    break
+                start_index = next_index
 
-            next_index = provider.extract_next_index(payload, start_index, len(organic))
-            if next_index is None or next_index <= start_index:
-                break
-            start_index = next_index
-
-            _jitter_sleep(request.sleep_seconds)
+                _jitter_sleep(request.sleep_seconds)
+        except TransientSearchError as error:
+            # A window lost to network trouble must not sink the whole
+            # collection — quota was already spent on the previous windows
+            # and their results are in `aggregated`. Partial results from
+            # the failed window are kept too (SerpAPI bills per request).
+            label = (
+                f"{window_start.isoformat()} → {window_end.isoformat()}"
+                if window_start and window_end else "no-date-filter"
+            )
+            failed_windows.append(label)
+            print(
+                f"[serpapi] window {label} abandoned after retries "
+                f"({window_count} results kept): {error}",
+                flush=True,
+            )
 
         if request.progress_hook:
             request.progress_hook(window_start, window_end, window_count)
+
+    if failed_windows and not aggregated:
+        raise SearchError(
+            "All SerpAPI requests failed ({} window(s)): {}".format(
+                len(failed_windows), "; ".join(failed_windows)
+            )
+        )
+    if failed_windows:
+        print(
+            f"[serpapi] {len(failed_windows)}/{len(date_windows)} window(s) "
+            f"failed and were skipped: {', '.join(failed_windows)} — re-run "
+            "the same command with a narrower date range to backfill",
+            flush=True,
+        )
 
     return aggregated

@@ -1220,6 +1220,17 @@ class LandController:
                 else:
                     print(f'[urlist] fetched {window_count} results (no date filter)', flush=True)
 
+        scope = f'gl={gl}' if gl else 'no country restriction'
+        if has_date_range:
+            print(
+                f'[urlist] {engine} — lang={lang}, {scope} — '
+                f'windows {datestart} → {dateend} (step={timestep}), '
+                'one progress line per window…',
+                flush=True,
+            )
+        else:
+            print(f'[urlist] {engine} — lang={lang}, {scope} — querying…', flush=True)
+
         try:
             # Centralised helper handles pagination, date windows and error reporting.
             serp_results = core.fetch_serpapi_url_list(
