@@ -364,6 +364,49 @@ def test_run_search_breaks_on_ddg_empty_error(monkeypatch):
     assert results == []
 
 
+def test_run_search_google_pagination_exhausted_is_clean(monkeypatch):
+    """Google's `hasn't returned any results` mid-pagination ends the window
+    cleanly and keeps the results fetched so far (observed at start=210 on a
+    date-filtered query, 2026-06-11)."""
+    calls = []
+
+    def fake_http_get(params):
+        calls.append(dict(params))
+        if params.get("start", 0) == 0:
+            return _build_payload(
+                range(1, 11),
+                next_offset=10,
+                next_link="https://serpapi.com/search?start=10",
+            )
+        return {"error": "Google hasn't returned any results for this query."}
+
+    monkeypatch.setattr(search, "_http_get", fake_http_get)
+    monkeypatch.setattr(search, "_jitter_sleep", lambda _b: None)
+
+    results = run_search(SearchRequest(api_key="fake", query="x", engine="google"))
+    assert len(results) == 10
+    assert len(calls) == 2
+
+
+def test_run_search_fatal_midrun_keeps_collected_results(monkeypatch):
+    """A non-transient error after some windows succeeded (e.g. quota
+    exhausted) stops the run but returns what was already collected —
+    those requests were billed."""
+    def fake_http_get(params):
+        if "cd_min:01/01/2024" in str(params.get("tbs", "")):
+            return _build_payload(range(1, 6))
+        return {"error": "Your account has run out of searches."}
+
+    monkeypatch.setattr(search, "_http_get", fake_http_get)
+    monkeypatch.setattr(search, "_jitter_sleep", lambda _b: None)
+
+    results = run_search(SearchRequest(
+        api_key="fake", query="x", engine="google",
+        datestart="2024-01-01", dateend="2024-02-29", timestep="month",
+    ))
+    assert len(results) == 5  # January kept despite February's fatal error
+
+
 def test_run_search_raises_on_other_serpapi_errors(monkeypatch):
     """Any other `error` payload raises SearchError."""
     def fake_http_get(params):

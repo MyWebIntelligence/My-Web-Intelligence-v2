@@ -193,7 +193,12 @@ class _BaseSerpProvider:
         return None
 
     def is_empty_window_error(self, error_message: str) -> bool:
-        return False
+        # SerpAPI puts this string in the `error` field (HTTP 200,
+        # organic_results_state "Fully empty") when the engine has no
+        # results for the current window OR pagination ran past the last
+        # page (observed on Google with start=210, 2026-06-11). It is a
+        # clean end-of-window signal, not a failure.
+        return "hasn't returned any results" in (error_message or "").lower()
 
     def build_date_filter_params(
         self,
@@ -321,12 +326,6 @@ class DuckDuckGoProvider(_BaseSerpProvider):
         return {
             "df": f"{window_start.isoformat()}..{window_end.isoformat()}"
         }
-
-    def is_empty_window_error(self, error_message: str) -> bool:
-        # SerpAPI returns this string in the `error` field when DDG has no
-        # results for the current window. We treat it as a clean break, not
-        # a hard failure.
-        return "hasn't returned any results" in (error_message or "").lower()
 
 
 SearchRouter.register(GoogleProvider())
@@ -561,6 +560,26 @@ def run_search(request: SearchRequest) -> List[SearchResult]:
                 f"({window_count} results kept): {error}",
                 flush=True,
             )
+        except SearchError as error:
+            # Non-transient mid-run failure (quota exhausted, account
+            # issue…): the remaining windows would fail the same way, so
+            # stop here — but keep everything already collected, it was
+            # billed. Only an immediately-failing run (nothing aggregated)
+            # still raises, so a misconfigured command fails fast.
+            if not aggregated:
+                raise
+            label = (
+                f"{window_start.isoformat()} → {window_end.isoformat()}"
+                if window_start and window_end else "no-date-filter"
+            )
+            failed_windows.append(label)
+            print(
+                f"[serpapi] fatal error on window {label}: {error} — "
+                f"stopping the collection, keeping the {len(aggregated)} "
+                "results already fetched",
+                flush=True,
+            )
+            break
 
         if request.progress_hook:
             request.progress_hook(window_start, window_end, window_count)
