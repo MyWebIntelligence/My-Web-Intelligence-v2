@@ -163,6 +163,13 @@ def command_input():
                         default='google',
                         choices=engine_choices,
                         nargs='?')
+    parser.add_argument('--gl',
+                        type=str,
+                        help='Optional country restriction for SerpAPI Google urlist '
+                             '(ISO 3166 code, e.g. us, fr). Default: none — searches '
+                             'are scoped by language only (hl/lr)',
+                        default=None,
+                        nargs='?')
     parser.add_argument('--datestart',
                         type=str,
                         help='Start date (YYYY-MM-DD) for SerpAPI urlist filtering',

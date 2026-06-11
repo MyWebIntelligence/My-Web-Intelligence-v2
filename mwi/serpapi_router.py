@@ -49,6 +49,9 @@ class SearchRequest:
     query: str
     engine: str = "google"
     lang: str = "fr"
+    # Optional ISO 3166 country restriction (Google `gl` param). None means
+    # language-only search (hl + lr) with no country bias — the default.
+    gl: Optional[str] = None
     datestart: Optional[str] = None
     dateend: Optional[str] = None
     timestep: str = "week"
@@ -77,6 +80,7 @@ class SearchProvider(Protocol):
         page_size: int,
         *,
         use_date_filter: bool,
+        gl: Optional[str] = None,
     ) -> Dict[str, Union[str, int]]: ...
 
     def build_date_filter_params(
@@ -207,28 +211,6 @@ class GoogleProvider(_BaseSerpProvider):
         "en": "google.com",
     }
 
-    # `gl` expects an ISO 3166 COUNTRY code, not a language code. Copying
-    # the language verbatim works for fr (France) by coincidence, but
-    # SerpAPI rejects gl=en with a 400, and sv/ar would silently target
-    # El Salvador/Argentina. Languages without a mapping omit `gl`.
-    _COUNTRY_BY_LANG = {
-        "ar": "sa",
-        "da": "dk",
-        "de": "de",
-        "en": "us",
-        "es": "es",
-        "fi": "fi",
-        "fr": "fr",
-        "hu": "hu",
-        "it": "it",
-        "nl": "nl",
-        "no": "no",
-        "pt": "pt",
-        "ro": "ro",
-        "ru": "ru",
-        "sv": "se",
-    }
-
     def build_locale_params(
         self,
         lang: str,
@@ -236,6 +218,7 @@ class GoogleProvider(_BaseSerpProvider):
         page_size: int,
         *,
         use_date_filter: bool,
+        gl: Optional[str] = None,
     ) -> Dict[str, Union[str, int]]:
         normalized = (lang or "fr").strip().lower() or "fr"
         params: Dict[str, Union[str, int]] = {
@@ -245,9 +228,13 @@ class GoogleProvider(_BaseSerpProvider):
             "safe": "off",
             "start": start_index,
         }
-        country = self._COUNTRY_BY_LANG.get(normalized)
-        if country:
-            params["gl"] = country
+        # `gl` expects an ISO 3166 COUNTRY code and biases results toward
+        # that country. Searches are language-scoped by default (hl + lr
+        # only); the country restriction is opt-in (`land urlist --gl=us`).
+        # The legacy behaviour of copying the language into `gl` broke
+        # non-country language codes (SerpAPI rejects gl=en with a 400).
+        if gl:
+            params["gl"] = gl.strip().lower()
         # Legacy parity: when a date filter is active, Google ignores `num`.
         if not use_date_filter:
             params["num"] = page_size
@@ -283,6 +270,7 @@ class BingProvider(_BaseSerpProvider):
         page_size: int,
         *,
         use_date_filter: bool,
+        gl: Optional[str] = None,  # Google-specific, ignored here.
     ) -> Dict[str, Union[str, int]]:
         normalized = (lang or "fr").strip().lower() or "fr"
         return {
@@ -309,6 +297,7 @@ class DuckDuckGoProvider(_BaseSerpProvider):
         page_size: int,
         *,
         use_date_filter: bool,
+        gl: Optional[str] = None,  # Google-specific, ignored here.
     ) -> Dict[str, Union[str, int]]:
         normalized = (lang or "fr").strip().lower() or "fr"
         return {
@@ -467,6 +456,7 @@ def run_search(request: SearchRequest) -> List[SearchResult]:
 
     aggregated: List[SearchResult] = []
     lang = (request.lang or "fr").strip().lower() or "fr"
+    gl = (request.gl or "").strip() or None
 
     for window_start, window_end in date_windows:
         start_index = 0
@@ -484,6 +474,7 @@ def run_search(request: SearchRequest) -> List[SearchResult]:
                 start_index,
                 provider.page_size,
                 use_date_filter=use_date_filter,
+                gl=gl,
             ))
             if use_date_filter:
                 params.update(provider.build_date_filter_params(window_start, window_end))

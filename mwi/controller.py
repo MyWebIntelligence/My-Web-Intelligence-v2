@@ -1131,9 +1131,11 @@ class LandController:
             args: Namespace object containing command-line arguments. Required
                 arguments are 'name' (land name) and 'query' (search query).
                 Optional arguments include 'engine' (search engine), 'lang'
-                (language), 'datestart' and 'dateend' (date range), 'timestep'
-                (time window for date ranges), 'sleep' (delay between requests),
-                and 'progress' (enable progress output).
+                (language), 'gl' (country restriction, Google only — absent
+                by default so searches are language-scoped), 'datestart' and
+                'dateend' (date range), 'timestep' (time window for date
+                ranges), 'sleep' (delay between requests), and 'progress'
+                (enable progress output).
 
         Returns:
             int: 1 if URLs were retrieved successfully, 0 if API key missing,
@@ -1185,6 +1187,10 @@ class LandController:
             return 0
         provider = SerpApiRouter.get(engine)
 
+        # Optional country restriction (Google `gl`). Absent by default:
+        # searches are scoped by language only (hl + lr).
+        gl = (getattr(args, 'gl', None) or '').strip() or None
+
         datestart = getattr(args, 'datestart', None)
         dateend = getattr(args, 'dateend', None)
         timestep = getattr(args, 'timestep', 'week') or 'week'
@@ -1221,6 +1227,7 @@ class LandController:
                 query=args.query,
                 engine=engine,
                 lang=lang,
+                gl=gl,
                 datestart=datestart,
                 dateend=dateend,
                 timestep=timestep,

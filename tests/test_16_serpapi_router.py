@@ -48,7 +48,6 @@ def test_google_provider_params_fr():
     )
     assert params == {
         "google_domain": "google.fr",
-        "gl": "fr",
         "hl": "fr",
         "lr": "lang_fr",
         "safe": "off",
@@ -57,25 +56,25 @@ def test_google_provider_params_fr():
     }
 
 
-def test_google_provider_params_en_maps_country():
-    # `gl` is a country code: en must map to a real country (us), not be
-    # copied verbatim (SerpAPI rejects gl=en with a 400).
+def test_google_provider_language_only_by_default():
+    # Country restriction must be opt-in: by default only hl/lr scope the
+    # search. The legacy copy of the language into `gl` (a country code)
+    # made SerpAPI reject gl=en with a 400.
     params = GoogleProvider().build_locale_params(
         "en", 0, 100, use_date_filter=False
     )
-    assert params["gl"] == "us"
+    assert "gl" not in params
     assert params["hl"] == "en"
     assert params["lr"] == "lang_en"
     assert params["google_domain"] == "google.com"
 
 
-def test_google_provider_unmapped_lang_omits_gl():
+def test_google_provider_explicit_gl():
     params = GoogleProvider().build_locale_params(
-        "ja", 0, 100, use_date_filter=False
+        "en", 0, 100, use_date_filter=False, gl="US"
     )
-    assert "gl" not in params
-    assert params["hl"] == "ja"
-    assert params["lr"] == "lang_ja"
+    assert params["gl"] == "us"
+    assert params["hl"] == "en"
 
 
 def test_google_provider_omits_num_with_date_filter():
@@ -163,6 +162,28 @@ def test_run_search_aggregates_pages(monkeypatch):
     assert len(results) == 200
     assert results[0]["link"] == "https://example.com/1"
     assert results[-1]["link"] == "https://example.com/200"
+
+
+def test_run_search_gl_optin(monkeypatch):
+    # No gl by default (language-only search); explicit request.gl flows
+    # through to the SerpAPI params.
+    captured = []
+
+    def fake_http_get(params):
+        captured.append(dict(params))
+        return _build_payload(range(1, 3))
+
+    monkeypatch.setattr(search, "_http_get", fake_http_get)
+    monkeypatch.setattr(search, "_jitter_sleep", lambda _b: None)
+
+    run_search(SearchRequest(api_key="fake", query="x", engine="google", lang="en"))
+    assert "gl" not in captured[0]
+
+    captured.clear()
+    run_search(SearchRequest(
+        api_key="fake", query="x", engine="google", lang="en", gl="us"
+    ))
+    assert captured[0]["gl"] == "us"
 
 
 def test_run_search_pagination_falls_back_to_url_query(monkeypatch):
