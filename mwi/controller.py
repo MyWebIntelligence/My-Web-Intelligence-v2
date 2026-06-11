@@ -1210,15 +1210,78 @@ class LandController:
             return 0
         want_progress = progress_requested or has_date_range
 
-        progress_callback = None
-        if want_progress:
-            def progress_callback(window_start, window_end, window_count):
-                if window_start and window_end:
-                    start_label = window_start.isoformat()
-                    end_label = window_end.isoformat()
-                    print(f'[urlist] {start_label} → {end_label} — fetched {window_count} results', flush=True)
+        added = 0
+        skipped = 0
+
+        def persist_results(results):
+            """Insert one batch of SERP results; returns (added, skipped) for the batch."""
+            nonlocal added, skipped
+            batch_added = 0
+            batch_skipped = 0
+            for item in results:
+                url = item.get('link')
+                if not url:
+                    batch_skipped += 1
+                    continue
+
+                raw_date = item.get('date') if provider.parses_result_dates else None
+                published_at = core.parse_serp_result_date(raw_date) if raw_date else None
+
+                existing = model.Expression.get_or_none(
+                    (model.Expression.land == land) & (model.Expression.url == url)
+                )
+                title = item.get('title')
+                if existing is not None:
+                    # Update the title if we collected one and the expression is still blank.
+                    has_changes = False
+                    if title and not existing.title:
+                        existing.title = title
+                        has_changes = True
+                    if published_at:
+                        earliest = core.prefer_earlier_datetime(existing.published_at, published_at)
+                        if earliest != existing.published_at:
+                            existing.published_at = earliest
+                            has_changes = True
+                    if has_changes:
+                        existing.save()
+                    batch_skipped += 1
+                    continue
+
+                expression = core.add_expression(land, url)
+                if expression:
+                    # Newly created expressions keep the title for downstream exports.
+                    has_changes = False
+                    if title and not expression.title:
+                        expression.title = title
+                        has_changes = True
+                    if published_at:
+                        earliest = core.prefer_earlier_datetime(expression.published_at, published_at)
+                        if earliest != expression.published_at:
+                            expression.published_at = earliest
+                            has_changes = True
+                    if has_changes:
+                        expression.save()
+                    batch_added += 1
                 else:
-                    print(f'[urlist] fetched {window_count} results (no date filter)', flush=True)
+                    batch_skipped += 1
+            added += batch_added
+            skipped += batch_skipped
+            return batch_added, batch_skipped
+
+        def window_callback(window_start, window_end, results):
+            # Persist each window as soon as it completes: an interruption
+            # (Ctrl-C, crash, quota exhausted) only costs the in-flight window.
+            batch_added, batch_skipped = persist_results(results)
+            if want_progress:
+                if window_start and window_end:
+                    label = f'{window_start.isoformat()} → {window_end.isoformat()}'
+                else:
+                    label = 'no date filter'
+                print(
+                    f'[urlist] {label} — fetched {len(results)} results, '
+                    f'+{batch_added} new, {batch_skipped} skipped',
+                    flush=True,
+                )
 
         scope = f'gl={gl}' if gl else 'no country restriction'
         if has_date_range:
@@ -1243,60 +1306,22 @@ class LandController:
                 dateend=dateend,
                 timestep=timestep,
                 sleep_seconds=sleep_seconds,
-                progress_hook=progress_callback
+                window_results_hook=window_callback
             )
         except core.SerpApiError as error:
             print(f'[urlist] {error}')
+            if added or skipped:
+                # Windows persisted before the failure stay in the land.
+                print(
+                    f'[urlist] kept before failure: {added} new URLs, '
+                    f'{skipped} skipped — already saved in land {args.name}'
+                )
             return 0
 
-        added = 0
-        skipped = 0
-        for item in serp_results:
-            url = item.get('link')
-            if not url:
-                skipped += 1
-                continue
-
-            raw_date = item.get('date') if provider.parses_result_dates else None
-            published_at = core.parse_serp_result_date(raw_date) if raw_date else None
-
-            existing = model.Expression.get_or_none(
-                (model.Expression.land == land) & (model.Expression.url == url)
-            )
-            title = item.get('title')
-            if existing is not None:
-                # Update the title if we collected one and the expression is still blank.
-                has_changes = False
-                if title and not existing.title:
-                    existing.title = title
-                    has_changes = True
-                if published_at:
-                    earliest = core.prefer_earlier_datetime(existing.published_at, published_at)
-                    if earliest != existing.published_at:
-                        existing.published_at = earliest
-                        has_changes = True
-                if has_changes:
-                    existing.save()
-                skipped += 1
-                continue
-
-            expression = core.add_expression(land, url)
-            if expression:
-                # Newly created expressions keep the title for downstream exports.
-                has_changes = False
-                if title and not expression.title:
-                    expression.title = title
-                    has_changes = True
-                if published_at:
-                    earliest = core.prefer_earlier_datetime(expression.published_at, published_at)
-                    if earliest != expression.published_at:
-                        expression.published_at = earliest
-                        has_changes = True
-                if has_changes:
-                    expression.save()
-                added += 1
-            else:
-                skipped += 1
+        # Real runs return [] — every window was persisted by the hook. A
+        # patched fetch_serpapi_url_list returning a plain list (legacy
+        # tests, external callers) is persisted here instead.
+        persist_results(serp_results)
 
         print(f'[urlist] Added {added} new URLs, skipped {skipped} (existing or invalid) for land {args.name}')
         return 1

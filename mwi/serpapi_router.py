@@ -64,6 +64,14 @@ class SearchRequest:
     timestep: str = "week"
     sleep_seconds: float = 1.0
     progress_hook: Optional[Callable[[Optional[date], Optional[date], int], None]] = None
+    # When set, each window's results are delivered to this hook as soon as
+    # the window completes (including the partial results of a window that
+    # failed mid-pagination — those requests were billed) and `run_search`
+    # returns an empty list. Lets the caller persist window by window so an
+    # interruption only costs the in-flight window.
+    window_results_hook: Optional[
+        Callable[[Optional[date], Optional[date], List["SearchResult"]], None]
+    ] = None
 
 
 # ---------------------------------------------------------------------------
@@ -492,14 +500,27 @@ def run_search(request: SearchRequest) -> List[SearchResult]:
         date_windows = [(normalized_start, normalized_end)]
 
     aggregated: List[SearchResult] = []
+    total_collected = 0
     lang = (request.lang or "fr").strip().lower() or "fr"
     gl = (request.gl or "").strip() or None
     failed_windows: List[str] = []
 
+    def _flush_window(window_start, window_end, window_results):
+        # Hand the window's results over as soon as it ends — through the
+        # hook when the caller persists incrementally, otherwise into the
+        # in-memory aggregate returned at the end.
+        nonlocal total_collected
+        total_collected += len(window_results)
+        if request.window_results_hook:
+            request.window_results_hook(window_start, window_end, window_results)
+        else:
+            aggregated.extend(window_results)
+
     for window_start, window_end in date_windows:
         start_index = 0
-        window_count = 0
+        window_results: List[SearchResult] = []
         use_date_filter = bool(window_start and window_end)
+        fatal = False
 
         try:
             while True:
@@ -531,13 +552,12 @@ def run_search(request: SearchRequest) -> List[SearchResult]:
                     break
 
                 for entry in organic:
-                    aggregated.append({
+                    window_results.append({
                         "position": entry.get("position"),
                         "title": entry.get("title"),
                         "link": entry.get("link"),
                         "date": entry.get("date"),
                     })
-                    window_count += 1
 
                 next_index = provider.extract_next_index(payload, start_index, len(organic))
                 if next_index is None or next_index <= start_index:
@@ -547,9 +567,9 @@ def run_search(request: SearchRequest) -> List[SearchResult]:
                 _jitter_sleep(request.sleep_seconds)
         except TransientSearchError as error:
             # A window lost to network trouble must not sink the whole
-            # collection — quota was already spent on the previous windows
-            # and their results are in `aggregated`. Partial results from
-            # the failed window are kept too (SerpAPI bills per request).
+            # collection — quota was already spent on the previous windows.
+            # Partial results from the failed window are kept too (SerpAPI
+            # bills per request).
             label = (
                 f"{window_start.isoformat()} → {window_end.isoformat()}"
                 if window_start and window_end else "no-date-filter"
@@ -557,16 +577,16 @@ def run_search(request: SearchRequest) -> List[SearchResult]:
             failed_windows.append(label)
             print(
                 f"[serpapi] window {label} abandoned after retries "
-                f"({window_count} results kept): {error}",
+                f"({len(window_results)} results kept): {error}",
                 flush=True,
             )
         except SearchError as error:
             # Non-transient mid-run failure (quota exhausted, account
             # issue…): the remaining windows would fail the same way, so
             # stop here — but keep everything already collected, it was
-            # billed. Only an immediately-failing run (nothing aggregated)
-            # still raises, so a misconfigured command fails fast.
-            if not aggregated:
+            # billed. Only an immediately-failing run (nothing collected at
+            # all) still raises, so a misconfigured command fails fast.
+            if not total_collected and not window_results:
                 raise
             label = (
                 f"{window_start.isoformat()} → {window_end.isoformat()}"
@@ -575,16 +595,19 @@ def run_search(request: SearchRequest) -> List[SearchResult]:
             failed_windows.append(label)
             print(
                 f"[serpapi] fatal error on window {label}: {error} — "
-                f"stopping the collection, keeping the {len(aggregated)} "
-                "results already fetched",
+                "stopping the collection, keeping the "
+                f"{total_collected + len(window_results)} results already fetched",
                 flush=True,
             )
+            fatal = True
+
+        _flush_window(window_start, window_end, window_results)
+        if request.progress_hook:
+            request.progress_hook(window_start, window_end, len(window_results))
+        if fatal:
             break
 
-        if request.progress_hook:
-            request.progress_hook(window_start, window_end, window_count)
-
-    if failed_windows and not aggregated:
+    if failed_windows and not total_collected:
         raise SearchError(
             "All SerpAPI requests failed ({} window(s)): {}".format(
                 len(failed_windows), "; ".join(failed_windows)

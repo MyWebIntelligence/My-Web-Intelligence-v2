@@ -407,6 +407,48 @@ def test_run_search_fatal_midrun_keeps_collected_results(monkeypatch):
     assert len(results) == 5  # January kept despite February's fatal error
 
 
+def test_run_search_window_hook_delivers_per_window(monkeypatch):
+    """With window_results_hook set, each window's results are delivered as
+    soon as the window completes and run_search returns an empty list."""
+    def fake_http_get(params):
+        if "cd_min:01/01/2024" in str(params.get("tbs", "")):
+            return _build_payload(range(1, 4))
+        return _build_payload(range(4, 6))
+
+    monkeypatch.setattr(search, "_http_get", fake_http_get)
+    monkeypatch.setattr(search, "_jitter_sleep", lambda _b: None)
+
+    delivered = []
+    results = run_search(SearchRequest(
+        api_key="fake", query="x", engine="google",
+        datestart="2024-01-01", dateend="2024-02-29", timestep="month",
+        window_results_hook=lambda ws, we, res: delivered.append((ws, len(res))),
+    ))
+    assert results == []
+    assert delivered == [(date(2024, 1, 1), 3), (date(2024, 2, 1), 2)]
+
+
+def test_run_search_fatal_keeps_partial_window_results(monkeypatch):
+    """Mid-pagination fatal error: page 1 of the dying window was billed —
+    its results are kept."""
+    calls = []
+
+    def fake_http_get(params):
+        calls.append(1)
+        if len(calls) == 1:
+            return _build_payload(
+                range(1, 4), next_offset=10,
+                next_link="https://serpapi.com/search?start=10",
+            )
+        return {"error": "Your account has run out of searches."}
+
+    monkeypatch.setattr(search, "_http_get", fake_http_get)
+    monkeypatch.setattr(search, "_jitter_sleep", lambda _b: None)
+
+    results = run_search(SearchRequest(api_key="fake", query="x", engine="google"))
+    assert len(results) == 3
+
+
 def test_run_search_raises_on_other_serpapi_errors(monkeypatch):
     """Any other `error` payload raises SearchError."""
     def fake_http_get(params):

@@ -461,7 +461,8 @@ def fetch_serpapi_url_list(
     dateend: Optional[str] = None,
     timestep: str = 'week',
     sleep_seconds: float = 1.0,
-    progress_hook: Optional[Callable[[Optional[date], Optional[date], int], None]] = None
+    progress_hook: Optional[Callable[[Optional[date], Optional[date], int], None]] = None,
+    window_results_hook: Optional[Callable[[Optional[date], Optional[date], list], None]] = None
 ) -> List[Dict[str, Optional[Union[str, int]]]]:
     """Backwards-compatible wrapper around `mwi.serpapi_router.run_search`.
 
@@ -484,6 +485,7 @@ def fetch_serpapi_url_list(
         timestep=timestep,
         sleep_seconds=sleep_seconds,
         progress_hook=progress_hook,
+        window_results_hook=window_results_hook,
     ))
 
 

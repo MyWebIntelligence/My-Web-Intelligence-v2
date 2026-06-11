@@ -224,3 +224,33 @@ class TestUrlistKeyResolution:
         out = capsys.readouterr().out
         assert 'key missing' not in out
         assert 'not found' in out
+
+
+class TestUrlistPersistence:
+    """Window-by-window persistence keeps the legacy patched-fetch seam."""
+
+    def test_urlist_persists_patched_fetch_results(self, fresh_db, monkeypatch, capsys):
+        """Callers that patch fetch_serpapi_url_list to return a plain list
+        (legacy tests, external scripts) still get their results persisted
+        even though real runs insert window by window via the hook."""
+        controller = fresh_db["controller"]
+        core = fresh_db["core"]
+        m = fresh_db["model"]
+        m.Land.create(name="urlist_land", description="d", lang="en")
+        monkeypatch.setattr(controller.settings, "SERPAPI_API_KEY", "k",
+                            raising=False)
+        monkeypatch.setattr(
+            controller.core, "fetch_serpapi_url_list",
+            lambda **kwargs: [
+                {"position": 1, "title": "T1",
+                 "link": "https://example.com/a", "date": None},
+                {"position": 2, "title": "T2",
+                 "link": "https://example.com/b", "date": None},
+            ],
+        )
+        ret = controller.LandController.urlist(
+            core.Namespace(name="urlist_land", query="q"))
+        assert ret == 1
+        assert "Added 2 new URLs" in capsys.readouterr().out
+        land = m.Land.get(m.Land.name == "urlist_land")
+        assert m.Expression.select().where(m.Expression.land == land).count() == 2
