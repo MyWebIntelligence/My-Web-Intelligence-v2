@@ -210,6 +210,15 @@ class ExpressionLink(BaseModel):
             deletes when the source expression is deleted.
         target (ForeignKeyField): The expression being linked to. Cascade deletes
             when the target expression is deleted.
+        context (TextField): Markdown paragraph of the source readable that
+            contains the link, truncated to settings.link_context_max_chars.
+            Nullable (sprint link-context, migration 012).
+        dom (TextField): CSS-like path from the document root to the direct
+            parent of the <a> tag (e.g. 'html > body > article.post > p').
+            Nullable — NULL when the source HTML was not available.
+        dom_html (TextField): outerHTML of the closest block-level ancestor of
+            the <a> tag, truncated to settings.link_dom_html_max_chars.
+            Nullable — NULL when the source HTML was not available.
         Meta: Inner class defining composite primary key and table name.
 
     Notes:
@@ -217,6 +226,8 @@ class ExpressionLink(BaseModel):
         Links are directional: source -> target.
         Backref 'links_to' on source allows accessing outgoing links.
         Backref 'linked_by' on target allows accessing incoming links.
+        When the same URL appears several times in a page, the first
+        occurrence provides context/dom/dom_html.
     """
 
     class Meta:
@@ -231,6 +242,10 @@ class ExpressionLink(BaseModel):
 
     source = ForeignKeyField(Expression, backref='links_to', on_delete='CASCADE')
     target = ForeignKeyField(Expression, backref='linked_by', on_delete='CASCADE')
+    # sprint link-context (migration 012) — métadonnées de localisation du lien
+    context = TextField(null=True)
+    dom = TextField(null=True)
+    dom_html = TextField(null=True)
 
 
 class Word(BaseModel):

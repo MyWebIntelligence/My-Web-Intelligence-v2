@@ -34,6 +34,7 @@ except ImportError:
     print("Warning: Playwright not available. Dynamic media extraction will be skipped.")
 
 import settings
+from . import link_context
 from . import model
 from .export import Export
 
@@ -1779,8 +1780,18 @@ async def crawl_expression_with_media_analysis(expression: model.Expression, dic
 
         if expression.relevance is not None and expression.relevance > 0 and expression.depth is not None and expression.depth < 3 and links: # type: ignore
             print(f"Linking {len(links)} expressions to #{expression.id}") # type: ignore
+            # sprint link-context: locate each link in the raw DOM (soup reused, no re-parse)
+            dom_map = link_context.extract_link_dom_map(
+                raw_html, str(expression.url), soup=soup) if raw_html else {}
             for link in links:
-                link_expression(expression.land, expression, link) # type: ignore
+                info = link_context.lookup_link_info(dom_map, link)
+                ctx = link_context.extract_md_paragraph(content, link)
+                if ctx is None and info is not None:
+                    ctx = info.block_text
+                link_expression(expression.land, expression, link, # type: ignore
+                                context=ctx,
+                                dom=info.dom if info else None,
+                                dom_html=info.dom_html if info else None)
         expression.save()
         return 1
     else:
@@ -1876,14 +1887,26 @@ async def consolidate_land(
                 nb_links = len(set(links))
 
                 # 4. Ajouter les documents manquants et recréer les liens
+                # sprint link-context: backfill context/dom/dom_html depuis le
+                # HTML stocké (--fullhtml) quand il est disponible
+                stored_html = getattr(expr, 'html', None)
+                dom_map = link_context.extract_link_dom_map(
+                    stored_html, str(expr.url)) if stored_html else {}
                 for url in set(links):
                     if is_crawlable(url):
                         target_expr = add_expression(land, url, expr.depth + 1 if expr.depth is not None else 1)
                         if target_expr:
+                            info = link_context.lookup_link_info(dom_map, url)
+                            ctx = link_context.extract_md_paragraph(expr.readable, url)
+                            if ctx is None and info is not None:
+                                ctx = info.block_text
                             try:
                                 model.ExpressionLink.create(
                                     source_id=expr.id, # type: ignore
-                                    target_id=target_expr.id) # type: ignore
+                                    target_id=target_expr.id, # type: ignore
+                                    context=ctx,
+                                    dom=info.dom if info else None,
+                                    dom_html=info.dom_html if info else None)
                             except IntegrityError:
                                 pass
 
@@ -1993,8 +2016,18 @@ async def crawl_expression(expression: model.Expression, dictionary, session: ai
 
         if expression.relevance is not None and expression.relevance > 0 and expression.depth is not None and expression.depth < 3 and links: # type: ignore
             print(f"Linking {len(links)} expressions to #{expression.id}") # type: ignore
+            # sprint link-context: locate each link in the raw DOM (soup reused, no re-parse)
+            dom_map = link_context.extract_link_dom_map(
+                raw_html, str(expression.url), soup=soup) if raw_html else {}
             for link in links:
-                link_expression(expression.land, expression, link) # type: ignore
+                info = link_context.lookup_link_info(dom_map, link)
+                ctx = link_context.extract_md_paragraph(content, link)
+                if ctx is None and info is not None:
+                    ctx = info.block_text
+                link_expression(expression.land, expression, link, # type: ignore
+                                context=ctx,
+                                dom=info.dom if info else None,
+                                dom_html=info.dom_html if info else None)
         expression.save()
         return 1
     else:
@@ -2215,7 +2248,9 @@ def remove_anchor(url: str) -> str:
     return url[:anchor_pos] if anchor_pos > 0 else url
 
 
-def link_expression(land: model.Land, source_expression: model.Expression, url: str) -> bool:
+def link_expression(land: model.Land, source_expression: model.Expression, url: str, *,
+                    context: Optional[str] = None, dom: Optional[str] = None,
+                    dom_html: Optional[str] = None) -> bool:
     """Create a link from a source expression to a target expression.
 
     This function adds a new expression for the target URL and creates a directed
@@ -2225,6 +2260,12 @@ def link_expression(land: model.Land, source_expression: model.Expression, url: 
         land: The Land object containing both expressions.
         source_expression: The Expression object that contains the link.
         url: The URL of the target expression to link to.
+        context: Markdown paragraph of the source readable containing the link
+            (sprint link-context). Optional, keyword-only.
+        dom: CSS-like path from the document root to the parent of the <a> tag.
+            Optional, keyword-only.
+        dom_html: outerHTML of the closest block ancestor of the <a> tag,
+            truncated. Optional, keyword-only.
 
     Returns:
         bool: True if the link was successfully created, False otherwise.
@@ -2241,7 +2282,10 @@ def link_expression(land: model.Land, source_expression: model.Expression, url: 
         try:
             model.ExpressionLink.create(
                 source_id=source_expression.id, # type: ignore
-                target_id=target_expression.id) # type: ignore
+                target_id=target_expression.id, # type: ignore
+                context=context,
+                dom=dom,
+                dom_html=dom_html)
             return True
         except IntegrityError:
             pass

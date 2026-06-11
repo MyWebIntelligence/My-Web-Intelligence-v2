@@ -16,6 +16,7 @@ This README is also available in French: [README_fr.md](README_fr.md)
 ## Table of Contents
 
 - [Features](#features)
+- [Tutorials](#tutorials)
 - [Installation](#installation)
   - [Using Docker](#using-docker)
   - [Local Development Setup](#local-development-setup)
@@ -45,6 +46,12 @@ This README is also available in French: [README_fr.md](README_fr.md)
 *   **Domain Analysis**: Gather information about domains encountered during crawling.
 *   **Data Export**: Export collected data in various formats (CSV, GEXF, raw corpus) for further analysis.
 *   **Tag-based Analysis**: Export tag matrices and content for deeper insights.
+
+## Tutorials
+
+*   [`docs/mwi_tutorial.ipynb`](docs/mwi_tutorial.ipynb) — a complete research project from A to Z (land creation, multi-engine seeding, depth-bounded crawl, URL normalization, readable extraction, qualification, enrichments, exports), with an SQL audit after every step. Requires `pip install jupyter pandas`.
+*   [`docs/mwi_tutorial_install.md`](docs/mwi_tutorial_install.md) — step-by-step installation walkthrough.
+*   [`docs/mwi_tutorial_crawl.md`](docs/mwi_tutorial_crawl.md) — corpus-building tutorial on a French-language case study.
 
 ---
 
@@ -1124,7 +1131,7 @@ Typical flow
     ```
 - Utilities:
   - Check env: `python mywi.py embedding check`
-  - Reset embeddings for a land: `python mywi.py embedding reset --name=LAND`
+  - Reset embeddings for a land: `python mywi.py embedding reset --name=LAND` (asks for `Y` confirmation; `--force` skips it)
 
 ## Troubleshooting & Caution
 - “All `score_raw=0.5` and `score=0`” → neutral fallback; install ML extras or switch to the safe EN model.

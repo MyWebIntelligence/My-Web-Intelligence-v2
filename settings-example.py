@@ -77,6 +77,12 @@ crawl_retry_status_codes = [
 # URL Land under ~500 GB worst case.
 fullhtml_max_size_kb = 5120
 
+# Link-context (sprint link-context): tailles max des métadonnées de lien
+# stockées dans expressionlink (migration 012). context = paragraphe markdown
+# du readable contenant le lien ; dom_html = outerHTML du bloc ancêtre du <a>.
+link_context_max_chars = 1000     # troncature de expressionlink.context
+link_dom_html_max_chars = 4000    # troncature de expressionlink.dom_html
+
 # Cut Domains
 
 heuristics = {

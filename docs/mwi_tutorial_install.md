@@ -343,6 +343,16 @@ python scripts/install-basic.py
 
 > 💡 `settings.py` est **personnel** et **gitignoré** : il ne sera jamais envoyé sur GitHub. Vous pourrez l'éditer plus tard avec n'importe quel éditeur de texte.
 
+**Les trois niveaux d'installation.** `install-basic.py` est le premier de **trois assistants** — c'est l'équivalent, pour le chemin B, des niveaux `basic` / `api` / `llm` du chemin A (§2.2). Les deux autres ne **créent** pas `settings.py` : ils le **complètent** (lancez donc toujours `install-basic.py` en premier).
+
+| Assistant | Ce qu'il ajoute à `settings.py` | Prérequis |
+|---|---|---|
+| `python scripts/install-basic.py` | Configuration de base (stockage, réseau) — **suffisant pour démarrer** | — |
+| `python scripts/install-api.py` | Clés d'API : SerpAPI (`land urlist`), SEO Rank (`land seorank`), OpenRouter (`land llm validate`) | Avoir des clés (détail en §6.1) |
+| `python scripts/install-llm.py` | Installation complète LLM : provider d'embeddings (OpenAI, Mistral, Gemini, HuggingFace, Ollama…), modèles NLI, backend FAISS | `pip install -r requirements-ml.txt` (~2 Go — détail en §6.2) |
+
+> 💡 **Vous pouvez monter en gamme plus tard** : les assistants `api` et `llm` se lancent à tout moment sur un `settings.py` existant (une sauvegarde est faite avant modification). Commencez par `basic`, finissez l'installation, puis revenez en §6 quand vous aurez l'usage des API ou de l'analyse sémantique.
+
 ### 3.5 — Initialiser la base de données
 
 ```bash

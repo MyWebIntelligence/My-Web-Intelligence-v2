@@ -168,3 +168,51 @@ class TestDatabasePragmas:
         fk_enabled = cursor.fetchone()[0]
 
         assert fk_enabled == 1, "Foreign keys should be enabled"
+
+
+class TestInstallWizardSerialization:
+    """Tests for the settings.py generation in scripts/install_utils.py."""
+
+    @staticmethod
+    def _load_install_utils():
+        import importlib.util
+        from pathlib import Path
+        path = Path(__file__).resolve().parents[1] / "scripts" / "install_utils.py"
+        spec = importlib.util.spec_from_file_location("install_utils", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_write_settings_preserves_generated_expressions(self, tmp_path):
+        """Régression : les expressions int(os.getenv(...))/float(os.getenv(...))
+        générées par install-api.py / install-llm.py étaient re-quotées par
+        write_settings, produisant un settings.py avec SyntaxError."""
+        import py_compile
+        import importlib.util
+
+        install_utils = self._load_install_utils()
+        out = tmp_path / "settings_generated.py"
+
+        config = {
+            "data_location": "data",
+            "user_agent": "test-agent",
+            "openrouter_api_key": 'os.getenv("MWI_OPENROUTER_API_KEY", "sk-test")',
+            "openrouter_timeout": 'int(os.getenv("MWI_OPENROUTER_TIMEOUT", "15"))',
+            "openrouter_enabled": 'os.getenv("MWI_OPENROUTER_ENABLED", "true").lower() == "true"',
+            "nli_entailment_threshold": 'float(os.getenv("MWI_NLI_ENTAILMENT_THRESHOLD", "0.8"))',
+            "similarity_top_k": 'int(os.getenv("MWI_SIMILARITY_TOP_K", "50"))',
+        }
+        install_utils.write_settings(config, str(out))
+
+        # Le fichier généré doit être du Python valide…
+        py_compile.compile(str(out), doraise=True)
+
+        # …et les expressions doivent s'évaluer (pas devenir des chaînes)
+        spec = importlib.util.spec_from_file_location("settings_generated", out)
+        generated = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(generated)
+        assert generated.openrouter_timeout == 15
+        assert generated.openrouter_enabled is True
+        assert generated.nli_entailment_threshold == 0.8
+        assert generated.similarity_top_k == 50
+        assert generated.user_agent == "test-agent"

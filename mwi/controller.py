@@ -121,6 +121,14 @@ class DbController:
                 model.DB.execute_sql(
                     "ALTER TABLE expression ADD COLUMN fetch_method TEXT DEFAULT NULL")
                 print("[migrate] Added missing column expression.fetch_method")
+            # Link-context (sprint link-context, migration 012)
+            link_cols = [row[1] for row in model.DB.execute_sql(
+                "PRAGMA table_info('expressionlink')").fetchall()]
+            for col in ('context', 'dom', 'dom_html'):
+                if col not in link_cols:
+                    model.DB.execute_sql(
+                        f"ALTER TABLE expressionlink ADD COLUMN {col} TEXT DEFAULT NULL")
+                    print(f"[migrate] Added missing column expressionlink.{col}")
         except Exception as e:
             # Non bloquant: on loggue et on continue
             print(f"[migrate] Warning: columns check failed: {e}")

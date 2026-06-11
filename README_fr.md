@@ -7,6 +7,7 @@ MyWebIntelligence (MyWI) est un outil Python destiné aux équipes de recherche 
 ## Table des matières
 
 - [Fonctionnalités](#fonctionnalités)
+- [Tutoriels](#tutoriels)
 - [Installation](#installation)
   - [Démarrage rapide : Docker Compose (recommandé)](#démarrage-rapide--docker-compose-recommandé)
   - [Docker manuel (avancé)](#docker-manuel-avancé)
@@ -72,6 +73,12 @@ MyWebIntelligence (MyWI) est un outil Python destiné aux équipes de recherche 
 - **Embeddings & pseudolinks** : vecteurs par paragraphe, similarité cosine (exacte ou LSH), pipeline NLI pour qualifier les relations logiques.
 - **Exports multiples** : CSV, GEXF (pages/nœuds), corpus brut, médias, tags, pseudolinks.
 - **Configuration centralisée** : `settings.py` + variables d’environnement pour adapter timeouts, clés API, heuristiques, providers ML.
+
+## Tutoriels
+
+- [`docs/mwi_tutorial.ipynb`](docs/mwi_tutorial.ipynb) — un projet de recherche complet de A à Z (création du Land, graines multi-moteurs, crawl borné en profondeur, normalisation d'URL, extraction readable, qualification, enrichissements, exports), avec un audit SQL après chaque étape. Nécessite `pip install jupyter pandas`.
+- [`docs/mwi_tutorial_install.md`](docs/mwi_tutorial_install.md) — installation pas à pas.
+- [`docs/mwi_tutorial_crawl.md`](docs/mwi_tutorial_crawl.md) — tutoriel corpus sur un terrain francophone.
 
 ---
 

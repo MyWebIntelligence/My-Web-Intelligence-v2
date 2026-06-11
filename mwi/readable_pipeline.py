@@ -845,10 +845,12 @@ class MercuryReadablePipeline:
         seen_urls = set()
         for match in re.finditer(link_pattern, markdown):
             text, url, title = match.groups()
+            raw_url = url  # URL littérale du markdown (sprint link-context)
             url = urljoin(base_url, url)
             if url not in seen_urls:
                 seen_urls.add(url)
-                links.append({'url': url, 'text': text or '', 'title': title or ''})
+                links.append({'url': url, 'raw_url': raw_url,
+                              'text': text or '', 'title': title or ''})
 
         return links
 
@@ -941,12 +943,23 @@ class MercuryReadablePipeline:
             - Deletes all existing outgoing links from this expression
             - Creates target expressions for new links (one depth level deeper)
             - Creates ExpressionLink records connecting source to targets
+            - Populates context/dom/dom_html (sprint link-context): context
+              from the final readable markdown, dom/dom_html from the stored
+              raw HTML (expression.html) when available
             - Silently ignores link creation failures (duplicate constraints)
             - Uses the expression's land for creating target expressions
         """
+        from . import link_context
+
         model.ExpressionLink.delete().where(
             model.ExpressionLink.source == expression
         ).execute()
+
+        # sprint link-context: map href -> dom info depuis le HTML stocké
+        stored_html = getattr(expression, 'html', None)
+        dom_map = link_context.extract_link_dom_map(
+            stored_html, str(expression.url)) if stored_html else {}
+        readable_md = getattr(expression, 'readable', None)
 
         for link_data in new_links:
             target_expression = self._get_or_create_expression(
@@ -956,10 +969,18 @@ class MercuryReadablePipeline:
             )
 
             if target_expression:
+                info = link_context.lookup_link_info(dom_map, link_data['url'])
+                ctx = link_context.extract_md_paragraph(
+                    readable_md, link_data.get('raw_url') or link_data['url'])
+                if ctx is None and info is not None:
+                    ctx = info.block_text
                 try:
                     model.ExpressionLink.create(
                         source=expression,
-                        target=target_expression
+                        target=target_expression,
+                        context=ctx,
+                        dom=info.dom if info else None,
+                        dom_html=info.dom_html if info else None
                     )
                 except:
                     pass

@@ -90,6 +90,32 @@ def pytest_runtest_setup(item):
 # Base Fixtures
 # =============================================================================
 
+@pytest.fixture(autouse=True)
+def network_safe_settings(monkeypatch):
+    """Force network-safe flags regardless of the user's local settings.py.
+
+    A local settings.py with crawl_fallback_playwright=True makes the fetch
+    cascade launch a real Chromium (BrowserPool singleton) inside tests; a
+    later crawl_land() running on another event loop then deadlocked in
+    BrowserPool.shutdown() (suite hang observed 2026-06-10, e.g.
+    test_10_fetcher + test_14_retry_status in the same process).
+
+    Several `settings` module objects can coexist in a session (test_env
+    pops and re-imports `settings`, but mwi.fetcher/mwi.browser_pool keep
+    their original reference), so every live object is patched. Tests that
+    need these features ON monkeypatch them explicitly.
+    """
+    seen = {}
+    for name in ('mwi.fetcher', 'mwi.browser_pool', 'mwi.core', 'settings'):
+        mod = sys.modules.get(name)
+        target = getattr(mod, 'settings', mod) if name != 'settings' else mod
+        if target is not None:
+            seen[id(target)] = target
+    for obj in seen.values():
+        monkeypatch.setattr(obj, 'crawl_fallback_playwright', False, raising=False)
+        monkeypatch.setattr(obj, 'dynamic_media_extraction', False, raising=False)
+
+
 @pytest.fixture()
 def test_env(tmp_path, monkeypatch):
     """Isolate data location and return imported modules (cli, controller, core, model).
@@ -100,21 +126,32 @@ def test_env(tmp_path, monkeypatch):
     data_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("MWI_DATA_LOCATION", str(data_dir))
 
-    # Ensure a clean import state for modules that depend on settings
-    for name in list(sys.modules.keys()):
-        if name in ("settings", "mwi.model", "mwi.core", "mwi.controller", "mwi.cli"):
-            sys.modules.pop(name, None)
-
-    # Import modules after env var is set so settings picks it up
+    # NOTE (2026-06-11): this fixture used to pop settings/mwi.* from
+    # sys.modules before re-importing. The pop never actually re-imported
+    # anything (`from mwi import core` returns the stale attribute of the
+    # `mwi` package), but it left sys.modules['mwi.core'] empty — so any
+    # later full-path import (e.g. readable_pipeline's local
+    # `from .core import add_expression`) created a SECOND mwi.core module,
+    # and mocks patched on one object were invisible to the other
+    # (test-ordering failures in TestLandCrawlMocked). Modules are now kept
+    # stable and isolation is applied on the live settings objects directly.
     from mwi import cli as _cli
     from mwi import controller as _controller
     from mwi import model as _model
     from mwi import core as _core
-    # Force settings.data_location to the temp dir for any path-based logic
     import settings as _settings
-    _settings.data_location = str(data_dir)
-    # Also ensure controller module references the updated settings value
-    _controller.settings.data_location = str(data_dir)
+
+    # Force isolation + network-safe flags on every live settings object
+    # (mwi modules may hold a reference distinct from sys.modules['settings']).
+    seen = {}
+    for obj in (_settings, getattr(_controller, 'settings', None),
+                getattr(_core, 'settings', None)):
+        if obj is not None:
+            seen[id(obj)] = obj
+    for obj in seen.values():
+        obj.data_location = str(data_dir)
+        obj.crawl_fallback_playwright = False
+        obj.dynamic_media_extraction = False
 
     # Return modules and the data dir for convenience
     return {

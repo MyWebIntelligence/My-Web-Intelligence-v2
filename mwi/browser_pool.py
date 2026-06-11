@@ -45,6 +45,7 @@ class BrowserPool:
                  user_agent: Optional[str] = None):
         self._playwright = None
         self._browser = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._lock = asyncio.Lock()
         self._max_concurrent = max_concurrent if max_concurrent is not None else int(
             getattr(settings, 'crawl_fallback_playwright_max_concurrent', 4)
@@ -78,9 +79,25 @@ class BrowserPool:
                 return
             self._playwright = await async_playwright().start()  # type: ignore
             self._browser = await self._playwright.chromium.launch(headless=True)
+            self._loop = asyncio.get_running_loop()
 
     async def shutdown(self) -> None:
-        """Close the browser and Playwright cleanly. Idempotent."""
+        """Close the browser and Playwright cleanly. Idempotent.
+
+        Cross-loop guard: Playwright objects are bound to the event loop
+        that launched them. Awaiting their close() from another loop (e.g.
+        a later asyncio.run / test loop) blocks forever because the owning
+        loop is no longer running. In that case we drop the references
+        instead of deadlocking — the OS reclaims the Chromium process at
+        exit.
+        """
+        if self._loop is not None and self._loop is not asyncio.get_running_loop():
+            print("BrowserPool shutdown: pool was started on another event loop — "
+                  "dropping references without awaiting close()")
+            self._browser = None
+            self._playwright = None
+            self._loop = None
+            return
         async with self._lock:
             if self._browser is not None:
                 try:
@@ -94,6 +111,7 @@ class BrowserPool:
                 except Exception:
                     pass
                 self._playwright = None
+            self._loop = None
 
     # ----- Page borrow --------------------------------------------------------
 

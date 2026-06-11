@@ -45,3 +45,6 @@ Thumbs.db
 # Rapports de tests
 htmlcov/
 .coverage
+
+# Document de travail Art.1 — ne jamais publier
+docs/Art1_Methods_v1.0.docx

@@ -523,8 +523,10 @@ def write_settings(config: dict, file_path: str = "settings.py"):
 
                 # Format value appropriately
                 if isinstance(value, str):
-                    # Check if it's an environment variable pattern
-                    if value.startswith('os.getenv('):
+                    # Generated expressions like os.getenv(...) but also
+                    # int(os.getenv(...)) / float(os.getenv(...)) must be
+                    # written raw — re-quoting them breaks settings.py
+                    if 'os.getenv(' in value:
                         f.write(f"{key} = {value}\n")
                     else:
                         f.write(f'{key} = "{value}"\n')

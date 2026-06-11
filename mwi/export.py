@@ -362,7 +362,10 @@ class Export:
             'source_domain_id': 'e1.domain_id',
             'target_id': 'link.target_id',
             'target_url': 'e2.url',
-            'target_domain_id': 'e2.domain_id'
+            'target_domain_id': 'e2.domain_id',
+            # sprint link-context (migration 012) — dom_html exclu (trop lourd)
+            'context': 'link.context',
+            'dom': 'link.dom'
         }
         sql = """
             WITH idx(x) AS (
