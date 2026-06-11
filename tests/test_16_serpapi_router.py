@@ -57,6 +57,27 @@ def test_google_provider_params_fr():
     }
 
 
+def test_google_provider_params_en_maps_country():
+    # `gl` is a country code: en must map to a real country (us), not be
+    # copied verbatim (SerpAPI rejects gl=en with a 400).
+    params = GoogleProvider().build_locale_params(
+        "en", 0, 100, use_date_filter=False
+    )
+    assert params["gl"] == "us"
+    assert params["hl"] == "en"
+    assert params["lr"] == "lang_en"
+    assert params["google_domain"] == "google.com"
+
+
+def test_google_provider_unmapped_lang_omits_gl():
+    params = GoogleProvider().build_locale_params(
+        "ja", 0, 100, use_date_filter=False
+    )
+    assert "gl" not in params
+    assert params["hl"] == "ja"
+    assert params["lr"] == "lang_ja"
+
+
 def test_google_provider_omits_num_with_date_filter():
     params = GoogleProvider().build_locale_params(
         "fr", 0, 100, use_date_filter=True

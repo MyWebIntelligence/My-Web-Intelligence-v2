@@ -100,13 +100,20 @@ def network_safe_settings(monkeypatch):
     BrowserPool.shutdown() (suite hang observed 2026-06-10, e.g.
     test_10_fetcher + test_14_retry_status in the same process).
 
+    A local settings.py with openrouter_enabled=True (and a real key) makes
+    crawl tests call the live OpenRouter gate: each run spends API credits
+    and the LLM verdict flips relevance to 0 nondeterministically (flaky
+    test_28 observed 2026-06-11). Tests for the gate itself mock the HTTP
+    layer and monkeypatch the flag ON explicitly.
+
     Several `settings` module objects can coexist in a session (test_env
     pops and re-imports `settings`, but mwi.fetcher/mwi.browser_pool keep
     their original reference), so every live object is patched. Tests that
     need these features ON monkeypatch them explicitly.
     """
     seen = {}
-    for name in ('mwi.fetcher', 'mwi.browser_pool', 'mwi.core', 'settings'):
+    for name in ('mwi.fetcher', 'mwi.browser_pool', 'mwi.core',
+                 'mwi.llm_openrouter', 'settings'):
         mod = sys.modules.get(name)
         target = getattr(mod, 'settings', mod) if name != 'settings' else mod
         if target is not None:
@@ -114,6 +121,7 @@ def network_safe_settings(monkeypatch):
     for obj in seen.values():
         monkeypatch.setattr(obj, 'crawl_fallback_playwright', False, raising=False)
         monkeypatch.setattr(obj, 'dynamic_media_extraction', False, raising=False)
+        monkeypatch.setattr(obj, 'openrouter_enabled', False, raising=False)
 
 
 @pytest.fixture()

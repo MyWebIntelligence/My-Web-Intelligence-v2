@@ -9,6 +9,8 @@
 # Fichiers de configuration locaux et secrets
 # Ces fichiers ne doivent jamais être partagés.
 settings.py
+settings.backup.*.py
+settings.py.bak_*
 secrets.txt
 AGENTS.md
 CLAUDE.md

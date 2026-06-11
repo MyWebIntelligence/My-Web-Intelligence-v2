@@ -207,6 +207,28 @@ class GoogleProvider(_BaseSerpProvider):
         "en": "google.com",
     }
 
+    # `gl` expects an ISO 3166 COUNTRY code, not a language code. Copying
+    # the language verbatim works for fr (France) by coincidence, but
+    # SerpAPI rejects gl=en with a 400, and sv/ar would silently target
+    # El Salvador/Argentina. Languages without a mapping omit `gl`.
+    _COUNTRY_BY_LANG = {
+        "ar": "sa",
+        "da": "dk",
+        "de": "de",
+        "en": "us",
+        "es": "es",
+        "fi": "fi",
+        "fr": "fr",
+        "hu": "hu",
+        "it": "it",
+        "nl": "nl",
+        "no": "no",
+        "pt": "pt",
+        "ro": "ro",
+        "ru": "ru",
+        "sv": "se",
+    }
+
     def build_locale_params(
         self,
         lang: str,
@@ -218,12 +240,14 @@ class GoogleProvider(_BaseSerpProvider):
         normalized = (lang or "fr").strip().lower() or "fr"
         params: Dict[str, Union[str, int]] = {
             "google_domain": self._DOMAIN_BY_LANG.get(normalized, "google.com"),
-            "gl": normalized,
             "hl": normalized,
             "lr": f"lang_{normalized}",
             "safe": "off",
             "start": start_index,
         }
+        country = self._COUNTRY_BY_LANG.get(normalized)
+        if country:
+            params["gl"] = country
         # Legacy parity: when a date filter is active, Google ignores `num`.
         if not use_date_filter:
             params["num"] = page_size
