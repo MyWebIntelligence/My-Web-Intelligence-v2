@@ -1582,8 +1582,17 @@ async def crawl_land(land: model.Land, limit: int = 0, http: Optional[str] = Non
                         crawl_expression_with_media_analysis(expr, dictionary, session, store_html=store_html)
                         for expr in current_batch_expressions
                     ]
-                    results = await asyncio.gather(*tasks)
-                    processed_in_batch = sum(results)
+                    # return_exceptions=True: a single expression raising
+                    # (e.g. a malformed link reaching urlparse) must never
+                    # sink the whole batch. Exceptions fall into the error
+                    # bucket (errors = attempted - processed).
+                    results = await asyncio.gather(*tasks, return_exceptions=True)
+                    processed_in_batch = 0
+                    for expr, res in zip(current_batch_expressions, results):
+                        if isinstance(res, Exception):
+                            print(f"Error crawling #{expr.id} ({expr.url}): {res}")  # type: ignore
+                        elif res:
+                            processed_in_batch += 1
                     total_processed += processed_in_batch
                     total_errors += (attempted_in_batch - processed_in_batch)
                     total_attempted += attempted_in_batch

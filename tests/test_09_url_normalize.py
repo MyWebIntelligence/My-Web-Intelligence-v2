@@ -43,6 +43,32 @@ class TestNormalizeUrlRules:
         u = "https://example.com/page?utm_source=fb&id=42&fbclid=xyz"
         assert normalize_url(normalize_url(u)) == normalize_url(u)
 
+    # Malformed hosts scraped from page sources (e.g. template placeholders
+    # left in HTML) must never raise: Python 3.14's hardened urlparse throws
+    # "Invalid IPv6 URL" on a bracketed host, which used to crash whole crawl
+    # runs (regression 2026-06-12). normalize_url returns them unchanged and
+    # is_crawlable() filters them downstream.
+    @pytest.mark.parametrize("bad", [
+        "https://[domain]/x",      # template placeholder host
+        "https://[",               # truncated bracket
+        "https://[tmpl]/path",     # non-IPv6 bracketed host
+    ])
+    def test_malformed_host_returns_unchanged_no_raise(self, bad):
+        assert normalize_url(bad) == bad
+
+    @pytest.mark.parametrize("bad", [
+        "https://[domain]/x",
+        "https://[",
+        "https://[tmpl]/path",
+    ])
+    def test_malformed_host_idempotent(self, bad):
+        assert normalize_url(normalize_url(bad)) == normalize_url(bad)
+
+    def test_malformed_host_not_crawlable(self):
+        # Defense-in-depth: even returned unchanged, the bad URL is rejected.
+        from mwi.core import is_crawlable
+        assert is_crawlable("https://[domain]/x") is False
+
     def test_remove_anchor(self):
         assert normalize_url("https://example.com/p#section") == "https://example.com/p"
 

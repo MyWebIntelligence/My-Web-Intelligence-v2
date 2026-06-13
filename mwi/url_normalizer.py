@@ -203,9 +203,22 @@ def normalize_url(url: str, rules: Optional[Dict] = None) -> str:
     """Normalize a URL according to the configured rules.
 
     Idempotent: ``normalize_url(normalize_url(u)) == normalize_url(u)``.
+
+    Never raises: normalization is best-effort. URLs that urlparse
+    rejects — e.g. template hosts scraped from page sources like
+    ``https://[domain]/x``, which raise ``ValueError: Invalid IPv6 URL``
+    and killed whole crawl runs (2026-06-12) — are returned unchanged;
+    ``is_crawlable()`` filters them out downstream.
     """
     if not url or not isinstance(url, str):
         return url
+    try:
+        return _normalize_url_unsafe(url, rules)
+    except Exception:
+        return url
+
+
+def _normalize_url_unsafe(url: str, rules: Optional[Dict] = None) -> str:
     rules = _get_rules(rules)
 
     # Stage 1: anchor
