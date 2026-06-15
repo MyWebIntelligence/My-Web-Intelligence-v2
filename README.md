@@ -473,6 +473,7 @@ Delete an entire land or only expressions below a relevance threshold.
 |----------|--------|----------|---------|-----------------------------------------------------|
 | --name   | str    | Yes      |         | Name of the land to delete                          |
 | --maxrel | int    | No       |         | Only delete expressions with relevance < maxrel     |
+| --vacuum | flag   | No       |         | Run VACUUM after deletion to reclaim disk space (slow on large databases) |
 
 
 ## Multilingual Lands

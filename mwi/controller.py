@@ -1351,6 +1351,7 @@ class LandController:
         """
         core.check_args(args, 'name')
         maxrel = core.get_arg_option('maxrel', args, set_type=int, default=0)
+        do_vacuum = getattr(args, 'vacuum', False)
 
         if core.confirm("Land and/or underlying objects will be deleted, type 'Y' to proceed : "):
             land = model.Land.get_or_none(model.Land.name == args.name)
@@ -1361,11 +1362,15 @@ class LandController:
                 query = model.Expression.delete().where((model.Expression.land == land)
                                                 & (model.Expression.relevance < maxrel)
                                                 & (model.Expression.fetched_at.is_null(False)))
-                query.execute()
-                print("Expressions deleted")
+                deleted = query.execute()
+                print("%d expression(s) deleted" % deleted)
             else:
                 land.delete_instance(recursive=True)
                 print("Land %s deleted" % args.name)
+            if do_vacuum:
+                print("Running VACUUM (this may take a while on large databases)...")
+                model.DB.execute_sql("VACUUM")
+                print("VACUUM done")
             return 1
         return 0
 

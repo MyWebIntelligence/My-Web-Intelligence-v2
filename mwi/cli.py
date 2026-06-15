@@ -112,6 +112,10 @@ def command_input():
                         help='Set maximum relevance threshold',
                         nargs='?',
                         const=0)
+    parser.add_argument('--vacuum',
+                        action='store_true',
+                        default=False,
+                        help='Run VACUUM after deletion to reclaim disk space (slow on large databases)')
     parser.add_argument('--http',
                         type=str,
                         help='Limit crawling to specific http status (re crawling)',
