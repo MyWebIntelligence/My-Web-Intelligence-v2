@@ -1,59 +1,67 @@
+# pyproject.toml — MyWebIntelligence (MWI)
+#
+# Source of truth for: project metadata, runtime/ML/dev dependencies, and mypy.
+# Deliberately NOT here, by project convention:
+#   - lint config              → .flake8       (flake8 can't read pyproject)
+#   - pytest + coverage config → pytest.ini    (.claude/rules/testing.md mandates it)
+#   - pinned installs          → uv.lock + the generated requirements.txt (`make lock`)
+#
+# MWI is a flat-layout CLI app (`python mywi.py`, PYTHONPATH=.), not an installable
+# library: [tool.uv] package = false, no [build-system], no [project.scripts].
+
 [project]
 name = "mywebintelligence"
 version = "1.0.0"
 description = "Reproducible web-mining toolkit for digital methods in the social sciences and humanities (MyWebIntelligence / MWI)."
 readme = "README.md"
 license = { file = "LICENSE" }
+# Support floor. Mirror it in mypy `python_version` below and the CI matrix
+# (.github/workflows/tests.yml). The pinned dev/runtime interpreter is 3.11
+# (.python-version, Dockerfile); 3.9 is only the lowest version we still support.
 requires-python = ">=3.9"
 authors = [
-    { name = "Amar Lakel" },
+    { name = "Amar Lakel", email = "amar.lakel@u-bordeaux-montaigne.fr" },
 ]
 
-# Runtime dependencies — source of truth (mirrors the legacy requirements.txt,
-# which is now a generated artifact via `uv export`). `pytest` lives in the
-# `dev` group below, not here.
+# Runtime dependencies — first-order imports only (what mwi/ actually imports).
+# Pure transitive deps (aiosignal, async-timeout, attrs, frozenlist, multidict,
+# yarl, soupsieve, joblib, urllib3, idna, wrapt) are resolved and pinned by
+# uv.lock; listing them here just freezes a pip-freeze snapshot and hides intent.
+# requirements.txt is a generated artifact (`make lock` → `uv export`).
+#
+# NOTE: this array is a bare key of [project] and MUST stay above any
+# [project.*] subtable (urls / optional-dependencies) — TOML would otherwise
+# attach it to that subtable.
 dependencies = [
     # Upper bound: aiohttp 3.14 made ClientResponse.__init__ require a new
-    # `stream_writer` kwarg, which the latest aioresponses (0.7.8) test mock
-    # does not pass — breaking the search-provider tests. Production code paths
-    # work on 3.13.x. Lift this cap once aioresponses ships aiohttp-3.14 support.
+    # `stream_writer` kwarg that the latest aioresponses (0.7.8) test mock does
+    # not pass — breaking the search-provider tests. Production paths work on
+    # 3.13.x. Lift this cap once aioresponses ships aiohttp-3.14 support.
     "aiohttp>=3.9.3,<3.14",
-    "aiosignal>=1.3.1",
-    "async-timeout>=4.0.3",
-    "attrs>=23.2.0",
     "beautifulsoup4>=4.12.3",
-    "Pillow>=10.0.0",
-    "numpy>=1.26.4",
-    "scikit-learn>=1.4.2",
-    "imagehash>=4.3.1",
-    "certifi>=2023.1.1",
-    "click>=8.1.3",
-    "colorama>=0.4.4",
-    "frozenlist>=1.4.0",
-    "idna>=3.4",
-    "joblib>=1.4.0",
-    "lxml>=4.9.0",
-    "multidict>=6.0.4",
-    "nltk>=3.8",
-    "peewee>=3.15.0",
-    "regex>=2023.1.1",
-    "requests>=2.31.0",
-    "soupsieve>=2.4.0",
-    "tqdm>=4.65.0",
-    "typing-extensions>=4.5.0",
-    "urllib3>=2.0.0",
-    "wrapt>=1.15.0",
-    "yarl>=1.9.0",
-    "trafilatura>=1.6.0",
+    "certifi>=2023.1.1",     # imported directly in core.py for SSL cert hardening
+    "colorama>=0.4.4",       # optional colored output in scripts/install_utils.py
+    "curl_cffi>=0.7.0",      # TLS impersonation, sprint-403 fetch cascade
     "langdetect>=1.0.9",
-    "PyMuPDF>=1.24.4",
-    "playwright>=1.42.0",
-    "curl_cffi>=0.7.0",
+    "lxml>=4.9.0",
+    "nltk>=3.8",
+    "numpy>=1.26.4",
+    "peewee>=3.15.0",
+    "Pillow>=10.0.0",
+    "playwright>=1.42.0",    # browser fallback + dynamic media extraction
+    "requests>=2.31.0",
+    "scikit-learn>=1.4.2",
+    "trafilatura>=1.6.0",
 ]
 
+[project.urls]
+Repository = "https://github.com/MyWebIntelligence/My-Web-Intelligence-v2"
+Issues = "https://github.com/MyWebIntelligence/My-Web-Intelligence-v2/issues"
+
 [project.optional-dependencies]
-# Optional ML extras (ANN + NLI: FAISS + transformers/sentencepiece/torch).
-# Install with: `uv sync --extra ml`  (mirrors the legacy requirements-ml.txt).
+# Optional ML extras (ANN + NLI). Every one is used — conditionally imported in
+# mwi/semantic_pipeline.py, with a neutral fallback when absent. Install with
+# `uv sync --extra ml` (mirrors the hand-kept requirements-ml.txt).
 ml = [
     "torch>=2.2",
     "transformers>=4.40",
@@ -64,9 +72,8 @@ ml = [
 ]
 
 # Development / test tooling (PEP 735). Installed by default on `uv sync`,
-# skipped with `--no-dev`. Captures pytest-asyncio + aioresponses, which the
-# test suite has always required (search-router tests) but no requirements
-# file ever declared — previously installed ad-hoc in CI.
+# skipped with `--no-dev`. Lint = flake8 (config in .flake8); types = mypy
+# (config below). pytest-asyncio + aioresponses back the search-router tests.
 [dependency-groups]
 dev = [
     "pytest>=7.0.0",
@@ -79,7 +86,44 @@ dev = [
 
 [tool.uv]
 # MWI is an application run via `python mywi.py` (flat layout, PYTHONPATH=.),
-# not an installable library. `package = false` makes uv install the
-# dependencies into the environment without trying to build/install the
-# project itself.
+# not an installable library. `package = false` installs the dependencies into
+# the environment without building/installing the project itself — hence no
+# [build-system] and no [project.scripts].
 package = false
+
+# ===========================================================================
+# MYPY — types. Progressive adoption: no global strict (legacy code is only
+# partially typed and Peewee resists static typing). Strict tightens per-module.
+# Run on touched code: `uv run mypy mwi/`. Lint config lives in .flake8.
+# ===========================================================================
+[tool.mypy]
+python_version = "3.9"        # check against the support floor, not the dev 3.11
+show_error_codes = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_unused_configs = true
+no_implicit_optional = true
+check_untyped_defs = true      # check bodies of unannotated funcs without requiring annotations
+
+[[tool.mypy.overrides]]
+# Recent, fully-typed modules: require strict typing here. Extend this list as
+# more modules get typed.
+module = ["mwi.search.*"]
+disallow_untyped_defs = true
+warn_return_any = true
+
+[[tool.mypy.overrides]]
+# Third-party deps without type stubs: silence missing-import errors without
+# disabling mypy globally.
+module = [
+    "peewee.*",
+    "trafilatura.*",
+    "langdetect.*",
+    "curl_cffi.*",
+    "nltk.*",
+    "sklearn.*",
+    "faiss.*",
+    "sentence_transformers.*",
+    "transformers.*",
+]
+ignore_missing_imports = true

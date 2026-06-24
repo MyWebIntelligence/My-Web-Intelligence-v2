@@ -1,0 +1,15 @@
+# flake8 configuration for MyWebIntelligence (MWI).
+#
+# flake8 + mypy are the sanctioned quality tools (see .claude/rules/testing.md);
+# there is no auto-formatter. Without this file flake8 runs at its 79-column
+# default, producing ~986 spurious E501 on a legacy codebase whose lines sit
+# comfortably under 100. 100 clears ~83% of those while staying readable.
+#
+# flake8 cannot read pyproject.toml, so its config lives here (not in pyproject).
+[flake8]
+max-line-length = 100
+# pycodestyle already ignores W503/W504 by default; E203 (whitespace before ':')
+# clashes with common slice style. Real debt — F401 unused imports, F841 unused
+# vars, E722 bare except, ... — is intentionally NOT ignored.
+extend-ignore = E203
+exclude = .venv,.git,__pycache__,build,dist,*.egg-info

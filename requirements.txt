@@ -4,7 +4,7 @@ aiohappyeyeballs==2.6.1 ; python_full_version < '3.10'
 aiohappyeyeballs==2.6.2 ; python_full_version >= '3.10'
 aiohttp==3.13.5
 aiosignal==1.4.0
-async-timeout==5.0.1
+async-timeout==5.0.1 ; python_full_version < '3.11'
 attrs==26.1.0
 babel==2.18.0
 beautifulsoup4==4.15.0
@@ -26,7 +26,6 @@ greenlet==3.5.2 ; python_full_version >= '3.10'
 htmldate==1.9.4 ; python_full_version < '3.10'
 htmldate==1.10.0 ; python_full_version >= '3.10'
 idna==3.18
-imagehash==4.3.2
 joblib==1.5.3
 justext==3.0.2
 langdetect==1.0.9
@@ -52,13 +51,8 @@ pycparser==2.23 ; python_full_version < '3.10' and implementation_name != 'PyPy'
 pycparser==3.0 ; python_full_version >= '3.10' and implementation_name != 'PyPy'
 pyee==13.0.1
 pygments==2.20.0 ; python_full_version >= '3.10'
-pymupdf==1.26.5 ; python_full_version < '3.10'
-pymupdf==1.27.2.3 ; python_full_version >= '3.10'
 python-dateutil==2.9.0.post0
 pytz==2026.2
-pywavelets==1.6.0 ; python_full_version < '3.10'
-pywavelets==1.8.0 ; python_full_version == '3.10.*'
-pywavelets==1.9.0 ; python_full_version >= '3.11'
 regex==2026.1.15 ; python_full_version < '3.10'
 regex==2026.5.9 ; python_full_version >= '3.10'
 requests==2.32.5 ; python_full_version < '3.10'
@@ -84,6 +78,5 @@ tzlocal==5.3.1 ; python_full_version < '3.10'
 tzlocal==5.4.3 ; python_full_version >= '3.10'
 urllib3==2.6.3 ; python_full_version < '3.10'
 urllib3==2.7.0 ; python_full_version >= '3.10'
-wrapt==2.2.2
 yarl==1.22.0 ; python_full_version < '3.10'
 yarl==1.24.2 ; python_full_version >= '3.10'
