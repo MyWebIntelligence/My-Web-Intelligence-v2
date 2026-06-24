@@ -586,14 +586,15 @@ python mywi.py land export --name="MonProjet" --type=mediacsv
 python mywi.py land export --name="MonProjet" --type=corpus
 python mywi.py land export --name="MonProjet" --type=pseudolinks
 python mywi.py land export --name="MonProjet" --type=nodelinkcsv --minrel=1
-python mywi.py land export --name="MonProjet" --type=nodelinkcsv --fullhtml=TRUE --minrel=1  # + réseau de liens brut
+python mywi.py land export --name="MonProjet" --type=nodelinkcsv --fullhtml=TRUE --minrel=1  # réseau brut SEUL (sans le flag = 4 de base)
 ```
 
 Types : `pagecsv`, `fullpagecsv`, `nodecsv`, `pagegexf`, `nodegexf`, `mediacsv`, `corpus`, `pseudolinks`, `pseudolinkspage`, `pseudolinksdomain`, `nodelinkcsv`, `htmldump`.
 
 > **Réseau de liens brut (`nodelinkcsv --fullhtml=TRUE`, sprint
-> fullhtml-linknetwork)** — en plus des 4 fichiers classiques, émet **4 fichiers
-> `*fullhtml.csv`** : le réseau de liens reconstruit depuis **tous** les
+> fullhtml-linknetwork)** — émet **uniquement** les 4 fichiers `*fullhtml.csv`
+> **à la place** des 4 classiques (interrupteur, pas additif : relancer **sans**
+> le flag pour le réseau MyWI) : le réseau de liens reconstruit depuis **tous** les
 > `<a href>` du HTML brut (`expression.html`), réseau fermé (cibles ∈ corpus
 > qualifié par `--minrel`). Colonnes `weight` (multiplicité des ancres) et
 > `in_mywi` (1 si l'arête existe aussi dans `ExpressionLink`). Permet de comparer

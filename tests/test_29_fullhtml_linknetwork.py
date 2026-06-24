@@ -68,6 +68,17 @@ class TestExtractAllLinks:
         out = link_context.extract_all_links('<a href=https://x.test/p>', 'https://x.test/')
         assert isinstance(out, list)
 
+    def test_xml_document_does_not_emit_xml_warning(self):
+        # Stored HTML is sometimes actually XML (sitemap/feed); parsing it
+        # must not spew XMLParsedAsHTMLWarning (benign, but alarming on stdout).
+        import warnings
+        xml = ('<?xml version="1.0" encoding="UTF-8"?>'
+               '<feed><entry><link href="https://x.test/a"/></entry></feed>')
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter('always')
+            link_context.extract_all_links(xml, 'https://x.test/')
+        assert 'XMLParsedAsHTMLWarning' not in [w.category.__name__ for w in caught]
+
 
 # --------------------------------------------------------------------------- #
 # Fixture: a small land with stored HTML and a known MyWI graph                #
@@ -192,7 +203,6 @@ class TestClosedNetworkPageLinks:
 
     def test_robust_matching_trailing_slash_and_case(self, fullhtml_land, tmp_path):
         """A href differing by trailing slash / host case still maps in-corpus."""
-        model = fullhtml_land["model"]
         e = fullhtml_land["e"]
         # E2 already links to E1; rewrite its html to a slashed/upper-host variant.
         e["e2"].html = ('<html><body><a href="https://SITE-A.test/home/">h</a>'
@@ -202,7 +212,6 @@ class TestClosedNetworkPageLinks:
         assert (e["e2"].id, e["e1"].id) in edges
 
     def test_three_way_diff_counters(self, fullhtml_land, tmp_path):
-        e = fullhtml_land["e"]
         exp, edges = self._write(fullhtml_land, tmp_path)
         stats = exp._fullhtml_stats
         # 4 qualifying sources (E1,E2,E3,E5); E5 has no html.
@@ -257,7 +266,8 @@ class TestNodelinkcsvIntegration:
         assert self._glob(data_dir, "_pageslinks.csv")
         assert not self._glob(data_dir, "fullhtml.csv")
 
-    def test_with_flag_emits_eight_files(self, fullhtml_land):
+    def test_with_flag_emits_only_fullhtml_files(self, fullhtml_land):
+        """--fullhtml switches networks: emit ONLY the 4 fullhtml files."""
         ctrl, core = fullhtml_land["controller"], fullhtml_land["core"]
         data_dir = fullhtml_land["data_dir"]
         ret = ctrl.LandController.export(
@@ -268,11 +278,21 @@ class TestNodelinkcsvIntegration:
         for suffix in ("_pagesnodesfullhtml.csv", "_pageslinksfullhtml.csv",
                        "_domainnodesfullhtml.csv", "_domainlinksfullhtml.csv"):
             assert self._glob(data_dir, suffix), f"missing {suffix}"
+        # The base MyWI files must NOT be emitted under the flag.
+        assert not self._glob(data_dir, "_pageslinks.csv")
+        assert not self._glob(data_dir, "_domainlinks.csv")
 
     def test_pagesnodesfullhtml_matches_base_pagesnodes(self, fullhtml_land):
-        """Closed network -> node set identical to the base pagesnodes file."""
+        """Closed network -> node set identical to the base pagesnodes file.
+
+        The flag now switches networks, so the base file comes from a
+        separate export without --fullhtml.
+        """
         ctrl, core = fullhtml_land["controller"], fullhtml_land["core"]
         data_dir = fullhtml_land["data_dir"]
+        ctrl.LandController.export(
+            core.Namespace(name=fullhtml_land["name"], type="nodelinkcsv", minrel=1)
+        )
         ctrl.LandController.export(
             core.Namespace(name=fullhtml_land["name"], type="nodelinkcsv",
                            minrel=1, fullhtml="TRUE")

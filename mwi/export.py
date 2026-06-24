@@ -278,32 +278,38 @@ class Export:
             filename: Base path for output CSV files.
 
         Returns:
-            int: Total number of records written across all 4 files.
+            int: Total number of records written across the 4 files.
 
         Notes:
-            Generates 4 files with suffixes: _pagesnodes.csv, _pageslinks.csv,
-            _domainnodes.csv, _domainlinks.csv.
-            Provides a complete network export for analysis tools.
+            Without --fullhtml: the 4 MyWI files (_pagesnodes.csv,
+            _pageslinks.csv, _domainnodes.csv, _domainlinks.csv) from
+            ExpressionLink. With --fullhtml: the 4 raw-HTML link-network
+            files (*fullhtml.csv) INSTEAD — the flag switches which network
+            is exported, it is not additive. Export twice to get both.
         """
         # Remove the .csv extension added automatically to create our own names
         base = filename.replace('.csv', '')
 
         total = 0
-        total += self._write_pagesnodes(f"{base}_pagesnodes.csv")
-        total += self._write_pageslinks(f"{base}_pageslinks.csv")
-        total += self._write_domainnodes(f"{base}_domainnodes.csv")
-        total += self._write_domainlinks(f"{base}_domainlinks.csv")
-
-        # Opt-in raw-HTML link network (sprint fullhtml-linknetwork).
-        # Closed network: every <a href> of expression.html restricted to
-        # in-land targets; weight = anchor multiplicity; in_mywi flags edges
-        # also present in ExpressionLink. Node files reuse the base writers
-        # (same node set as the MyWI graph -> directly comparable).
+        # --fullhtml is a SWITCH between the two networks, not an add-on: with
+        # the flag, emit ONLY the 4 raw-HTML link-network files; without it,
+        # emit the 4 MyWI (ExpressionLink) files. Run the export twice (with
+        # and without --fullhtml) to obtain both networks for comparison.
         if getattr(self, 'fullhtml', False):
+            # Opt-in raw-HTML link network (sprint fullhtml-linknetwork).
+            # Closed network: every <a href> of expression.html restricted to
+            # in-land targets; weight = anchor multiplicity; in_mywi flags edges
+            # also present in ExpressionLink. Node files reuse the base writers
+            # (same node set as the MyWI graph -> directly comparable).
             total += self._write_pagesnodes(f"{base}_pagesnodesfullhtml.csv")
             total += self._write_pageslinksfullhtml(f"{base}_pageslinksfullhtml.csv")
             total += self._write_domainnodes(f"{base}_domainnodesfullhtml.csv")
             total += self._write_domainlinksfullhtml(f"{base}_domainlinksfullhtml.csv")
+        else:
+            total += self._write_pagesnodes(f"{base}_pagesnodes.csv")
+            total += self._write_pageslinks(f"{base}_pageslinks.csv")
+            total += self._write_domainnodes(f"{base}_domainnodes.csv")
+            total += self._write_domainlinks(f"{base}_domainlinks.csv")
 
         return total
 
@@ -362,7 +368,7 @@ class Export:
                     row.extend(self._normalize_value(seorank_payload.get(key)) for key in seorank_keys)
                     writer.writerow(row)
                     count += 1
-        print(f"  - pagesnodes.csv: {count} expressions")
+        print(f"  - {filename.rsplit('_', 1)[-1]}: {count} expressions")
         return count
 
     def _write_pageslinks(self, filename) -> int:
@@ -436,7 +442,7 @@ class Export:
         """
         cursor = self.get_sql_cursor(sql, col_map)
         count = self.write_csv(filename, col_map.keys(), cursor)
-        print(f"  - domainnodes.csv: {count} domains")
+        print(f"  - {filename.rsplit('_', 1)[-1]}: {count} domains")
         return count
 
     def _write_domainlinks(self, filename) -> int:

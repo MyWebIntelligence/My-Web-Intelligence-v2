@@ -28,6 +28,7 @@ Design constraints:
 """
 
 import re
+import warnings
 from dataclasses import dataclass
 from typing import Dict, Optional
 from urllib.parse import urljoin
@@ -109,6 +110,23 @@ def _relaxed_key(normalized_url: str) -> str:
     return normalized_url.lower().rstrip('/')
 
 
+def _quiet_soup(raw_html: str, parser: str):
+    """BeautifulSoup parse with the noisy XMLParsedAsHTMLWarning silenced.
+
+    Stored HTML is sometimes actually XML (sitemaps, RSS/Atom feeds); bs4
+    then emits a multi-line warning. It is benign for link extraction, so we
+    suppress it locally (no global filterwarnings side effect).
+    """
+    from bs4 import BeautifulSoup
+    with warnings.catch_warnings():
+        try:
+            from bs4 import XMLParsedAsHTMLWarning
+            warnings.simplefilter('ignore', XMLParsedAsHTMLWarning)
+        except ImportError:
+            pass
+        return BeautifulSoup(raw_html, parser)
+
+
 def extract_link_dom_map(raw_html: Optional[str], base_url: str,
                          soup=None) -> Dict[str, LinkDomInfo]:
     """Map each crawlable ``<a href>`` of `raw_html` to its LinkDomInfo.
@@ -124,8 +142,7 @@ def extract_link_dom_map(raw_html: Optional[str], base_url: str,
         if soup is None:
             if not raw_html:
                 return {}
-            from bs4 import BeautifulSoup
-            soup = BeautifulSoup(raw_html, 'html.parser')
+            soup = _quiet_soup(raw_html, 'html.parser')
 
         dom_html_cap = _dom_html_cap()
         context_cap = _context_cap()
@@ -182,11 +199,10 @@ def extract_all_links(raw_html: Optional[str], base_url: str,
         if soup is None:
             if not raw_html:
                 return links
-            from bs4 import BeautifulSoup
             try:
-                soup = BeautifulSoup(raw_html, 'lxml')
+                soup = _quiet_soup(raw_html, 'lxml')
             except Exception:
-                soup = BeautifulSoup(raw_html, 'html.parser')
+                soup = _quiet_soup(raw_html, 'html.parser')
 
         for a_tag in soup.find_all('a', href=True):
             href = (a_tag.get('href') or '').strip()
