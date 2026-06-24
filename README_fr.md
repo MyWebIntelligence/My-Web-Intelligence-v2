@@ -585,9 +585,21 @@ python mywi.py land export --name="MonProjet" --type=nodegexf
 python mywi.py land export --name="MonProjet" --type=mediacsv
 python mywi.py land export --name="MonProjet" --type=corpus
 python mywi.py land export --name="MonProjet" --type=pseudolinks
+python mywi.py land export --name="MonProjet" --type=nodelinkcsv --minrel=1
+python mywi.py land export --name="MonProjet" --type=nodelinkcsv --fullhtml=TRUE --minrel=1  # + réseau de liens brut
 ```
 
-Types : `pagecsv`, `fullpagecsv`, `nodecsv`, `pagegexf`, `nodegexf`, `mediacsv`, `corpus`, `pseudolinks`, `pseudolinkspage`, `pseudolinksdomain`.
+Types : `pagecsv`, `fullpagecsv`, `nodecsv`, `pagegexf`, `nodegexf`, `mediacsv`, `corpus`, `pseudolinks`, `pseudolinkspage`, `pseudolinksdomain`, `nodelinkcsv`, `htmldump`.
+
+> **Réseau de liens brut (`nodelinkcsv --fullhtml=TRUE`, sprint
+> fullhtml-linknetwork)** — en plus des 4 fichiers classiques, émet **4 fichiers
+> `*fullhtml.csv`** : le réseau de liens reconstruit depuis **tous** les
+> `<a href>` du HTML brut (`expression.html`), réseau fermé (cibles ∈ corpus
+> qualifié par `--minrel`). Colonnes `weight` (multiplicité des ancres) et
+> `in_mywi` (1 si l'arête existe aussi dans `ExpressionLink`). Permet de comparer
+> le réseau de liens **éditoriaux** de MyWI au réseau « toute la page » d'un
+> crawler classique. **Prérequis** : Land crawlé avec `--fullhtml`. Un rapport de
+> couverture (raw∩mywi / raw\mywi / mywi\raw) s'affiche en fin d'export.
 
 ### 2. Exporter les tags
 

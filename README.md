@@ -840,6 +840,7 @@ python mywi.py land export --name="MyResearchTopic" --type=EXPORT_TYPE [--minrel
   - `*_pageslinks.csv`: All expression links (source_id, source_url, source_domain_id, target_id, target_url, target_domain_id)
   - `*_domainnodes.csv`: Domain nodes with aggregations (id, name, title, description, http_status, nbexpressions, average_relevance, first_expression_date, last_expression_date)
   - `*_domainlinks.csv`: Aggregated inter-domain links (source_domain_id, source_domain_name, target_domain_id, target_domain_name, link_count)
+  - With `--fullhtml=TRUE` (requires a land crawled with `--fullhtml`), emits **4 additional** `*fullhtml.csv` files: the **raw link network** rebuilt from *every* `<a href>` in `expression.html` (closed network — targets restricted to corpus pages qualified by `--minrel`). `*_pageslinksfullhtml.csv` adds a `weight` column (anchor multiplicity) and an `in_mywi` column (`1` if the edge also exists in `ExpressionLink`); `*_domainlinksfullhtml.csv` uses `link_count` + `in_mywi`. This lets you compare MyWI's *editorial* link network (`ExpressionLink`, from the readable content) to a classic crawler's *whole-page* network. The export prints a 3-way coverage report (raw∩mywi / raw\mywi / mywi\raw). Without stored HTML the files are emitted empty (header only) with a warning.
 - `htmldump` (sprint-html E): Zip archive of the raw HTML stored via
   `--fullhtml`. Contains one `{expression_id}.html` per expression where
   `html IS NOT NULL` plus a `manifest.csv` listing
@@ -855,6 +856,7 @@ python mywi.py land export --name="AsthmaResearch" --type=pseudolinks
 python mywi.py land export --name="AsthmaResearch" --type=pseudolinkspage
 python mywi.py land export --name="AsthmaResearch" --type=pseudolinksdomain
 python mywi.py land export --name="AsthmaResearch" --type=nodelinkcsv --minrel=1
+python mywi.py land export --name="AsthmaResearch" --type=nodelinkcsv --fullhtml=TRUE --minrel=1  # + raw link network
 python mywi.py land export --name="AsthmaArchive"  --type=htmldump --minrel=1
 ```
 
