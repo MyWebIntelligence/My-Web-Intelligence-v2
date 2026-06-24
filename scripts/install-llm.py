@@ -160,7 +160,7 @@ def check_ml_dependencies():
     if missing:
         print()
         print(warning("Missing ML dependencies detected"))
-        print_help("Install with: pip install -r requirements-ml.txt")
+        print_help("Install with: uv sync --extra ml   (or pip: pip install -r requirements-ml.txt)")
         print()
         if not ask_bool("Continue anyway?", default=True):
             sys.exit(1)

@@ -1530,6 +1530,13 @@ class LandController:
             similarity links), 'pseudolinkspage' (page-level pseudolinks),
             'pseudolinksdomain' (domain-level pseudolinks), 'nodelinkcsv'
             (4 CSV files: pagesnodes, pageslinks, domainnodes, domainlinks).
+
+            --fullhtml=TRUE (nodelinkcsv only): also emit the raw-HTML closed
+            link network — 4 extra *fullhtml.csv files built from every <a href>
+            of expression.html (requires a land crawled with --fullhtml).
+            pageslinksfullhtml carries weight (anchor multiplicity) and in_mywi
+            (1 if the edge also exists in ExpressionLink), enabling a direct
+            comparison with the MyWI editorial-link network.
         """
         minimum_relevance = 1
         core.check_args(args, ('name', 'type'))
@@ -1541,13 +1548,19 @@ class LandController:
         if isinstance(args.minrel, int) and (args.minrel >= 0):
             minimum_relevance = args.minrel
             print("Minimum relevance set to %s" % minimum_relevance)
-            
+
+        # --fullhtml (modifier, not a type): when TRUE, nodelinkcsv also emits
+        # the raw-HTML link network files. CLI value is 'TRUE'/'FALSE'/None
+        # (None = absent); 'FALSE' is not falsy-by-default, so parse explicitly.
+        fullhtml_raw = core.get_arg_option('fullhtml', args, set_type=str, default=None)
+        store_html = (fullhtml_raw is not None and fullhtml_raw.upper() == 'TRUE')
+
         land = model.Land.get_or_none(model.Land.name == args.name)
         if land is None:
             print('Land "%s" not found' % args.name)
         else:
             if args.type in valid_types:
-                core.export_land(land, args.type, minimum_relevance)
+                core.export_land(land, args.type, minimum_relevance, fullhtml=store_html)
                 return 1
             print('Invalid export type "%s" [%s]' % (args.type, ', '.join(valid_types)))
         return 0
@@ -2066,7 +2079,9 @@ class SearchController:
         from .search.providers.serpapi import SerpApiProvider
         from .search.providers.tavily import TavilyProvider
 
-        router = SearchRouter()
+        router = SearchRouter(
+            timeout=getattr(settings, 'SEARCH_PROVIDER_TIMEOUT',
+                            SearchRouter.DEFAULT_TIMEOUT))
         for cls in (SearxngProvider, BraveProvider, SerperProvider,
                     SerpApiProvider, TavilyProvider):
             try:

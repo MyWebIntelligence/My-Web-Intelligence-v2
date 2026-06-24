@@ -73,6 +73,23 @@ def test_register_dedups_by_name():
     assert len(router.providers) == 1
 
 
+def test_register_propagates_router_timeout_to_provider():
+    """Registering stamps the router timeout onto the provider so
+    ``settings.SEARCH_PROVIDER_TIMEOUT`` governs each adapter's per-request
+    ``ClientTimeout(total=self.timeout)`` (regression: ``_timeout`` was dead)."""
+    router = SearchRouter(timeout=7)
+    provider = FakeProvider("slow")
+    assert router.register(provider) is True
+    assert provider.timeout == 7
+
+
+def test_register_default_timeout_is_router_default():
+    router = SearchRouter()
+    provider = FakeProvider("def")
+    router.register(provider)
+    assert provider.timeout == SearchRouter.DEFAULT_TIMEOUT
+
+
 def test_unsupported_strategy_raises():
     router = SearchRouter()
     router.register(FakeProvider("a"))

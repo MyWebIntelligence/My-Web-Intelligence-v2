@@ -55,14 +55,23 @@ Cette commande dit : « Va chercher le dépôt à cette URL et fais-en une copie
 
 **Python** est le langage dans lequel MWI est écrit. Pour faire tourner MWI, votre machine doit savoir exécuter Python (`python3 --version` doit fonctionner).
 
-MWI a besoin de bibliothèques externes (peewee, aiohttp, beautifulsoup4…). Si on les installait directement sur le Python du système, elles entreraient en conflit avec d'autres projets Python que vous pourriez avoir. **Solution** : on crée un **environnement virtuel** — un mini-Python isolé, propre à ce projet :
+MWI a besoin de bibliothèques externes (peewee, aiohttp, beautifulsoup4…). Si on les installait directement sur le Python du système, elles entreraient en conflit avec d'autres projets Python que vous pourriez avoir. **Solution** : on crée un **environnement virtuel** — un mini-Python isolé, propre à ce projet.
+
+**La manière moderne et recommandée : `uv`.** [uv](https://docs.astral.sh/uv/) (de l'éditeur Astral) est un gestionnaire de projet Python qui fait tout en une commande : il télécharge la bonne version de Python, crée l'environnement virtuel **et** installe les dépendances exactes verrouillées dans le projet (`pyproject.toml` + `uv.lock`).
 
 ```bash
-python3 -m venv .venv      # crée un dossier .venv qui contient un Python isolé
-source .venv/bin/activate  # "active" cet environnement : votre terminal utilise désormais ce Python
+uv sync                   # crée .venv, provisionne Python, installe toutes les dépendances
+uv run python mywi.py …   # lance une commande dans l'environnement, sans activation manuelle
 ```
 
-> 💡 **L'analogie** : un venv, c'est comme un atelier rangé pour un seul projet. Au lieu de mélanger les outils de tous vos chantiers dans la même boîte, vous avez une boîte par chantier.
+> 💡 **L'analogie** : un venv, c'est comme un atelier rangé pour un seul projet. Au lieu de mélanger les outils de tous vos chantiers dans la même boîte, vous avez une boîte par chantier. `uv` est l'assistant qui monte cet atelier pour vous : il choisit la bonne version de Python, range les bons outils, et vous évite d'oublier une étape.
+
+> 💡 **Sans `uv` (méthode `pip` classique)** — si vous ne voulez pas installer `uv`, vous pouvez créer l'environnement à la main avec les outils livrés avec Python, puis installer les dépendances depuis `requirements.txt` (une liste figée, équivalente à `uv.lock` pour `pip`) :
+> ```bash
+> python3 -m venv .venv      # crée un dossier .venv qui contient un Python isolé
+> source .venv/bin/activate  # "active" cet environnement : votre terminal utilise désormais ce Python
+> python -m pip install -r requirements.txt
+> ```
 
 ### 0.4 — Docker et le « conteneur »
 
@@ -117,7 +126,7 @@ git --version
 | Chemin | À installer | Section |
 |---|---|---|
 | A — Docker Compose | Docker Desktop | 1.4 |
-| B — Local | Python 3.10+ | 1.5 |
+| B — Local | `uv` (fournit Python ≥ 3.9) — ou Python 3.9+ pour le fallback pip | 1.5 |
 | C — Docker manuel | Docker Desktop | 1.4 |
 
 ### 1.4 — Installer Docker Desktop *(chemins A et C)*
@@ -134,10 +143,33 @@ docker compose version     # doit afficher Docker Compose version v2.x
 
 > 💡 Si la deuxième commande dit *not found*, vous avez une vieille version. Mettez Docker Desktop à jour : **Compose v2** est intégré depuis 2022.
 
-### 1.5 — Installer Python *(chemin B uniquement)*
+### 1.5 — Installer `uv` (chemin B — recommandé)
+
+`uv` se charge d'installer la bonne version de Python pour vous : vous n'avez **rien d'autre** à installer côté Python. Une seule commande selon votre système :
+
+```bash
+# macOS / Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# macOS (avec Homebrew)
+brew install uv
+
+# Multi-plateforme (si vous avez déjà pipx)
+pipx install uv
+```
+
+Vérifiez :
+
+```bash
+uv --version    # doit afficher uv 0.x.y
+```
+
+> 💡 Le projet épingle l'interpréteur à Python 3.11 (fichier `.python-version`), mais reste compatible Python ≥ 3.9. `uv sync` provisionnera automatiquement la bonne version — vous n'avez pas à la télécharger à la main.
+
+**Variante sans `uv` — installer Python soi-même pour le fallback pip** *(facultatif)* :
 
 1. Allez sur [python.org/downloads](https://www.python.org/downloads/).
-2. Téléchargez **Python 3.10 ou plus récent** (3.11 ou 3.12 sont parfaits).
+2. Téléchargez **Python 3.9 ou plus récent** (3.11 ou 3.12 sont parfaits).
 3. ⚠️ **Sur Windows**, pendant l'installation, **cochez la case « Add Python to PATH »** avant *Install*. Sans ça, le terminal ne trouvera pas Python.
 4. Vérifiez :
 
@@ -147,7 +179,7 @@ python3 --version
 py -3 --version
 ```
 
-Vous devez voir `Python 3.10.x` ou plus.
+Vous devez voir `Python 3.9.x` ou plus.
 
 ### 1.6 — Choisir un dossier de travail et cloner MWI
 
@@ -289,22 +321,36 @@ docker compose ps           # vérifier que le conteneur tourne
 
 ## 3. Chemin B — Installation locale Python
 
-**Idée générale** : on installe Python + les dépendances directement sur votre machine. Plus d'étapes qu'avec Docker, mais vous comprenez tout ce qui se passe.
+**Idée générale** : on installe Python + les dépendances directement sur votre machine. Plus d'étapes qu'avec Docker, mais vous comprenez tout ce qui se passe. On utilise **`uv`** (voir §0.3 et §1.5) qui orchestre tout pour vous ; une variante `pip` classique est donnée en fin de section pour celles et ceux qui ne veulent pas installer `uv`.
 
-### 3.1 — Créer un environnement virtuel
+### 3.1 — Installer l'environnement et les dépendances (`uv`)
 
-Rappel de la section 0.3 : un *venv* est un Python isolé, pour éviter d'écraser celui du système.
+Le projet décrit ses dépendances dans `pyproject.toml` et les **verrouille** (versions exactes) dans `uv.lock`. Une seule commande lit ces fichiers, crée le venv et installe tout :
+
+```bash
+uv sync
+```
+**Décodage** : `uv sync` provisionne la bonne version de Python (épinglée par `.python-version`), crée un dossier `.venv/`, puis installe toutes les bibliothèques de `uv.lock` (peewee, aiohttp, beautifulsoup4, nltk…). Comptez 1 à 3 minutes la première fois ; `uv` met en cache, donc les fois suivantes sont quasi instantanées.
+
+> 💡 **Pas besoin d'« activer » le venv.** Avec `uv`, on préfixe chaque commande par `uv run`, qui choisit automatiquement le bon Python : `uv run python mywi.py …`. (Si vous préférez l'activation classique, le venv créé par `uv` reste un venv standard : `source .venv/bin/activate` fonctionne aussi.)
+
+> 💡 **Sur la cascade fetch (sprint-403)** — les dépendances incluent `curl_cffi>=0.7.0`. Cette bibliothèque imite l'empreinte TLS de Chrome 120 et permet à MWI de récupérer les pages bloquées par Cloudflare (codes `403`/`429`) sans lancer de navigateur. Aucune action supplémentaire requise : `uv sync` l'installe automatiquement.
+
+> 💡 **Après modification de `pyproject.toml`** (ajout d'une dépendance), régénérez le verrou avec `make lock` (ou `uv lock`), puis `uv sync`. Le fichier `requirements.txt` est, lui, **généré** depuis le verrou : c'est un repli `pip`, pas la source de vérité.
+
+### 3.2 — Variante sans `uv` : venv + pip *(fallback)*
+
+Si vous n'avez pas installé `uv`, créez le venv à la main et installez les dépendances depuis `requirements.txt` (la liste figée, repli `pip` de `uv.lock`).
+
+**a) Créer le venv** — rappel de §0.3 : un *venv* est un Python isolé, pour éviter d'écraser celui du système.
 
 ```bash
 python3 -m venv .venv
 # Sur Windows si python3 n'existe pas :
 # py -3 -m venv .venv
 ```
-**Décodage** : `python3 -m venv` exécute le module `venv` ; `.venv` est le nom du dossier à créer (le point devant le rend discret dans `ls`).
 
-### 3.2 — Activer l'environnement virtuel
-
-⚠️ **À refaire à chaque nouvelle session de terminal**, sinon vous utiliserez le Python du système et MWI ne trouvera pas ses bibliothèques.
+**b) Activer le venv** — ⚠️ **à refaire à chaque nouvelle session de terminal**, sinon vous utiliserez le Python du système et MWI ne trouvera pas ses bibliothèques.
 
 | Système / Shell | Commande |
 |---|---|
@@ -313,31 +359,22 @@ python3 -m venv .venv
 | Windows — PowerShell | `.\.venv\Scripts\Activate.ps1` |
 | Windows — cmd.exe | `.\.venv\Scripts\activate.bat` |
 
-**Comment savoir si c'est activé ?** Votre invite de commande affiche `(.venv)` au tout début. Sans ça, l'activation a échoué.
+**Comment savoir si c'est activé ?** Votre invite de commande affiche `(.venv)` au tout début. Sans ça, l'activation a échoué. Pour **sortir** du venv : `deactivate`.
 
-```bash
-which python    # macOS/Linux : doit pointer vers .venv/bin/python
-where python    # Windows : doit pointer vers .venv\Scripts\python.exe
-```
-
-> 💡 **Pour sortir** du venv : `deactivate`.
-
-### 3.3 — Installer les dépendances
-
-On commence par mettre à jour `pip` (le gestionnaire de paquets Python), puis on installe les bibliothèques listées dans `requirements.txt`.
+**c) Installer les dépendances** :
 
 ```bash
 python -m pip install -U pip setuptools wheel
 python -m pip install -r requirements.txt
 ```
-**Décodage** : `pip install -U` met à jour ; `-r requirements.txt` lit la liste des paquets depuis ce fichier (peewee, aiohttp, beautifulsoup4, nltk…). Comptez 2 à 5 minutes la première fois.
+**Décodage** : `pip install -U` met à jour ; `-r requirements.txt` lit la liste figée des paquets depuis ce fichier. Comptez 2 à 5 minutes la première fois. Si `pip` se plaint sur macOS arm64, exécuter `pip install --upgrade pip` avant de relancer.
 
-> 💡 **Sur la cascade fetch (sprint-403)** — `requirements.txt` inclut `curl_cffi>=0.7.0`. Cette bibliothèque imite l'empreinte TLS de Chrome 120 et permet à MWI de récupérer les pages bloquées par Cloudflare (codes `403`/`429`) sans lancer de navigateur. Aucune action supplémentaire requise : l'installation est automatique. Si `pip` se plaint sur macOS arm64, exécuter `pip install --upgrade pip` avant de relancer (testé OK avec Python 3.13 + arm64).
+> 💡 **Dans cette variante**, les commandes des sections suivantes s'écrivent **sans** `uv run` (le venv est déjà activé) : `python scripts/install-basic.py`, `python mywi.py db setup`, etc.
 
-### 3.4 — Générer le fichier `settings.py`
+### 3.3 — Générer le fichier `settings.py`
 
 ```bash
-python scripts/install-basic.py
+uv run python scripts/install-basic.py    # variante pip (venv activé) : python scripts/install-basic.py
 ```
 **Ce qui se passe** : un assistant vous pose des questions (chemin de stockage, *user agent*, nombre de connexions parallèles…). Validez avec **Entrée** pour accepter les valeurs par défaut. Un fichier `settings.py` est créé à la racine.
 
@@ -347,30 +384,32 @@ python scripts/install-basic.py
 
 | Assistant | Ce qu'il ajoute à `settings.py` | Prérequis |
 |---|---|---|
-| `python scripts/install-basic.py` | Configuration de base (stockage, réseau) — **suffisant pour démarrer** | — |
-| `python scripts/install-api.py` | Clés d'API : SerpAPI (`land urlist`), SEO Rank (`land seorank`), OpenRouter (`land llm validate`) | Avoir des clés (détail en §6.1) |
-| `python scripts/install-llm.py` | Installation complète LLM : provider d'embeddings (OpenAI, Mistral, Gemini, HuggingFace, Ollama…), modèles NLI, backend FAISS | `pip install -r requirements-ml.txt` (~2 Go — détail en §6.2) |
+| `uv run python scripts/install-basic.py` | Configuration de base (stockage, réseau) — **suffisant pour démarrer** | — |
+| `uv run python scripts/install-api.py` | Clés d'API : SerpAPI (`land urlist`), SEO Rank (`land seorank`), OpenRouter (`land llm validate`) | Avoir des clés (détail en §6.1) |
+| `uv run python scripts/install-llm.py` | Installation complète LLM : provider d'embeddings (OpenAI, Mistral, Gemini, HuggingFace, Ollama…), modèles NLI, backend FAISS | `uv sync --extra ml` (~2 Go — détail en §6.2) |
+
+> 💡 Variante pip : remplacez `uv run python …` par `python …` (venv activé) et `uv sync --extra ml` par `pip install -r requirements-ml.txt`.
 
 > 💡 **Vous pouvez monter en gamme plus tard** : les assistants `api` et `llm` se lancent à tout moment sur un `settings.py` existant (une sauvegarde est faite avant modification). Commencez par `basic`, finissez l'installation, puis revenez en §6 quand vous aurez l'usage des API ou de l'analyse sémantique.
 
-### 3.5 — Initialiser la base de données
+### 3.4 — Initialiser la base de données
 
 ```bash
-python mywi.py db setup
+uv run python mywi.py db setup    # variante pip (venv activé) : python mywi.py db setup
 ```
 **Ce qui se passe** : MWI crée `data/mwi.db` (un fichier SQLite) et y crée toutes les tables.
 
-> ⚠️ **`db setup` est destructif** : si vous le relancez plus tard, il efface toutes vos données. Pour appliquer de nouvelles colonnes à une base existante, utilisez `python mywi.py db migrate` (non destructif).
+> ⚠️ **`db setup` est destructif** : si vous le relancez plus tard, il efface toutes vos données. Pour appliquer de nouvelles colonnes à une base existante, utilisez `uv run python mywi.py db migrate` (non destructif).
 
-### 3.6 — Vérifier
+### 3.5 — Vérifier
 
 ```bash
-python mywi.py land list
+uv run python mywi.py land list    # variante pip (venv activé) : python mywi.py land list
 ```
 
 Si vous voyez `0 lands` (et pas une erreur), c'est gagné.
 
-### 3.7 — Installer Mercury Parser (recommandé pour l'extraction propre)
+### 3.6 — Installer Mercury Parser (recommandé pour l'extraction propre)
 
 Mercury Parser est l'outil qui transforme une page web bruitée (publicités, menus…) en texte propre. Il est requis pour la commande `land readable`. Il s'installe via **npm**, le gestionnaire de paquets de Node.js.
 
@@ -438,7 +477,7 @@ Petit test concret pour vous assurer que la chaîne complète marche : créer un
 
 > ⚠️ Si **chemin A ou C** : préfixez chaque commande par `docker compose exec mwi` (ou `docker exec mwi`), ou bien entrez d'abord dans le conteneur (`docker compose exec mwi bash`).
 >
-> Si **chemin B** : assurez-vous que `(.venv)` apparaît dans votre invite. Sinon, réactivez (cf. 3.2).
+> Si **chemin B avec `uv`** : préfixez chaque commande `python …` ci-dessous par `uv run` (ex. `uv run python mywi.py land list`). **Avec la variante pip** : assurez-vous que `(.venv)` apparaît dans votre invite ; sinon, réactivez (cf. 3.2).
 
 ### 5.1 — Créer un Land de test
 
@@ -465,7 +504,10 @@ Vous voyez `TestInstall` avec ses termes : c'est gagné.
 ### 5.4 — Lancer la suite de tests automatiques *(facultatif mais rassurant)*
 
 ```bash
-# Chemin B
+# Chemin B (uv) — pytest est déjà installé par uv sync
+uv run pytest tests/ -q
+
+# Chemin B (variante pip, venv activé)
 pip install pytest pytest-cov
 pytest tests/ -q
 
@@ -502,8 +544,9 @@ Trois services externes peuvent être branchés à MWI :
 Lancez l'assistant interactif :
 
 ```bash
-# Chemin B
-python scripts/install-api.py
+# Chemin B (uv)
+uv run python scripts/install-api.py
+# Chemin B (variante pip, venv activé) : python scripts/install-api.py
 
 # Chemin A
 docker compose exec -it mwi python scripts/install-api.py
@@ -516,7 +559,11 @@ L'assistant vous demande chaque clé. Si vous n'en avez pas, validez avec **Entr
 Cela installe **PyTorch** et **sentence-transformers** (~2 Go), pour calculer la similarité sémantique entre paragraphes.
 
 ```bash
-# Chemin B
+# Chemin B (uv) — les extras ML sont dans le groupe optionnel "ml"
+uv sync --extra ml
+uv run python scripts/install-llm.py
+
+# Chemin B (variante pip, venv activé)
 python -m pip install -r requirements-ml.txt
 python scripts/install-llm.py
 
@@ -527,7 +574,7 @@ python scripts/install-llm.py
 Vérification :
 
 ```bash
-python mywi.py embedding check
+uv run python mywi.py embedding check    # variante pip (venv activé) : python mywi.py embedding check
 ```
 
 ### 6.3 — Activer Playwright (extraction des médias dynamiques)
@@ -535,8 +582,9 @@ python mywi.py embedding check
 Playwright pilote un vrai navigateur Chrome pour analyser les pages dont les images sont chargées en JavaScript.
 
 ```bash
-# Chemin B
-python install_playwright.py
+# Chemin B (uv)
+uv run python install_playwright.py
+# Chemin B (variante pip, venv activé) : python install_playwright.py
 
 # Chemin A
 docker compose exec mwi python install_playwright.py
@@ -603,7 +651,7 @@ docker compose exec mwi bash -lc "cp settings-example.py settings.py"
 
 ### 7.7 — `mercury-parser: command not found` lors d'un `land readable`
 
-Mercury Parser n'est pas installé ou pas dans le PATH. Voir 3.7. Dans Docker (chemins A et C), il est déjà inclus dans l'image officielle.
+Mercury Parser n'est pas installé ou pas dans le PATH. Voir 3.6. Dans Docker (chemins A et C), il est déjà inclus dans l'image officielle.
 
 ### 7.8 — Permission refusée sur `./scripts/docker-compose-setup.sh`
 
@@ -651,7 +699,11 @@ docker compose down
 docker compose up -d --build
 docker compose exec mwi python mywi.py db migrate
 
-# Chemin B : mettre à jour les dépendances et appliquer les migrations
+# Chemin B (uv) : resynchroniser les dépendances et appliquer les migrations
+uv sync
+uv run python mywi.py db migrate
+
+# Chemin B (variante pip) : mettre à jour les dépendances et appliquer les migrations
 source .venv/bin/activate
 python -m pip install -r requirements.txt --upgrade
 python mywi.py db migrate
@@ -695,9 +747,10 @@ rm -rf ~/mywi_data
 |---|---|
 | Cloner le code | `git clone https://github.com/MyWebIntelligence/mwi.git && cd mwi` |
 | Installer (chemin A) | `./scripts/docker-compose-setup.sh basic` |
-| Installer (chemin B) | `python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt && python scripts/install-basic.py && python mywi.py db setup` |
-| Tester | `python mywi.py land list` |
-| Premier land | `python mywi.py land create --name="X" --desc="Y"` |
+| Installer (chemin B — `uv`) | `uv sync && uv run python scripts/install-basic.py && uv run python mywi.py db setup` |
+| Installer (chemin B — fallback pip) | `python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt && python scripts/install-basic.py && python mywi.py db setup` |
+| Tester | `uv run python mywi.py land list` (ou `python mywi.py land list` avec le venv pip activé) |
+| Premier land | `uv run python mywi.py land create --name="X" --desc="Y"` |
 
 📚 **Suite logique** : `docs/mwi_tutorial_crawl.md` pour apprendre à crawler votre premier corpus.
 

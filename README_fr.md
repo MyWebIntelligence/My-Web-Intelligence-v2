@@ -170,34 +170,59 @@ Gestion : `docker stop mwi` · `docker start mwi` · `docker rm mwi`.
 
 ## Installation locale
 
-**Pré-requis** : Python 3.10+, pip, git.
+**Pré-requis** : [uv](https://docs.astral.sh/uv/) et git. uv provisionne
+l'interpréteur Python (3.9+) et l'environnement virtuel pour vous — aucune
+installation séparée de `python`/`pip`/`venv` n'est nécessaire.
 
+Installer uv une seule fois :
 ```bash
-# 1. Cloner et créer un environnement virtuel
+curl -LsSf https://astral.sh/uv/install.sh | sh        # macOS / Linux
+# Windows (PowerShell) : powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+# ou : brew install uv   /   pipx install uv
+```
+
+**Mise en place rapide :**
+```bash
+# 1. Cloner
 git clone https://github.com/MyWebIntelligence/mwi.git
 cd mwi
-python3 -m venv .venv
-# Windows PowerShell : py -3 -m venv .venv
-source .venv/bin/activate  # Windows PowerShell : .\.venv\Scripts\Activate.ps1 ; cmd.exe : .\.venv\Scripts\activate.bat
 
-# 2. Configurer (assistant)
-python -m pip install -U pip setuptools wheel
-python -m pip install -r requirements.txt
+# 2. Créer l'environnement depuis le lockfile (base + outils de dev).
+#    uv lit .python-version (3.11) et télécharge cet interpréteur si absent.
+uv sync
+
+# 3. Configurer (assistant interactif)
+uv run python scripts/install-basic.py
+
+# 4. Initialiser la base
+uv run python mywi.py db setup
+
+# 5. Vérifier
+uv run python mywi.py land list
+```
+
+`uv run <cmd>` s'exécute dans le venv du projet et le re-synchronise à la volée —
+pas besoin de `source .venv/bin/activate` (vous pouvez toujours activer `.venv`
+manuellement si vous préférez). Vous éditez les dépendances ? Modifiez
+`pyproject.toml`, puis lancez `make lock` (ou `uv lock`) pour rafraîchir
+`uv.lock` et le `requirements.txt` généré.
+
+**Repli pip (sans uv).** Un `requirements.txt` épinglé, aligné sur le lockfile,
+est toujours généré, donc le flux classique continue de fonctionner :
+```bash
+python3 -m venv .venv && source .venv/bin/activate   # Windows : .\.venv\Scripts\activate
+python -m pip install -U pip
+python -m pip install -r requirements.txt            # base (ajouter -r requirements-ml.txt pour le ML)
 python scripts/install-basic.py
-
-# 3. Initialiser la base
 python mywi.py db setup
-
-# 4. Vérifier
-python mywi.py land list
 ```
 
 **Étapes optionnelles**
 
-- APIs : `python scripts/install-api.py`
-- Embeddings/LLM : `python -m pip install -r requirements-ml.txt && python scripts/install-llm.py`
+- APIs : `uv run python scripts/install-api.py`
+- Embeddings/LLM : `uv sync --extra ml && uv run python scripts/install-llm.py`
 - Médias dynamiques (Playwright) :
-  - Navigateurs : `python install_playwright.py`
+  - Navigateurs : `uv run python install_playwright.py`
   - Dépendances Debian/Ubuntu : `sudo apt-get install libnspr4 libnss3 libdbus-1-3 libatk1.0-0 libatk-bridge2.0-0 libatspi2.0-0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libxkbcommon0 libasound2`
   - Docker : `docker compose exec mwi bash -lc "apt-get update && apt-get install -y <libs>"` puis `docker compose exec mwi python install_playwright.py`
   - **Note (sprint-403)** : Playwright est désormais aussi utilisé par la cascade
@@ -214,8 +239,8 @@ lancer de navigateur. Activée par défaut ; désactiver avec
 **Problèmes NLTK (Windows/macOS)**
 
 ```bash
-python -m nltk.downloader punkt punkt_tab
-# En cas d’erreur SSL : pip install certifi
+uv run python -m nltk.downloader punkt punkt_tab
+# En cas d’erreur SSL : uv pip install certifi
 ```
 
 ## Scripts utiles
@@ -674,8 +699,9 @@ MyWI inclut une suite de tests aux standards JOSS (≈98 tests répartis sur 8 f
 ### Démarrage rapide
 
 ```bash
-# Installer les dépendances de test
-pip install -r requirements.txt
+# Installer les dépendances de test (uv synchronise depuis uv.lock)
+uv sync
+# Repli pip : python -m pip install -r requirements.txt
 
 # Exécuter les tests de base (sans clés API, ~7 secondes)
 make test
@@ -736,19 +762,26 @@ make test-apis
 ## Pré-requis & installation
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -U pip setuptools wheel
+# uv synchronise base + outils de dev depuis uv.lock (provisionne Python 3.11)
+uv sync
+```
+
+Repli pip (sans uv) :
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+python -m pip install -U pip
 python -m pip install -r requirements.txt
 ```
 
 Option ML :
 
 ```bash
-python -m pip install -r requirements-ml.txt
+uv sync --extra ml
+# Repli pip : python -m pip install -r requirements-ml.txt
 ```
 
-Vérification : `python mywi.py embedding check`
+Vérification : `uv run python mywi.py embedding check`
 
 ## Modèles
 

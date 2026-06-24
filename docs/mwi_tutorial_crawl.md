@@ -2,6 +2,8 @@
 
 > **Prérequis** : MWI installé (voir `mwi_tutorial_install.md`). Vous savez ouvrir un terminal, entrer dans le dossier `mwi/`, et lancer `python mywi.py …`.
 >
+> 💡 **Comment lancer les commandes ci-dessous ?** Si vous avez suivi le chemin `uv` (recommandé), préfixez chaque `python mywi.py …` par `uv run` : `uv run python mywi.py land list`. Avec la variante `pip` (venv activé) ou dans Docker, tapez les commandes telles quelles. Pour rester lisibles, les exemples sont écrits sans le préfixe `uv run`.
+>
 > **Le contrat** : on va construire un corpus thématique de A à Z, en s'appuyant sur **un vrai exemple** — le corpus *Mélenchon* (169 199 pages crawlées entre 2024 et 2025). Chaque commande est suivie de la sortie réelle qu'elle a produite, pour que vous sachiez à quoi vous attendre.
 >
 > **Combien de temps ?** Lecture : 30 min. Reproduction sur un petit corpus de test : 2 h (la majorité étant l'attente du crawl).
@@ -815,7 +817,14 @@ Le résultat : un *pseudolink* entre les deux paragraphes, exporté en CSV.
 
 ### 8.2 — Pré-requis ML
 
+Les bibliothèques de machine learning (~2 Go : PyTorch, sentence-transformers…) sont regroupées dans le groupe optionnel `ml` du projet.
+
 ```bash
+# Avec uv (recommandé) — installe les extras ML
+uv sync --extra ml
+uv run python mywi.py embedding check
+
+# Variante sans uv (pip, venv activé)
 python -m pip install -r requirements-ml.txt
 python mywi.py embedding check
 ```

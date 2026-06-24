@@ -161,6 +161,49 @@ def extract_link_dom_map(raw_html: Optional[str], base_url: str,
         return {}
 
 
+def extract_all_links(raw_html: Optional[str], base_url: str,
+                      soup=None) -> list:
+    """All http(s) ``<a href>`` URLs of `raw_html`, **duplicates preserved**.
+
+    Unlike :func:`extract_link_dom_map` (which deduplicates via
+    ``setdefault``), this APPENDS every anchor so the caller can count
+    multiplicity (edge weight). URLs are resolved to absolute with
+    ``urljoin`` but **not** normalized — the caller applies
+    ``url_normalizer.normalize_url`` to align with the stored
+    ``Expression.url``. ``core.resolve_url`` is intentionally NOT used (it
+    lowercases the URL path).
+
+    Reuses the same filtering as ``extract_link_dom_map`` (skip
+    ``mailto:``/``javascript:``/``tel:``/``data:``/``#``; drop anything that
+    does not resolve to http(s)). Never raises — returns ``[]`` on any error.
+    """
+    links: list = []
+    try:
+        if soup is None:
+            if not raw_html:
+                return links
+            from bs4 import BeautifulSoup
+            try:
+                soup = BeautifulSoup(raw_html, 'lxml')
+            except Exception:
+                soup = BeautifulSoup(raw_html, 'html.parser')
+
+        for a_tag in soup.find_all('a', href=True):
+            href = (a_tag.get('href') or '').strip()
+            if not href or href.lower().startswith(SKIP_HREF_PREFIXES):
+                continue
+            if href.startswith(('http://', 'https://')):
+                absolute = href
+            else:
+                absolute = urljoin(base_url, href)
+                if not absolute.startswith(('http://', 'https://')):
+                    continue
+            links.append(absolute)
+        return links
+    except Exception:
+        return links
+
+
 def lookup_link_info(mapping: Dict[str, LinkDomInfo],
                      url: str) -> Optional[LinkDomInfo]:
     """Find the LinkDomInfo of `url` in a map built by extract_link_dom_map."""

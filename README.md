@@ -154,35 +154,58 @@ docker exec -it mwi python mywi.py land list
 
 ## Local Installation
 
-**Prerequisites:** Python 3.10+, pip, git
+**Prerequisites:** [uv](https://docs.astral.sh/uv/) and git. uv provisions the Python
+interpreter (3.9+) and the virtual environment for you — no separate
+`python`/`pip`/`venv` setup needed.
+
+Install uv once:
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh        # macOS / Linux
+# Windows (PowerShell): powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+# or: brew install uv   /   pipx install uv
+```
 
 **Quick setup:**
 ```bash
-# 1. Clone and create environment
+# 1. Clone
 git clone https://github.com/MyWebIntelligence/mwi.git
 cd mwi
-python3 -m venv .venv
-# Windows (PowerShell): py -3 -m venv .venv
-source .venv/bin/activate  # Windows: .\.venv\Scripts\activate
 
-# 2. Configure (interactive wizard)
-python -m pip install -U pip setuptools wheel
-python -m pip install -r requirements.txt
+# 2. Create the environment from the lockfile (base + dev tooling).
+#    uv reads .python-version (3.11) and downloads that interpreter if missing.
+uv sync
+
+# 3. Configure (interactive wizard)
+uv run python scripts/install-basic.py
+
+# 4. Initialize database
+uv run python mywi.py db setup
+
+# 5. Verify
+uv run python mywi.py land list
+```
+
+`uv run <cmd>` executes inside the project venv and re-syncs it on the fly — no
+`source .venv/bin/activate` required (you may still activate `.venv` manually if
+you prefer). Editing dependencies? Change `pyproject.toml`, then run `make lock`
+(or `uv lock`) to refresh `uv.lock` and the generated `requirements.txt`.
+
+**pip fallback (without uv).** A pinned, lock-matching `requirements.txt` is still
+generated, so the classic flow keeps working:
+```bash
+python3 -m venv .venv && source .venv/bin/activate   # Windows: .\.venv\Scripts\activate
+python -m pip install -U pip
+python -m pip install -r requirements.txt            # base (add -r requirements-ml.txt for ML)
 python scripts/install-basic.py
-
-# 3. Initialize database
 python mywi.py db setup
-
-# 4. Verify
-python mywi.py land list
 ```
 
 **Optional steps:**
 
-- **API configuration:** `python scripts/install-api.py`
-- **LLM/embeddings:** `python -m pip install -r requirements-ml.txt && python scripts/install-llm.py`
+- **API configuration:** `uv run python scripts/install-api.py`
+- **LLM/embeddings (ML extras):** `uv sync --extra ml && uv run python scripts/install-llm.py`
 - **Dynamic media (Playwright):**
-  - Browsers: `python install_playwright.py`
+  - Browsers: `uv run python install_playwright.py`
   - Debian/Ubuntu libs: `sudo apt-get install libnspr4 libnss3 libdbus-1-3 libatk1.0-0 libatk-bridge2.0-0 libatspi2.0-0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libxkbcommon0 libasound2`
   - Docker: `docker compose exec mwi bash -lc "apt-get update && apt-get install -y <libs>"` then `docker compose exec mwi python install_playwright.py`
   - **Note (sprint-403)**: Playwright is now also leveraged by the cascade fetch
@@ -199,8 +222,8 @@ turned off with `crawl_fallback_curl_cffi = False` in `settings.py`.
 
 **Troubleshooting NLTK (Windows/macOS):**
 ```bash
-python -m nltk.downloader punkt punkt_tab
-# If SSL errors: pip install certifi
+uv run python -m nltk.downloader punkt punkt_tab
+# If SSL errors: uv pip install certifi
 ```
 
 ---
@@ -982,10 +1005,11 @@ MyWI ships with a JOSS-grade test suite (≈98 tests across 8 files, ~87% covera
 ### Quick start
 
 ```bash
-# Install test dependencies
-pip install -r requirements.txt
+# Install test dependencies (uv installs the dev group — pytest, pytest-asyncio,
+# aioresponses, pytest-cov — automatically). pip fallback: pip install -r requirements.txt
+uv sync
 
-# Basic tests, no API keys, no network (~7 seconds)
+# Basic tests, no API keys, no network (~7 seconds). Make targets call `uv run` internally.
 make test
 
 # Same, with coverage report (open htmlcov/index.html)
@@ -1053,20 +1077,21 @@ Typical flow
 
 ## Prerequisites & Install
 - Database initialized and pages have readable text.
-- Create a clean pip‑only venv and install base deps:
+- Install dependencies (uv — recommended):
   ```bash
-  python3 -m venv .venv
-  source .venv/bin/activate
-  python -m pip install -U pip setuptools wheel
-  python -m pip install -r requirements.txt
+  uv sync                # base
+  uv sync --extra ml     # + NLI + FAISS acceleration
   ```
-- Optional (NLI + FAISS acceleration):
+- pip fallback (without uv):
   ```bash
-  python -m pip install -r requirements-ml.txt
+  python3 -m venv .venv && source .venv/bin/activate
+  python -m pip install -U pip
+  python -m pip install -r requirements.txt          # base
+  python -m pip install -r requirements-ml.txt       # + NLI + FAISS acceleration
   ```
 - Quick environment check:
   ```bash
-  python mywi.py embedding check
+  uv run python mywi.py embedding check
   ```
 
 
@@ -1463,8 +1488,8 @@ Environment-configurable variables:
 - `MWI_OPENROUTER_API_KEY`
 - `MWI_OPENROUTER_MODEL` (e.g. `openai/gpt-4o-mini`, `anthropic/claude-3-haiku`)
 - `MWI_OPENROUTER_TIMEOUT` (default `15` seconds)
-- `MWI_OPENROUTER_READABLE_MAX_CHARS` (default `6000`)
-- `MWI_OPENROUTER_MAX_CALLS_PER_RUN` (default `500`)
+- `MWI_OPENROUTER_MAX_CHARS` (default `12000`)
+- `MWI_OPENROUTER_MAX_CALLS` (default `500`)
 
 Note: When disabled or not configured, the system behaves exactly as before.
 

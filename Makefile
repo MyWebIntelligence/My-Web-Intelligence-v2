@@ -1,4 +1,4 @@
-.PHONY: help test test-basic test-all test-cov test-quick test-apis test-integration clean install
+.PHONY: help test test-basic test-all test-cov test-quick test-apis test-integration clean install install-ml lock
 
 # Default target
 .DEFAULT_GOAL := help
@@ -14,26 +14,33 @@ help: ## Show this help message
 	@echo "  MWI_SEORANK_API_KEY     - SEO Rank API key"
 	@echo "  MWI_OPENROUTER_API_KEY  - OpenRouter API key for LLM tests"
 
-install: ## Install dependencies
-	pip install -r requirements.txt
+install: ## Install dependencies (base + dev group) into .venv via uv
+	uv sync
+
+install-ml: ## Install with optional ML extras (FAISS + transformers/torch)
+	uv sync --extra ml
+
+lock: ## Re-resolve and refresh uv.lock, then regenerate requirements.txt
+	uv lock
+	uv export --no-hashes --no-default-groups --no-emit-project --no-annotate -o requirements.txt
 
 test: test-basic ## Run basic tests (no API keys required) - alias for test-basic
 
 test-basic: ## Run basic tests without API keys
 	@echo "Running basic tests (no API keys required)..."
-	PYTHONPATH=. pytest tests/ -v -m "not (serpapi or seorank or openrouter or mercury or playwright or integration)"
+	PYTHONPATH=. uv run pytest tests/ -v -m "not (serpapi or seorank or openrouter or mercury or playwright or integration)"
 
 test-all: ## Run all tests including those requiring API keys
 	@echo "Running all tests..."
-	PYTHONPATH=. pytest tests/ -v
+	PYTHONPATH=. uv run pytest tests/ -v
 
 test-quick: ## Quick smoke test (installation only)
 	@echo "Running quick smoke test..."
-	PYTHONPATH=. pytest tests/test_01_installation.py -v
+	PYTHONPATH=. uv run pytest tests/test_01_installation.py -v
 
 test-cov: ## Run tests with coverage report
 	@echo "Running tests with coverage..."
-	PYTHONPATH=. pytest tests/ --cov=mwi --cov-report=html --cov-report=term -m "not (serpapi or seorank or openrouter or mercury or playwright or integration)"
+	PYTHONPATH=. uv run pytest tests/ --cov=mwi --cov-report=html --cov-report=term -m "not (serpapi or seorank or openrouter or mercury or playwright or integration)"
 	@echo ""
 	@echo "Coverage report generated: htmlcov/index.html"
 
@@ -50,26 +57,26 @@ test-apis: ## Run API tests (requires API keys)
 		echo "Warning: No API keys set. Tests will be skipped."; \
 		echo "Set MWI_SERPAPI_API_KEY, MWI_SEORANK_API_KEY, or MWI_OPENROUTER_API_KEY"; \
 	fi
-	PYTHONPATH=. pytest tests/ -v -m "serpapi or seorank or openrouter"
+	PYTHONPATH=. uv run pytest tests/ -v -m "serpapi or seorank or openrouter"
 
 test-integration: ## Run integration tests (slow, requires APIs)
 	@echo "Running integration tests..."
-	PYTHONPATH=. pytest tests/ -v -m "integration"
+	PYTHONPATH=. uv run pytest tests/ -v -m "integration"
 
 test-01: ## Run test_01_installation.py
-	PYTHONPATH=. pytest tests/test_01_installation.py -v
+	PYTHONPATH=. uv run pytest tests/test_01_installation.py -v
 
 test-02: ## Run test_02_land_management.py
-	PYTHONPATH=. pytest tests/test_02_land_management.py -v
+	PYTHONPATH=. uv run pytest tests/test_02_land_management.py -v
 
 test-03: ## Run test_03_data_collection.py
-	PYTHONPATH=. pytest tests/test_03_data_collection.py -v -m "not (serpapi or seorank or openrouter)"
+	PYTHONPATH=. uv run pytest tests/test_03_data_collection.py -v -m "not (serpapi or seorank or openrouter)"
 
 test-04: ## Run test_04_export.py
-	PYTHONPATH=. pytest tests/test_04_export.py -v
+	PYTHONPATH=. uv run pytest tests/test_04_export.py -v
 
 test-05: ## Run test_05_media_analysis.py
-	PYTHONPATH=. pytest tests/test_05_media_analysis.py -v
+	PYTHONPATH=. uv run pytest tests/test_05_media_analysis.py -v
 
 clean: ## Clean test artifacts and cache
 	@echo "Cleaning test artifacts..."
@@ -83,11 +90,11 @@ clean: ## Clean test artifacts and cache
 
 list-tests: ## List all available tests
 	@echo "Listing all tests..."
-	PYTHONPATH=. pytest tests/ --collect-only -q
+	PYTHONPATH=. uv run pytest tests/ --collect-only -q
 
 list-markers: ## Show available pytest markers
 	@echo "Available pytest markers:"
-	PYTHONPATH=. pytest --markers | grep -A 1 "@pytest.mark"
+	PYTHONPATH=. uv run pytest --markers | grep -A 1 "@pytest.mark"
 
 check: test-quick test-cov ## Run quick test + coverage (recommended for CI)
 

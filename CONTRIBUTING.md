@@ -25,15 +25,19 @@ Feature requests are welcome! Please open an issue with:
 ### Submitting Pull Requests
 
 1. **Fork the repository** and create your branch from `master`
-2. **Set up your development environment**:
+2. **Set up your development environment** (the project uses [uv](https://docs.astral.sh/uv/); `pyproject.toml` + `uv.lock` are the source of truth):
    ```bash
    git clone https://github.com/YOUR_USERNAME/mwi.git
    cd mwi
-   python -m venv venv
-   source venv/bin/activate  # or venv\Scripts\activate on Windows
-   pip install -r requirements.txt
-   pip install -r requirements-dev.txt  # if available
+   # Install uv once: curl -LsSf https://astral.sh/uv/install.sh | sh  (or brew/pipx)
+   uv sync                 # creates .venv + installs base deps AND the dev/test tooling (dev group)
+   uv run pytest           # or: make test   (Makefile targets already call `uv run`)
+   # ML extras for embeddings/NLI work:  uv sync --extra ml
    ```
+
+   When you change dependencies, edit `pyproject.toml`, then run `make lock`
+   (which runs `uv lock` and regenerates the pinned `requirements.txt`).
+   Commit `uv.lock`.
 
 3. **Make your changes** following the code style guidelines below
 
@@ -93,16 +97,19 @@ Feature requests are welcome! Please open an issue with:
 # Clone and install
 git clone https://github.com/MyWebIntelligence/mwi.git
 cd mwi
-python -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
+# Install uv once: curl -LsSf https://astral.sh/uv/install.sh | sh  (or brew/pipx)
+uv sync                 # creates .venv + installs base deps AND the dev/test tooling (dev group)
 
 # Initialize database
-python mywi.py db setup
+uv run python mywi.py db setup
 
 # Run tests
-make test
+make test                # Makefile targets already call `uv run`
 ```
+
+When you change dependencies, edit `pyproject.toml`, then run `make lock`
+(which runs `uv lock` and regenerates the pinned `requirements.txt`).
+Commit `uv.lock`.
 
 ### Optional Dependencies
 
@@ -111,10 +118,10 @@ make test
 npm install -g @postlight/mercury-parser
 
 # For Playwright (dynamic media extraction)
-python install_playwright.py
+uv run python install_playwright.py
 
 # For ML features (embeddings, NLI)
-pip install -r requirements-ml.txt
+uv sync --extra ml
 ```
 
 ### Docker Development

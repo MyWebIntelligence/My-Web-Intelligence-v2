@@ -10,5 +10,12 @@ LICENSE
 
 data
 venv
+.venv
+**/.venv
+.pytest_cache
+.mypy_cache
+htmlcov
+*.db
+*.sqlite3
 **/*.pyc
 **/__pycache__

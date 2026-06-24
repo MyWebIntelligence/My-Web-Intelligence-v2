@@ -23,8 +23,11 @@ import re
 from textwrap import dedent
 import unicodedata
 from lxml import etree
+from urllib.parse import urlparse
 from zipfile import ZipFile
 from . import model
+from .link_context import extract_all_links
+from .url_normalizer import normalize_url
 
 
 class Export:
@@ -46,13 +49,16 @@ class Export:
     land = None
     relevance = 1
 
-    def __init__(self, export_type: str, land: model.Land, minimum_relevance: int):
+    def __init__(self, export_type: str, land: model.Land, minimum_relevance: int,
+                 fullhtml: bool = False):
         """Initialize an Export instance with specified parameters.
 
         Args:
             export_type: The format type for export (e.g., 'pagecsv', 'gexf', 'corpus').
             land: The Land model instance representing the research project.
             minimum_relevance: Minimum relevance score threshold for including expressions.
+            fullhtml: When True (and export_type == 'nodelinkcsv'), also emit the
+                raw-HTML link network files (*fullhtml.csv). Ignored otherwise.
 
         Notes:
             The export_type determines which write method will be called.
@@ -61,6 +67,7 @@ class Export:
         self.type = export_type
         self.land = land
         self.relevance = minimum_relevance
+        self.fullhtml = fullhtml
 
     def write(self, export_type: str, filename):
         """Proxy method that dispatches to appropriate format-specific writer.
@@ -287,6 +294,17 @@ class Export:
         total += self._write_domainnodes(f"{base}_domainnodes.csv")
         total += self._write_domainlinks(f"{base}_domainlinks.csv")
 
+        # Opt-in raw-HTML link network (sprint fullhtml-linknetwork).
+        # Closed network: every <a href> of expression.html restricted to
+        # in-land targets; weight = anchor multiplicity; in_mywi flags edges
+        # also present in ExpressionLink. Node files reuse the base writers
+        # (same node set as the MyWI graph -> directly comparable).
+        if getattr(self, 'fullhtml', False):
+            total += self._write_pagesnodes(f"{base}_pagesnodesfullhtml.csv")
+            total += self._write_pageslinksfullhtml(f"{base}_pageslinksfullhtml.csv")
+            total += self._write_domainnodes(f"{base}_domainnodesfullhtml.csv")
+            total += self._write_domainlinksfullhtml(f"{base}_domainlinksfullhtml.csv")
+
         return total
 
     def _write_pagesnodes(self, filename) -> int:
@@ -461,6 +479,219 @@ class Export:
         cursor = self.get_sql_cursor(sql, col_map)
         count = self.write_csv(filename, col_map.keys(), cursor)
         print(f"  - domainlinks.csv: {count} domain links")
+        return count
+
+    # ------------------------------------------------------------------ #
+    # Raw-HTML link network (sprint fullhtml-linknetwork)                 #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _host_path_key(url):
+        """Scheme-and-www-insensitive key: host(no www) + path + query.
+
+        Absorbs http<->https / www<->bare / redirect divergences when
+        force_https/strip_www are OFF. Returns None on failure / no host.
+        """
+        try:
+            p = urlparse(url)
+            host = (p.netloc or '').lower()
+            if host.startswith('www.'):
+                host = host[4:]
+            if not host:
+                return None
+            key = host + (p.path or '').rstrip('/')
+            if p.query:
+                key += '?' + p.query
+            return key
+        except Exception:
+            return None
+
+    @staticmethod
+    def _index_url_key(index, key, eid):
+        """Insert key->eid; mark None (ambiguous) on conflicting ids."""
+        if not key:
+            return
+        if key in index:
+            if index[key] != eid:
+                index[key] = None  # ambiguous -> unusable for lookup
+        else:
+            index[key] = eid
+
+    def _fullhtml_lookup(self, idx, href):
+        """Resolve a raw href to an in-land expression id (closed network).
+
+        Tries three keys in priority order: exact normalize_url, relaxed
+        (lower + no trailing slash), host+path. None on miss/ambiguous.
+        """
+        exact, relaxed, host_path = idx
+        try:
+            norm = normalize_url(href)
+        except Exception:
+            norm = href
+        if not norm:
+            return None
+        eid = exact.get(norm)
+        if eid is not None:
+            return eid
+        eid = relaxed.get(norm.lower().rstrip('/'))
+        if eid is not None:
+            return eid
+        hp = self._host_path_key(norm)
+        if hp is not None:
+            eid = host_path.get(hp)
+            if eid is not None:
+                return eid
+        return None
+
+    def _write_pageslinksfullhtml(self, filename) -> int:
+        """Page link graph rebuilt from raw <a href> in expression.html.
+
+        Closed network: targets are restricted to in-land expressions
+        qualifying by minrel (same node set as _pageslinks). Columns:
+        source_id, source_url, source_domain_id, target_id, target_url,
+        target_domain_id, weight, in_mywi.
+
+        Single streaming pass over stored HTML. ALL lookups are preloaded
+        before the streaming cursor opens: MWI uses one shared DB connection,
+        so no second statement / lazy FK access may run during iteration.
+        weight = number of <a> anchors source->target; in_mywi = 1 when the
+        edge also exists in ExpressionLink (both endpoints qualified).
+
+        Side effect: stashes the inter-domain accumulator on self for
+        _write_domainlinksfullhtml (avoids a second HTML pass).
+        """
+        land_id = self.land.get_id()
+        minrel = self.relevance
+
+        # --- preload lookups (drained BEFORE the streaming cursor opens) ---
+        exact, relaxed, host_path = {}, {}, {}
+        url_of, domain_of = {}, {}
+        cur = model.DB.execute_sql(
+            "SELECT id, url, domain_id FROM expression "
+            "WHERE land_id = ? AND relevance >= ?", (land_id, minrel))
+        for eid, url, domain_id in cur.fetchall():
+            url_of[eid] = url
+            domain_of[eid] = domain_id
+            try:
+                norm = normalize_url(url) if url else url
+            except Exception:
+                norm = url
+            if not norm:
+                continue
+            self._index_url_key(exact, norm, eid)
+            self._index_url_key(relaxed, norm.lower().rstrip('/'), eid)
+            self._index_url_key(host_path, self._host_path_key(norm), eid)
+        idx = (exact, relaxed, host_path)
+
+        domain_name = {}
+        for did, name in model.DB.execute_sql(
+                "SELECT id, name FROM domain").fetchall():
+            domain_name[did] = name
+
+        mywi_page_edges = set()
+        cur = model.DB.execute_sql(
+            "WITH idx(x) AS (SELECT id FROM expression "
+            "WHERE land_id = ? AND relevance >= ?) "
+            "SELECT source_id, target_id FROM expressionlink "
+            "WHERE source_id IN idx AND target_id IN idx", (land_id, minrel))
+        for s, t in cur.fetchall():
+            mywi_page_edges.add((s, t))
+
+        mywi_domain_edges = set()
+        cur = model.DB.execute_sql(
+            "WITH idx(x) AS (SELECT id FROM expression "
+            "WHERE land_id = ? AND relevance >= ?) "
+            "SELECT DISTINCT e1.domain_id, e2.domain_id "
+            "FROM expressionlink link "
+            "JOIN expression e1 ON e1.id = link.source_id "
+            "JOIN expression e2 ON e2.id = link.target_id "
+            "WHERE link.source_id IN idx AND link.target_id IN idx "
+            "AND e1.domain_id != e2.domain_id", (land_id, minrel))
+        for d1, d2 in cur.fetchall():
+            mywi_domain_edges.add((d1, d2))
+        self._fullhtml_mywi_domain_edges = mywi_domain_edges
+
+        # --- streaming pass over stored HTML (only live statement now) ---
+        header = ['source_id', 'source_url', 'source_domain_id',
+                  'target_id', 'target_url', 'target_domain_id',
+                  'weight', 'in_mywi']
+        domain_acc = {}
+        pages_total = pages_with_html = 0
+        raw_edges = matched = count = 0
+
+        src_cursor = model.DB.execute_sql(
+            "SELECT id, url, domain_id, html FROM expression "
+            "WHERE land_id = ? AND relevance >= ?", (land_id, minrel))
+
+        with open(filename, 'w', newline='\n', encoding='utf-8') as file:
+            writer = csv.writer(file, quoting=csv.QUOTE_ALL)
+            writer.writerow(header)
+            for sid, surl, sdom, shtml in src_cursor:
+                pages_total += 1
+                if not shtml:
+                    continue
+                pages_with_html += 1
+                per_target = {}
+                for href in extract_all_links(shtml, surl):
+                    tid = self._fullhtml_lookup(idx, href)
+                    if tid is not None:
+                        per_target[tid] = per_target.get(tid, 0) + 1
+                for tid, weight in per_target.items():
+                    td = domain_of.get(tid)
+                    is_in = 1 if (sid, tid) in mywi_page_edges else 0
+                    raw_edges += 1
+                    matched += is_in
+                    writer.writerow([sid, surl, sdom, tid, url_of.get(tid),
+                                     td, weight, is_in])
+                    count += 1
+                    if td is not None and sdom != td:
+                        domain_acc[(sdom, td)] = domain_acc.get((sdom, td), 0) + weight
+
+        self._fullhtml_domain_acc = domain_acc
+        self._fullhtml_domain_name = domain_name
+
+        # --- coverage / 3-way diff report ---
+        raw_only = raw_edges - matched
+        mywi_only = len(mywi_page_edges) - matched
+        self._fullhtml_stats = {
+            'pages_total': pages_total, 'pages_with_html': pages_with_html,
+            'raw_edges': raw_edges, 'matched': matched,
+            'raw_only': raw_only, 'mywi_only': mywi_only,
+        }
+        pct = (100.0 * pages_with_html / pages_total) if pages_total else 0.0
+        print(f"  - pageslinksfullhtml.csv: {count} raw edges "
+              f"({pages_with_html}/{pages_total} pages have stored HTML, {pct:.1f}%)")
+        print(f"      raw∩mywi (in_mywi=1): {matched} | "
+              f"raw\\mywi (in_mywi=0): {raw_only} | mywi\\raw: {mywi_only}")
+        if pages_with_html == 0:
+            print("      WARNING: no stored HTML for this land — crawl with "
+                  "--fullhtml=TRUE or run 'land consolidate' on a "
+                  "fullhtml-crawled land. Raw link network is empty.")
+        return count
+
+    def _write_domainlinksfullhtml(self, filename) -> int:
+        """Inter-domain link graph from the raw-HTML page edges.
+
+        Drains the accumulator built by _write_pageslinksfullhtml (no second
+        HTML pass). Inter-domain only; link_count = sum of page-edge weights;
+        in_mywi = 1 when the domain pair exists in the MyWI inter-domain graph.
+        """
+        domain_acc = getattr(self, '_fullhtml_domain_acc', {})
+        domain_name = getattr(self, '_fullhtml_domain_name', {})
+        mywi_domain_edges = getattr(self, '_fullhtml_mywi_domain_edges', set())
+        header = ['source_domain_id', 'source_domain_name', 'target_domain_id',
+                  'target_domain_name', 'link_count', 'in_mywi']
+        rows = sorted(domain_acc.items(), key=lambda kv: kv[1], reverse=True)
+        count = 0
+        with open(filename, 'w', newline='\n', encoding='utf-8') as file:
+            writer = csv.writer(file, quoting=csv.QUOTE_ALL)
+            writer.writerow(header)
+            for (sd, td), weight in rows:
+                is_in = 1 if (sd, td) in mywi_domain_edges else 0
+                writer.writerow([sd, domain_name.get(sd), td,
+                                 domain_name.get(td), weight, is_in])
+                count += 1
+        print(f"  - domainlinksfullhtml.csv: {count} domain links")
         return count
 
     @staticmethod

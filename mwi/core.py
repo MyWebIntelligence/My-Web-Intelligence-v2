@@ -2603,7 +2603,8 @@ def expression_relevance(dictionary, expression: model.Expression) -> int:
     return sum(title_relevance) + sum(content_relevance)
 
 
-def export_land(land: model.Land, export_type: str, minimum_relevance: int):
+def export_land(land: model.Land, export_type: str, minimum_relevance: int,
+                fullhtml: bool = False):
     """Export land data to a file in the specified format.
 
     This function creates an export file containing land data filtered by
@@ -2613,6 +2614,8 @@ def export_land(land: model.Land, export_type: str, minimum_relevance: int):
         land: The Land object to export.
         export_type: The export format (e.g., 'pagecsv', 'pagegexf', 'corpus').
         minimum_relevance: Minimum relevance score filter for expressions.
+        fullhtml: When True and export_type == 'nodelinkcsv', also emit the
+            raw-HTML link network files (*fullhtml.csv). Ignored otherwise.
 
     Notes:
         - Output filename includes land name, export type, and timestamp.
@@ -2624,7 +2627,7 @@ def export_land(land: model.Land, export_type: str, minimum_relevance: int):
     date_tag = model.datetime.datetime.now().strftime("%Y%m%d%H%M%S")
     filename = path.join(settings.data_location, 'export_land_%s_%s_%s') \
                % (land.name, export_type, date_tag)
-    export = Export(export_type, land, minimum_relevance)
+    export = Export(export_type, land, minimum_relevance, fullhtml=fullhtml)
     count = export.write(export_type, filename)
     if count > 0:
         print("Successfully exported %s records to %s" % (count, filename))

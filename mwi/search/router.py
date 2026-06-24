@@ -46,6 +46,11 @@ class SearchRouter:
     def register(self, provider: BaseProvider) -> bool:
         """Register a provider if it reports as configured.
 
+        The router's configured ``timeout`` is propagated onto the provider
+        instance so that the per-request ``ClientTimeout`` each adapter
+        builds (``ClientTimeout(total=self.timeout)``) honours
+        ``settings.SEARCH_PROVIDER_TIMEOUT``.
+
         Returns ``True`` when the provider was registered, ``False``
         otherwise. Already-registered providers (same ``name``) are
         rejected silently.
@@ -56,6 +61,7 @@ class SearchRouter:
         if any(p.name == provider.name for p in self._providers):
             _LOG.info("router: provider %s already registered", provider.name)
             return False
+        provider.timeout = self._timeout
         self._providers.append(provider)
         return True
 

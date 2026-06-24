@@ -237,3 +237,18 @@ def test_search_run_filters_providers(land_fixture, monkeypatch):
     logs = list(m.SearchResultLog.select())
     assert all("searxng" in l.providers for l in logs)
     assert all("brave" not in l.providers for l in logs)
+
+
+def test_build_router_reads_search_provider_timeout(fresh_db, monkeypatch):
+    """`_build_router` reads settings.SEARCH_PROVIDER_TIMEOUT and propagates it
+    to the always-configured SearXNG provider (regression: the value used to be
+    dead config — never read by the router nor reaching any provider)."""
+    controller = fresh_db["controller"]
+    import settings as _settings
+    monkeypatch.setattr(_settings, "SEARCH_PROVIDER_TIMEOUT", 11, raising=False)
+
+    router = controller.SearchController._build_router()
+    assert router._timeout == 11
+    searxng = next((p for p in router.providers if p.name == "searxng"), None)
+    assert searxng is not None
+    assert searxng.timeout == 11

@@ -1,5 +1,8 @@
 # Optional ML extras (install in addition to requirements.txt)
 # Enables ANN + NLI (FAISS + transformers/sentencepiece/torch)
+#
+# Source of truth: [project.optional-dependencies].ml in pyproject.toml.
+# For a reproducible, lock-backed install prefer:  uv sync --extra ml
 
 torch>=2.2
 transformers>=4.40

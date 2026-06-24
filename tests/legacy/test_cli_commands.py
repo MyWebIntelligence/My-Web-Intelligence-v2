@@ -105,7 +105,7 @@ def test_land_addterm_addurl_and_crawl_readable_export(fresh_db, tmp_path, monke
 
     calls = {"count": 0}
 
-    def fake_export_land(land_obj, export_type, minrel):
+    def fake_export_land(land_obj, export_type, minrel, fullhtml=False):
         calls["count"] += 1
         return None
 
@@ -971,10 +971,11 @@ def test_core_export_land_and_tags(monkeypatch, fresh_db):
     captured = {"land": None, "type": None, "minrel": None, "tags": 0}
 
     class DummyExport:
-        def __init__(self, export_type, land_obj, minimum):
+        def __init__(self, export_type, land_obj, minimum, fullhtml=False):
             captured["land"] = land_obj
             captured["type"] = export_type
             captured["minrel"] = minimum
+            captured["fullhtml"] = fullhtml
 
         def write(self, export_type, filename):
             captured["written"] = export_type
