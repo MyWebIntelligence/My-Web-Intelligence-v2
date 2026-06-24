@@ -198,6 +198,24 @@ class Expression(BaseModel):
     # fetch_method records which strategy supplied the HTML (sprint-403 cascade audit)
     fetch_method = CharField(max_length=32, null=True)
 
+    class Meta:
+        """Composite indexes for the client read paths (MyWebClient/API).
+
+        The single-column indexes on url, land and domain already come from
+        ``url = TextField(index=True)`` and the ForeignKey defaults above.
+        These composites serve the hot "list a land, filtered + sorted by
+        relevance" query and the per-land aggregations; ``(land, relevance,
+        id)`` also covers any bare ``WHERE land_id = ?`` via its leftmost
+        prefix, so no standalone land index is needed.
+        """
+        indexes = (
+            (('land', 'relevance', 'id'), False),
+            (('land', 'http_status'), False),
+            (('land', 'depth'), False),
+            (('land', 'domain'), False),
+            (('land', 'fetch_method'), False),
+        )
+
 
 class ExpressionLink(BaseModel):
     """Directed link relationship between two expressions.

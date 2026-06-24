@@ -1,0 +1,75 @@
+# .pre-commit-config.yaml
+#
+# Verrou d'enforcement côté git : ces hooks s'exécutent avant chaque commit et le
+# refusent s'il ne respecte pas la charte. C'est le filet qui agit avant même Claude
+# Code. Règle d'arbitrage : ce qui bloque un commit va ici et en CI, pas dans CLAUDE.md.
+#
+# Installation (le projet est piloté par uv) :
+#   uv tool install pre-commit            (ou : pipx install pre-commit)
+#   uv sync                               # les hooks ruff/mypy tournent dans cet environnement
+#   pre-commit install
+#   pre-commit install --hook-type commit-msg   # seulement si tu actives Conventional Commits
+#   pre-commit run --all-files                  # premier passage sur tout le code
+#
+# Mettre à jour les versions des hooks externes : pre-commit autoupdate.
+# Les hooks ruff et mypy sont locaux (`uv run`) : leur version vient de uv.lock,
+# identique à `make` et à la CI. Ils nécessitent uv sur le PATH et un env synchronisé.
+
+default_language_version:
+  # python3 (et non 3.12) : le projet supporte 3.9+, on n'impose pas une version
+  # qui pourrait manquer sur la machine. Ne concerne que les hooks d'hygiène ci-dessous.
+  python: python3
+
+repos:
+  # --- Hygiène de base des fichiers --------------------------------------
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml          # valide pyproject.toml
+      - id: check-added-large-files
+        args: ["--maxkb=1024"]  # corpus / HTML / exports vivent dans data_location (hors dépôt)
+      - id: check-merge-conflict
+      - id: detect-private-key  # sécurité : empêche de commiter une clé privée
+
+  # --- Ruff + mypy : hooks locaux via uv ---------------------------------
+  # Version unique (uv.lock), partagée avec make et la CI. Ruff lit sa configuration
+  # dans pyproject.toml (familles E,W,F,I,N,UP,B,S,C4,SIM,ASYNC,RUF ; S = sécurité
+  # Bandit). mypy lit [tool.mypy] de pyproject (typage progressif, PAS de --strict
+  # global) et tourne dans l'environnement du projet, donc voit toutes les dépendances.
+  # Alternative si tu préfères l'isolation à rev épinglée : le hook officiel
+  # astral-sh/ruff-pre-commit ; mais sa version peut diverger de uv.lock.
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check (uv run)
+        entry: uv run ruff check --fix
+        language: system
+        types_or: [python, pyi]
+      - id: ruff-format
+        name: ruff format (uv run)
+        entry: uv run ruff format
+        language: system
+        types_or: [python, pyi]
+      - id: mypy
+        name: mypy (uv run, config pyproject)
+        entry: uv run mypy
+        language: system
+        types: [python]
+        pass_filenames: false   # mypy s'exécute sur le paquet entier, pas fichier par fichier
+        args: ["mwi"]
+
+  # --- Conventional Commits (OPTIONNEL) ----------------------------------
+  # Valide le format du message de commit. Ne s'active QUE si tu installes le hook
+  # commit-msg : `pre-commit install --hook-type commit-msg`. Retirer ce bloc si le
+  # projet n'utilise pas Conventional Commits.
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v4.4.0
+    hooks:
+      - id: conventional-pre-commit   # stage commit-msg (déclaré par le hook lui-même)
+
+# Note : pre-commit n'exécute PAS la suite de tests (trop lent pour un commit).
+# pytest reste lancé par `make test` et par la CI ; le hook Claude Code post-édition
+# applique ruff + mypy sur le fichier édité.

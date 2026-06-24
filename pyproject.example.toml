@@ -1,0 +1,223 @@
+# pyproject.toml — MyWebIntelligence (MWI)
+#
+# Source unique de vérité du projet : dépendances, et configuration de l'outillage
+# de qualité (Ruff, mypy, pytest, couverture). Les règles .claude/ ne font que
+# décrire ce que ce fichier applique mécaniquement.
+#
+# Base : ce fichier reprend la configuration réelle du dépôt ([project],
+# dépendances, extra `ml`, groupe `dev`, [tool.uv]) et y ajoute les sections
+# d'outillage absentes jusqu'ici.
+#
+# Deux choix dévient volontairement de la config actuelle, à valider :
+#   1. flake8 est remplacé par Ruff (lint + format + sécurité). Pour garder flake8,
+#      rétablir la ligne dans [dependency-groups].dev et retirer [tool.ruff].
+#   2. mypy n'active PAS `strict = true` globalement : le code existant n'est pas
+#      intégralement typé et Peewee se prête mal au typage. Le typage strict se
+#      resserre module par module (voir [tool.mypy]).
+# Adopter Ruff sur un code existant implique une passe initiale (`ruff format` puis
+# `ruff check --fix`, et le traitement des avertissements restants).
+
+[project]
+name = "mywebintelligence"
+version = "1.0.0"
+description = "Reproducible web-mining toolkit for digital methods in the social sciences and humanities (MyWebIntelligence / MWI)."
+readme = "README.md"
+license = { file = "LICENSE" }
+# Plancher réel du projet. Si tu abandonnes le support de 3.9, monter cette valeur
+# et, en miroir, `target-version` (Ruff) et `python_version` (mypy) ci-dessous.
+requires-python = ">=3.9"
+authors = [
+    { name = "Amar Lakel", email = "amar.lakel@u-bordeaux-montaigne.fr" },
+]
+
+# Dépendances d'exécution, source de vérité. requirements.txt est désormais un
+# artefact généré (`uv export`). Principe de la charte : dépendances minimales (YAGNI).
+dependencies = [
+    # Borne haute : aiohttp 3.14 a rendu obligatoire un nouvel argument
+    # `stream_writer` dans ClientResponse.__init__, que la dernière aioresponses
+    # (0.7.8) ne passe pas, ce qui casse les tests des fournisseurs de recherche.
+    # Le code de production fonctionne sur 3.13.x. Lever ce plafond quand
+    # aioresponses prendra en charge aiohttp 3.14.
+    "aiohttp>=3.9.3,<3.14",
+    "aiosignal>=1.3.1",
+    "async-timeout>=4.0.3",
+    "attrs>=23.2.0",
+    "beautifulsoup4>=4.12.3",
+    "Pillow>=10.0.0",
+    "numpy>=1.26.4",
+    "scikit-learn>=1.4.2",
+    "imagehash>=4.3.1",
+    "certifi>=2023.1.1",
+    "click>=8.1.3",
+    "colorama>=0.4.4",
+    "frozenlist>=1.4.0",
+    "idna>=3.4",
+    "joblib>=1.4.0",
+    "lxml>=4.9.0",
+    "multidict>=6.0.4",
+    "nltk>=3.8",
+    "peewee>=3.15.0",
+    "regex>=2023.1.1",
+    "requests>=2.31.0",
+    "soupsieve>=2.4.0",
+    "tqdm>=4.65.0",
+    "typing-extensions>=4.5.0",
+    "urllib3>=2.0.0",
+    "wrapt>=1.15.0",
+    "yarl>=1.9.0",
+    "trafilatura>=1.6.0",
+    "langdetect>=1.0.9",
+    "PyMuPDF>=1.24.4",
+    "playwright>=1.42.0",
+    "curl_cffi>=0.7.0",
+]
+
+[project.optional-dependencies]
+# Extras ML optionnels (ANN + NLI : FAISS + transformers/sentencepiece/torch).
+# Installation : `uv sync --extra ml` (miroir de l'ancien requirements-ml.txt).
+ml = [
+    "torch>=2.2",
+    "transformers>=4.40",
+    "tokenizers>=0.15",
+    "sentencepiece>=0.1.99",
+    "sentence-transformers>=2.6",
+    "faiss-cpu>=1.12.0",
+]
+
+# Outillage de développement et de test (PEP 735). Installé par défaut au
+# `uv sync`, ignoré avec `--no-dev`. pytest-asyncio et aioresponses ont toujours
+# été requis par la suite (tests du routeur de recherche).
+[dependency-groups]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "pytest-asyncio>=0.23.0",
+    "aioresponses>=0.7.6",
+    "ruff>=0.9",        # remplace flake8 : lint + format + sécurité (voir [tool.ruff])
+    "mypy>=1.0.0",
+]
+
+[tool.uv]
+# MWI est une application lancée via `python mywi.py` (layout plat, PYTHONPATH=.),
+# pas une bibliothèque installable. `package = false` fait que uv installe les
+# dépendances dans l'environnement sans construire ni installer le projet lui-même.
+# C'est pourquoi il n'y a pas de [build-system].
+package = false
+
+# ===========================================================================
+# RUFF — lint + format + sécurité. Remplace flake8 (et les rôles isort, bandit).
+# ===========================================================================
+[tool.ruff]
+target-version = "py39"   # aligné sur requires-python >= 3.9
+# Plus la longueur est élevée, moins le formateur reflue de lignes existantes.
+# Aligner sur la convention actuelle du dépôt (.flake8 / setup.cfg) pour limiter
+# le diff de la première mise en forme.
+line-length = 100
+src = ["mwi", "tests", "."]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes (imports inutiles, variables non utilisées)
+    "I",        # isort (tri des imports)
+    "N",        # pep8-naming
+    "UP",       # pyupgrade (borné par target-version py39)
+    "B",        # flake8-bugbear
+    "S",        # flake8-bandit (sécurité : SQL concaténé, subprocess, secrets...)
+    "C4",       # flake8-comprehensions
+    "SIM",      # flake8-simplify
+    "ASYNC",    # pièges async (pas d'appel bloquant en coroutine ; crawl aiohttp)
+    "RUF",      # règles propres à Ruff
+]
+ignore = [
+    "E501",     # longueur de ligne gérée par le formateur
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Les tests utilisent légitimement assert (S101) et des identifiants factices
+# (clés d'API de test : S105/S106).
+"tests/**/*.py" = ["S101", "S105", "S106"]
+# Si les migrations Peewee vivent dans un module dédié, y assouplir le style :
+# "mwi/migrations/*.py" = ["E", "F", "N", "B"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["mwi", "settings"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+# ===========================================================================
+# MYPY — typage. Adoption progressive, pas de strict global (voir l'en-tête).
+# ===========================================================================
+[tool.mypy]
+python_version = "3.9"
+show_error_codes = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_unused_configs = true
+no_implicit_optional = true
+check_untyped_defs = true     # vérifie le corps des fonctions sans exiger leur annotation
+
+[[tool.mypy.overrides]]
+# Modules récents, écrits typés : on peut y exiger le typage strict.
+# Étendre cette liste à mesure que d'autres modules sont typés.
+module = ["mwi.search.*"]
+disallow_untyped_defs = true
+warn_return_any = true
+
+[[tool.mypy.overrides]]
+# Dépendances sans stubs de types : ignorer l'absence d'imports typés sans
+# désactiver mypy globalement. Ajuster la liste au besoin.
+module = [
+    "peewee.*",
+    "trafilatura.*",
+    "langdetect.*",
+    "imagehash.*",
+    "curl_cffi.*",
+    "nltk.*",
+    "sklearn.*",
+    "faiss.*",
+    "sentence_transformers.*",
+    "transformers.*",
+    "fitz.*",
+]
+ignore_missing_imports = true
+
+# ===========================================================================
+# PYTEST — marqueurs et conventions du dépôt (suite plate tests/test_NN_*.py).
+# ===========================================================================
+[tool.pytest.ini_options]
+# Les tests async portent @pytest.mark.asyncio (convention en place). Passer à
+# "auto" supprime le besoin du décorateur, au prix d'un changement de comportement.
+asyncio_mode = "strict"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = [
+    "--strict-markers",   # un marqueur inconnu fait échouer, pas passer
+    "--strict-config",
+    "-ra",                # résumé des tests non passants
+]
+# Marqueurs déclarés ici (centralisés) : la déclaration équivalente dans
+# conftest.py (pytest_configure) peut alors être retirée.
+markers = [
+    "serpapi: nécessite la variable d'environnement MWI_SERPAPI_API_KEY",
+    "seorank: nécessite la variable d'environnement MWI_SEORANK_API_KEY",
+    "openrouter: nécessite la variable d'environnement MWI_OPENROUTER_API_KEY",
+    "mercury: nécessite le CLI mercury-parser",
+    "playwright: nécessite les navigateurs Playwright installés",
+    "integration: tests d'intégration lents touchant de vrais services",
+    "slow: tests de plus de quelques secondes",
+]
+
+[tool.coverage.run]
+source = ["mwi"]
+branch = true
+# omit = ["mwi/migrations/*"]   # décommenter si les migrations Peewee sont sous mwi/
+
+[tool.coverage.report]
+show_missing = true
+# Plancher de couverture ; cible du projet de l'ordre de 85 %. Ajuster, ou retirer
+# cette ligne pour ne pas bloquer en phase de mise en place.
+fail_under = 80
