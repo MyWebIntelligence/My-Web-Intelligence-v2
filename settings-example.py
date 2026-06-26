@@ -248,6 +248,11 @@ nli_contradiction_threshold = float(os.getenv('MWI_NLI_CONTRADICTION_THRESHOLD',
 # require explicit opt-in.
 url_normalization = {
     "unwrap_archive": True,
+    # Unwrap linkedin.com/redir?url=… and cold-join?session_redirect=…
+    # wrappers to their real target. Off by default (may diverge existing
+    # lands, like force_https/strip_www). See sprint-extractlinks LINK-6.
+    "unwrap_linkedin_redirect": os.getenv(
+        "MWI_URL_UNWRAP_LINKEDIN", "false").lower() == "true",
     "lowercase_host": True,
     "force_https": os.getenv("MWI_URL_FORCE_HTTPS", "false").lower() == "true",
     "strip_www": os.getenv("MWI_URL_STRIP_WWW", "false").lower() == "true",

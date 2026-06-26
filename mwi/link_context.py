@@ -287,3 +287,123 @@ def extract_md_paragraph(markdown: Optional[str], url: Optional[str],
             if needle in para:
                 return para.strip()[:cap]
     return None
+
+
+# ---------------------------------------------------------------------------
+# Unified markdown link parser (sprint EXTRACTLINKS-2026-06)
+#
+# Single source of truth for extracting hyperlink targets from a markdown
+# body, shared by the three ExpressionLink write paths (crawl, consolidate,
+# readable pipeline). Replaces the legacy greedy ``core.extract_md_links``
+# regex which (A1) overflowed on the last ')' of a line, (A2) truncated
+# balanced parentheses, (A3) ignored ``<url>`` autolinks, (A4) leaked
+# ``![alt](url)`` images, and (B) dropped every relative ``[t](/path)`` link.
+#
+# Empirically validated against the 18 real cases of the sprint Annexe B
+# (two independent implementations converged) — see
+# ``.claude/project/sprint-extractlinks.md`` §12.
+# ---------------------------------------------------------------------------
+
+# Scheme is matched case-insensitively for the gate (``HTTP://`` accepted).
+# The URL itself is NEVER lowercased — unlike the legacy ``core.resolve_url``
+# which destroys case-sensitive paths (e.g. ``/Runaround_(story)``).
+_SCHEME_RE = re.compile(r'(?:https?|ftp)://', re.IGNORECASE)
+
+
+def _read_url_token(s: str, start: int):
+    """Read a URL token from `start` (the char just after the opening '(').
+
+    Follows the depth of nested '(' so balanced parentheses of the URL are
+    preserved; stops on whitespace or an unmatched ')' (which closes the
+    markdown link). Returns ``(token, end_index)``. This single rule removes
+    both A1 (overflow) and A2 (truncation): no greedy ``[^\\s]*``, no naive
+    trailing-paren strip.
+
+    A CommonMark title (``[t](url "title")``) is separated from the
+    destination by whitespace, so the whitespace stop already strips it — and
+    a *bare* quote (no preceding whitespace) is a legal destination character,
+    so it is kept rather than truncating the URL (e.g. ``?q="x"``).
+    """
+    depth = 0
+    i = start
+    n = len(s)
+    chars = []
+    while i < n:
+        c = s[i]
+        if c.isspace():
+            break
+        if c == '(':
+            depth += 1
+        elif c == ')':
+            if depth == 0:
+                break
+            depth -= 1
+        chars.append(c)
+        i += 1
+    return ''.join(chars), i
+
+
+def iter_markdown_link_tokens(md_content: Optional[str]):
+    """Yield the RAW URL tokens (as written, RELATIVE links included) of a
+    markdown body, in document order, duplicates preserved.
+
+    Recognizes inline links ``[text](url)`` (images ``![alt](url)`` excluded)
+    and autolinks ``<url>``. Parentheses are balanced (neither overflow nor
+    truncation). Never raises.
+
+    The RAW (unresolved) token is exposed because
+    :func:`extract_md_paragraph` locates the paragraph on the *literal* href
+    — the readable pipeline needs ``raw_url`` to keep that lookup working.
+    """
+    if not md_content or not isinstance(md_content, str):
+        return
+    s = md_content
+    n = len(s)
+    i = 0
+    while i < n:
+        c = s[i]
+        # Autolink: <url>  (always absolute)
+        if c == '<':
+            close = s.find('>', i + 1)
+            if close != -1:
+                content = s[i + 1:close]
+                if ' ' not in content and _SCHEME_RE.match(content):
+                    yield content
+                    i = close + 1
+                    continue
+            i += 1
+            continue
+        # Inline link [text](url); image when preceded by '!'
+        if c == '[':
+            is_image = i > 0 and s[i - 1] == '!'
+            close = s.find(']', i + 1)
+            if close != -1 and close + 1 < n and s[close + 1] == '(':
+                token, end = _read_url_token(s, close + 2)
+                if not is_image and token:
+                    yield token
+                i = end
+                continue
+            i += 1
+            continue
+        i += 1
+
+
+def extract_markdown_links(md_content: Optional[str],
+                           base_url: Optional[str] = None) -> list:
+    """Resolved http(s)/ftp hyperlink targets of a markdown body.
+
+    When `base_url` is provided, relative targets are resolved via
+    ``urljoin``; otherwise only already-absolute targets are kept
+    (backward-compatible). Images excluded, autolinks recognized,
+    parentheses balanced, path case preserved, duplicates preserved (the
+    caller deduplicates). Never raises — returns ``[]`` on empty input.
+    """
+    out: list = []
+    try:
+        for token in iter_markdown_link_tokens(md_content):
+            resolved = urljoin(base_url, token) if base_url else token
+            if _SCHEME_RE.match(resolved):
+                out.append(resolved)
+    except Exception:
+        return out
+    return out

@@ -59,6 +59,7 @@ _TRAILING_SAFE_PUNCT_RE = re.compile(r'[\.,;»]+$')
 
 DEFAULT_RULES: Dict[str, object] = {
     'unwrap_archive': True,
+    'unwrap_linkedin_redirect': False,
     'force_https': False,
     'strip_www': False,
     'lowercase_host': True,
@@ -120,6 +121,46 @@ def _unwrap_archive(url: str) -> str:
     """
     for _ in range(8):
         new = _unwrap_once(url)
+        if new == url:
+            return url
+        url = new
+    return url
+
+
+LINKEDIN_REDIRECT_PARAMS = ('url', 'session_redirect')
+
+
+def _is_linkedin_host(netloc: str) -> bool:
+    host = netloc.lower()
+    return host == 'linkedin.com' or host.endswith('.linkedin.com')
+
+
+def _unwrap_linkedin_once(url: str) -> str:
+    """One layer of LinkedIn-redirect unwrapping. Unchanged if no match."""
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return url
+    if not _is_linkedin_host(parsed.netloc) or not parsed.query:
+        return url
+    params = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    for key in LINKEDIN_REDIRECT_PARAMS:
+        target = params.get(key)
+        if target and target.startswith(('http://', 'https://')):
+            return target
+    return url
+
+
+def _unwrap_linkedin_redirect(url: str) -> str:
+    """Recursively unwrap ``linkedin.com/redir/redirect?url=…`` and
+    ``signup/cold-join?session_redirect=…`` wrappers to their real target.
+
+    ``parse_qsl`` URL-decodes the param, so ``url=https%3A%2F%2Fa.org%2Fb``
+    yields ``https://a.org/b``. Idempotent (the target is no longer a LinkedIn
+    host) and bounded to 8 iterations as a safety against pathological inputs.
+    """
+    for _ in range(8):
+        new = _unwrap_linkedin_once(url)
         if new == url:
             return url
         url = new
@@ -231,6 +272,13 @@ def _normalize_url_unsafe(url: str, rules: Optional[Dict] = None) -> str:
     # Stage 2: archive unwrapping (recursive)
     if rules.get('unwrap_archive', True):
         url = _unwrap_archive(url)
+
+    # Stage 2b: LinkedIn redirect unwrapping (off by default — like
+    # force_https/strip_www, it may diverge existing lands). Restores the real
+    # target buried in linkedin.com/redir?url=… and cold-join?session_redirect=…
+    # wrappers (audit-export §6: 82.6% of edge_noprov noise).
+    if rules.get('unwrap_linkedin_redirect'):
+        url = _unwrap_linkedin_redirect(url)
 
     # Re-strip the anchor in case unwrap revealed a fragment
     url = _remove_anchor(url)

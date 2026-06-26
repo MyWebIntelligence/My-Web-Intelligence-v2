@@ -388,3 +388,30 @@ class TestReadablePipelineLinkContext:
         link = m.ExpressionLink.get(m.ExpressionLink.source == expr.id)
         assert link.dom_html is not None
         assert len(link.dom_html) <= 50
+
+    def test_readable_pipeline_balanced_parens_not_truncated(self, fresh_db):
+        # sprint EXTRACTLINKS-2026-06 (A2): the unified iterator keeps balanced
+        # parentheses; the legacy [^)\s]+ regex truncated at the first ')'.
+        from mwi.readable_pipeline import MercuryReadablePipeline
+
+        pipeline = MercuryReadablePipeline()
+        markdown = ("Voir [Runaround]"
+                    "(https://en.wikipedia.org/wiki/Runaround_(story)) ici.")
+        new_links = pipeline._extract_links_from_markdown(
+            markdown, "https://src.test/page")
+
+        urls = [link['url'] for link in new_links]
+        assert "https://en.wikipedia.org/wiki/Runaround_(story)" in urls
+
+    def test_readable_pipeline_relative_link_resolved(self, fresh_db):
+        # sprint EXTRACTLINKS-2026-06 (Family B): relative links resolved.
+        from mwi.readable_pipeline import MercuryReadablePipeline
+
+        pipeline = MercuryReadablePipeline()
+        new_links = pipeline._extract_links_from_markdown(
+            "Voir [Article 57](/en/ai-act/article-57) ci-dessous.",
+            "https://ai-act-service-desk.ec.europa.eu/en/ai-act-explorer")
+
+        urls = [link['url'] for link in new_links]
+        assert ("https://ai-act-service-desk.ec.europa.eu/en/ai-act/article-57"
+                in urls)

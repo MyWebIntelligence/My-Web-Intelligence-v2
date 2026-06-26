@@ -833,24 +833,28 @@ class MercuryReadablePipeline:
             - Deduplicates links by URL
             - Empty or None markdown returns empty list
         """
-        import re
         from urllib.parse import urljoin
+
+        from . import link_context
 
         if not markdown:
             return []
 
-        links = []
-        # Liens markdown: [text](url "title")
-        link_pattern = r'\[([^\]]+)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)'
+        # Single source of truth (sprint EXTRACTLINKS-2026-06): the unified
+        # token iterator yields raw markdown link targets (relatives included,
+        # images excluded, autolinks recognized, parentheses balanced). We keep
+        # raw_url (the literal href) so extract_md_paragraph can locate the
+        # link's paragraph. text/title are not consumed downstream
+        # (_update_expression_links reads only url/raw_url) → left empty.
+        links: List[Dict[str, Any]] = []
         seen_urls = set()
-        for match in re.finditer(link_pattern, markdown):
-            text, url, title = match.groups()
-            raw_url = url  # URL littérale du markdown (sprint link-context)
-            url = urljoin(base_url, url)
-            if url not in seen_urls:
-                seen_urls.add(url)
-                links.append({'url': url, 'raw_url': raw_url,
-                              'text': text or '', 'title': title or ''})
+        for raw_url in link_context.iter_markdown_link_tokens(markdown):
+            url = urljoin(base_url, raw_url)
+            if not url.startswith(('http://', 'https://')) or url in seen_urls:
+                continue
+            seen_urls.add(url)
+            links.append({'url': url, 'raw_url': raw_url,
+                          'text': '', 'title': ''})
 
         return links
 

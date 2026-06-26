@@ -12,9 +12,7 @@ import string
 
 import pytest
 
-from mwi import url_normalizer
 from mwi.url_normalizer import (
-    DEFAULT_RULES,
     classify_url,
     is_archive_wrapper,
     normalize_url,
@@ -140,6 +138,36 @@ class TestNormalizeUrlRules:
         u = "https://m.example.com/page"
         out = normalize_url(u, rules={'strip_mobile_subdomain': True})
         assert out == "https://example.com/page"
+
+    def test_unwrap_linkedin_off_by_default(self):
+        u = ("https://www.linkedin.com/redir/redirect"
+             "?url=https%3A%2F%2Fa.org%2Fb")
+        # Off by default: only host lowercasing / query handling, no unwrap.
+        assert "linkedin.com" in normalize_url(u)
+
+    def test_unwrap_linkedin_redirect_when_enabled(self):
+        u = ("https://www.linkedin.com/redir/redirect"
+             "?url=https%3A%2F%2Fa.org%2Fb")
+        out = normalize_url(u, rules={'unwrap_linkedin_redirect': True})
+        assert out == "https://a.org/b"
+
+    def test_unwrap_linkedin_session_redirect_when_enabled(self):
+        u = ("https://www.linkedin.com/signup/cold-join"
+             "?session_redirect=https%3A%2F%2Fc.org%2Fd")
+        out = normalize_url(u, rules={'unwrap_linkedin_redirect': True})
+        assert out == "https://c.org/d"
+
+    def test_unwrap_linkedin_idempotent(self):
+        u = ("https://www.linkedin.com/redir/redirect"
+             "?url=https%3A%2F%2Fa.org%2Fb")
+        rules = {'unwrap_linkedin_redirect': True}
+        once = normalize_url(u, rules=rules)
+        assert normalize_url(once, rules=rules) == once
+
+    def test_unwrap_linkedin_leaves_real_content_untouched(self):
+        u = "https://www.linkedin.com/in/some-profile"
+        out = normalize_url(u, rules={'unwrap_linkedin_redirect': True})
+        assert "linkedin.com/in/some-profile" in out
 
     def test_trailing_slash_preserve(self):
         a = normalize_url("https://example.com/page/")

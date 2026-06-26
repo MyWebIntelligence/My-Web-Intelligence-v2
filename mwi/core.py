@@ -3,9 +3,7 @@ Core functions
 """
 import os
 import asyncio
-import calendar
 import json
-import random
 import re
 import signal
 import sys
@@ -16,18 +14,18 @@ from argparse import Namespace
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from datetime import date, datetime, timedelta
 from os import path
-from typing import Callable, Dict, List, Optional, Tuple, Union
-from urllib.parse import urlparse, urljoin, quote, parse_qs
+from typing import Callable, Dict, List, Optional, Union
+from urllib.parse import urlparse, urljoin, quote
 
 import aiohttp # type: ignore
 import nltk # type: ignore
 import requests
 from bs4 import BeautifulSoup
 from nltk.tokenize import word_tokenize # type: ignore
-from peewee import IntegrityError, JOIN, SQL
+from peewee import IntegrityError, JOIN
 import trafilatura # type: ignore
 try:
-    from playwright.async_api import async_playwright
+    from playwright.async_api import async_playwright  # noqa: F401  (availability probe)
     PLAYWRIGHT_AVAILABLE = True
 except ImportError:
     PLAYWRIGHT_AVAILABLE = False
@@ -740,7 +738,6 @@ def update_seorank_for_land(
     sleep_seconds = max(0.0, float(getattr(settings, 'seorank_request_delay', 0)))
 
     start_time = time.time()
-    last_progress_update = 0
 
     for expression in expressions:
         processed += 1
@@ -1668,7 +1665,7 @@ def _extract_content_and_links(raw_html, expression, source_method: str = "aioht
                     (model.Media.url == resolved_img_url)
                 ).exists():
                     model.Media.create(expression=expression, url=resolved_img_url, type='img')
-            links = extract_md_links(content)
+            links = extract_md_links(content, str(expression.url))
             expression.readable = content # type: ignore
             if source_method == "archive_org":
                 print(f"Archive.org + Trafilatura succeeded for {expression.url}")
@@ -1685,8 +1682,12 @@ def _extract_content_and_links(raw_html, expression, source_method: str = "aioht
             text_content = get_readable(soup)
             if text_content and len(text_content) > 100:
                 content = text_content
-                urls = [a.get('href') for a in soup.find_all('a') if is_crawlable(a.get('href'))]
-                links = urls
+                # Resolve relative hrefs before is_crawlable (which requires
+                # http(s)://): otherwise every relative link is dropped.
+                hrefs = [a.get('href') for a in soup.find_all('a')]
+                urls = [urljoin(str(expression.url), h)
+                        for h in hrefs if isinstance(h, str) and h]
+                links = [u for u in urls if is_crawlable(u)]
                 expression.readable = content # type: ignore
                 print(f"BeautifulSoup fallback succeeded for {expression.url}")
         except Exception as e:
@@ -1891,12 +1892,15 @@ async def consolidate_land(
                 # 3. Extraire les liens sortants du contenu lisible
                 links = []
                 if expr.readable:
-                    # Extraction des liens markdown
-                    links = extract_md_links(expr.readable)
-                    # Extraction des liens HTML (fallback)
+                    # Extraction des liens markdown (relatifs résolus via urljoin)
+                    links = extract_md_links(expr.readable, str(expr.url))
+                    # Extraction des liens HTML (fallback) — résoudre les hrefs
+                    # relatifs avant is_crawlable, sinon perte sèche.
                     soup = BeautifulSoup(expr.readable, 'html.parser')
-                    urls = [a.get('href') for a in soup.find_all('a') if is_crawlable(a.get('href'))]
-                    links += [u for u in urls if u and u not in links]
+                    hrefs = [a.get('href') for a in soup.find_all('a')]
+                    urls = [urljoin(str(expr.url), h)
+                            for h in hrefs if isinstance(h, str) and h]
+                    links += [u for u in urls if is_crawlable(u) and u not in links]
                 nb_links = len(set(links))
 
                 # 4. Ajouter les documents manquants et recréer les liens
@@ -2123,33 +2127,25 @@ async def analyze_media(expression: model.Expression, session: aiohttp.ClientSes
     return analyzed_medias
 
 
-def extract_md_links(md_content: str):
-    """Extract URLs from Markdown content with proper parenthesis handling.
+def extract_md_links(md_content: str, base_url: Optional[str] = None):
+    """Extract hyperlink targets from Markdown content.
 
-    This function finds all URLs in Markdown link syntax and removes unmatched
-    closing parentheses from the end of URLs.
+    Thin backward-compatible wrapper over the unified parser
+    ``link_context.extract_markdown_links`` (sprint EXTRACTLINKS-2026-06).
+    The single parser fixes the legacy greedy regex on every axis: balanced
+    parentheses (no overflow/truncation), ``<url>`` autolinks, image
+    exclusion, and — via the new optional `base_url` — resolution of
+    *relative* markdown links through ``urljoin``.
 
     Args:
         md_content: A string containing Markdown-formatted content.
+        base_url: Source page URL; when given, relative targets are resolved
+            to absolute (otherwise only absolute targets are kept).
 
     Returns:
-        list: A list of URL strings extracted from the Markdown content.
-
-    Notes:
-        - Matches URLs in Markdown link format: (http://example.com)
-        - Supports http, https, and ftp protocols.
-        - Removes unmatched closing parentheses from URL ends.
-        - Handles edge case where URLs contain parentheses in parameters.
+        list: A list of URL strings (duplicates preserved; caller dedups).
     """
-    matches = re.findall(r'\(((https?|ftp)://[^\s/$.?#].[^\s]*)\)', md_content)
-    urls = []
-    for match in matches:
-        url = match[0]
-        # Si l'URL se termine par une parenthèse fermante non appariée, on la retire
-        if url.endswith(")") and url.count("(") <= url.count(")"):
-            url = url[:-1]
-        urls.append(url)
-    return urls
+    return link_context.extract_markdown_links(md_content or "", base_url)
 
 
 def add_expression(land: model.Land, url: str, depth=0) -> Union[model.Expression, bool]:
@@ -2325,15 +2321,18 @@ def is_crawlable(url: str):
         - Returns False for any URL that raises an exception during parsing.
     """
     try:
-        parsed = urlparse(url)
-        exclude_ext = ('.jpg', '.jpeg', '.png', '.bmp', '.webp', '.pdf',
-                       '.txt', '.csv', '.xls', '.xlsx', '.doc', '.docx')
-
-        return \
-            (url is not None) \
-            and url.startswith(('http://', 'https://')) \
-            and (not url.endswith(exclude_ext))
-    except:
+        if not url or not url.startswith(('http://', 'https://')):
+            return False
+        # Test the extension on the PATH only (not the whole URL): a query
+        # string or fragment must not smuggle a binary past the filter
+        # (…/doc.pdf?dl=1) nor make an editorial URL look binary (…/article#x).
+        path = urlparse(url).path.lower()
+        exclude_ext = ('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.svg',
+                       '.ico', '.pdf', '.txt', '.csv', '.xls', '.xlsx', '.doc',
+                       '.docx', '.ppt', '.pptx', '.zip', '.mp4', '.webm',
+                       '.mp3', '.wav')
+        return not path.endswith(exclude_ext)
+    except Exception:
         return False
 
 
@@ -2360,8 +2359,6 @@ def extract_medias(content, expression: model.Expression):
     print(f"Extracting media from #{expression.id}") # type: ignore
 
     IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg")
-    VIDEO_EXTENSIONS = (".mp4", ".webm", ".ogg", ".ogv", ".mov", ".avi", ".mkv")
-    AUDIO_EXTENSIONS = (".mp3", ".wav", ".ogg", ".aac", ".flac", ".m4a")
 
     def has_allowed_extension(url: str, extensions: tuple) -> bool:
         if not url:
