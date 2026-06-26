@@ -31,7 +31,7 @@ import re
 import warnings
 from dataclasses import dataclass
 from typing import Dict, Optional
-from urllib.parse import urljoin
+from urllib.parse import urldefrag, urljoin
 
 import settings
 
@@ -110,6 +110,35 @@ def _relaxed_key(normalized_url: str) -> str:
     return normalized_url.lower().rstrip('/')
 
 
+def _same_page_norm(base_url: str) -> Optional[str]:
+    """Normalized, fragment-stripped form of the source page URL, or None."""
+    try:
+        nofrag = urldefrag(base_url)[0]
+        return normalize_url(nofrag) if nofrag else None
+    except Exception:
+        return None
+
+
+def _is_same_page(absolute: str, base_norm: Optional[str]) -> bool:
+    """True when `absolute` only navigates within the source page.
+
+    A section / reference link written as an absolute URL + fragment
+    (e.g. ``https://arxiv.org/html/2404.00600v2#S1``) collapses onto the
+    source page once the fragment is stripped — it is in-page navigation, not
+    an outbound hyperlink, and would otherwise flood the raw link network with
+    self-loops (audit: ~96% of the raw weight). The fragment is stripped
+    explicitly here, independently of the ``remove_anchor`` setting. A bare
+    self-link (no fragment) is caught too. Never raises.
+    """
+    if not base_norm:
+        return False
+    try:
+        nofrag = urldefrag(absolute)[0]
+        return bool(nofrag) and normalize_url(nofrag) == base_norm
+    except Exception:
+        return False
+
+
 def _quiet_soup(raw_html: str, parser: str):
     """BeautifulSoup parse with the noisy XMLParsedAsHTMLWarning silenced.
 
@@ -147,6 +176,7 @@ def extract_link_dom_map(raw_html: Optional[str], base_url: str,
         dom_html_cap = _dom_html_cap()
         context_cap = _context_cap()
         mapping: Dict[str, LinkDomInfo] = {}
+        base_norm = _same_page_norm(base_url)
 
         for a_tag in soup.find_all('a', href=True):
             href = (a_tag.get('href') or '').strip()
@@ -159,6 +189,8 @@ def extract_link_dom_map(raw_html: Optional[str], base_url: str,
                 if not absolute.startswith(('http://', 'https://')):
                     continue
 
+            if _is_same_page(absolute, base_norm):
+                continue
             try:
                 key = normalize_url(absolute)
             except Exception:
@@ -204,6 +236,7 @@ def extract_all_links(raw_html: Optional[str], base_url: str,
             except Exception:
                 soup = _quiet_soup(raw_html, 'html.parser')
 
+        base_norm = _same_page_norm(base_url)
         for a_tag in soup.find_all('a', href=True):
             href = (a_tag.get('href') or '').strip()
             if not href or href.lower().startswith(SKIP_HREF_PREFIXES):
@@ -214,6 +247,8 @@ def extract_all_links(raw_html: Optional[str], base_url: str,
                 absolute = urljoin(base_url, href)
                 if not absolute.startswith(('http://', 'https://')):
                     continue
+            if _is_same_page(absolute, base_norm):
+                continue
             links.append(absolute)
         return links
     except Exception:

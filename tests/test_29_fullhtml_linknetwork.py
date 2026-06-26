@@ -3,7 +3,10 @@
 Covers:
 - mwi.link_context.extract_all_links (append-only, duplicates, filtering).
 - The closed-network page/domain link CSVs added to nodelinkcsv under
-  --fullhtml=TRUE: weight, in_mywi, the 3-way diff, minrel scoping.
+  --fullhtml=TRUE: the union of the editorial (ExpressionLink) graph and the
+  raw-only HTML edges — weightbody/weighthtml, Gephi columns, minrel scoping.
+- Same-page '#' anchor filtering (sprint R2.B): absolute URL + fragment to the
+  source page must not create self-loops.
 - Backward compatibility: nodelinkcsv without --fullhtml emits exactly 4 files.
 
 The two graphs are DIFFERENT extractions (raw <a href> vs Trafilatura markdown
@@ -79,6 +82,21 @@ class TestExtractAllLinks:
             link_context.extract_all_links(xml, 'https://x.test/')
         assert 'XMLParsedAsHTMLWarning' not in [w.category.__name__ for w in caught]
 
+    def test_same_page_absolute_fragment_filtered(self):
+        """Absolute URL + fragment to the source page is in-page nav -> dropped."""
+        html = ('<html><body>'
+                '<a href="https://x.test/p#S1">s1</a>'
+                '<a href="https://x.test/p#S2">s2</a>'
+                '<a href="https://x.test/other#S1">other</a>'
+                '</body></html>')
+        links = link_context.extract_all_links(html, 'https://x.test/p')
+        assert links == ['https://x.test/other#S1']
+
+    def test_bare_self_link_filtered(self):
+        """A self-link without fragment is also in-page navigation -> dropped."""
+        html = '<html><body><a href="https://x.test/p">self</a></body></html>'
+        assert link_context.extract_all_links(html, 'https://x.test/p') == []
+
 
 # --------------------------------------------------------------------------- #
 # Fixture: a small land with stored HTML and a known MyWI graph                #
@@ -86,7 +104,12 @@ class TestExtractAllLinks:
 
 @pytest.fixture()
 def fullhtml_land(fresh_db):
-    """Build a closed-network test land.
+    """Build a closed-network test land (sprint R2: union + '#' filtering).
+
+    Raw html outbound <a href> per expression. E1 footer links to E3 twice
+    (UPPER host + trailing slash -> raw-only edge weighthtml=2) and carries a
+    same-page #sec1 anchor that must be filtered (no E1->E1 self-loop).
+    ExpressionLink (body): E1->E2, E2->E1, E3->E1, E3->E2 -> weightbody=1.
 
     Expressions (relevance, html outbound <a href>):
       E1 site-a/home   rel5  -> E2 x2 (content), E3 (footer), E4 (rel0), external
@@ -122,10 +145,17 @@ def fullhtml_land(fresh_db):
         '<html><body><article>'
         '<p>Intro <a href="https://site-a.test/article">art</a> and again '
         '<a href="https://site-a.test/article">art bis</a>.</p>'
-        '<p>Low <a href="https://site-b.test/lowrel">low</a> and '
+        # absolute URL + fragment to E1 itself -> in-page nav, must be filtered
+        '<p>TOC <a href="https://site-a.test/home#sec1">jump</a> and '
+        'low <a href="https://site-b.test/lowrel">low</a> and '
         '<a href="https://external.test/page">ext</a>.</p>'
         '</article>'
-        '<footer><a href="https://site-b.test/page">site b</a></footer>'
+        # two footer anchors to E3 via UPPER host + trailing slash -> raw-only
+        # edge (absent from ExpressionLink), weighthtml=2, robust matching.
+        '<footer>'
+        '<a href="https://SITE-B.test/page/">site b</a>'
+        '<a href="https://SITE-B.test/page/">site b again</a>'
+        '</footer>'
         '</body></html>'
     )
     e2_html = '<html><body><p><a href="https://site-a.test/home">home</a></p></body></html>'
@@ -151,10 +181,10 @@ def fullhtml_land(fresh_db):
 
 
 def _edge_map(csv_path):
-    """Read a *_pageslinksfullhtml.csv into {(source_id,target_id): row}."""
+    """Read a *_pageslinksfullhtml.csv into {(Source, Target): row}."""
     with open(csv_path, encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
-    return {(int(r["source_id"]), int(r["target_id"])): r for r in rows}
+    return {(int(r["Source"]), int(r["Target"])): r for r in rows}
 
 
 # --------------------------------------------------------------------------- #
@@ -175,24 +205,53 @@ class TestClosedNetworkPageLinks:
         urls = {r["target_url"] for r in edges.values()}
         assert not any("external.test" in u for u in urls)
 
-    def test_footer_edge_present_with_in_mywi_zero(self, fullhtml_land, tmp_path):
-        """E1->E3 (footer) is in the raw graph but absent from ExpressionLink."""
+    def test_content_edge_is_body(self, fullhtml_land, tmp_path):
+        """An edge present in ExpressionLink -> weightbody=1, weighthtml=0."""
+        e = fullhtml_land["e"]
+        _, edges = self._write(fullhtml_land, tmp_path)
+        for s, t in ((e["e1"], e["e2"]), (e["e2"], e["e1"])):
+            row = edges[(s.id, t.id)]
+            assert row["weightbody"] == "1"
+            assert row["weighthtml"] == "0"
+
+    def test_footer_edge_is_rawonly(self, fullhtml_land, tmp_path):
+        """E1->E3 (footer) is in the raw HTML only -> weightbody=0, weighthtml>0."""
         e = fullhtml_land["e"]
         _, edges = self._write(fullhtml_land, tmp_path)
         row = edges[(e["e1"].id, e["e3"].id)]
-        assert row["in_mywi"] == "0"
+        assert row["weightbody"] == "0"
+        assert row["weighthtml"] == "2"
 
-    def test_content_edge_in_mywi_one(self, fullhtml_land, tmp_path):
+    def test_weighthtml_counts_rawonly_multiplicity(self, fullhtml_land, tmp_path):
+        """Two footer <a> from E1 to E3 -> a single row with weighthtml=2."""
         e = fullhtml_land["e"]
         _, edges = self._write(fullhtml_land, tmp_path)
-        assert edges[(e["e1"].id, e["e2"].id)]["in_mywi"] == "1"
-        assert edges[(e["e2"].id, e["e1"].id)]["in_mywi"] == "1"
+        assert edges[(e["e1"].id, e["e3"].id)]["weighthtml"] == "2"
 
-    def test_weight_counts_anchor_multiplicity(self, fullhtml_land, tmp_path):
-        """Two <a> from E1 to E2 -> a single row with weight=2."""
+    def test_same_page_anchor_no_self_loop(self, fullhtml_land, tmp_path):
+        """An absolute URL + fragment to the page itself is not a link.
+
+        E1 carries <a href="https://site-a.test/home#sec1"> (its own URL); it
+        must not create an E1->E1 self-loop (sprint R2.B), and no edge at all
+        is a self-loop.
+        """
         e = fullhtml_land["e"]
         _, edges = self._write(fullhtml_land, tmp_path)
-        assert edges[(e["e1"].id, e["e2"].id)]["weight"] == "2"
+        assert (e["e1"].id, e["e1"].id) not in edges
+        assert all(s != t for s, t in edges)
+
+    def test_gephi_columns_with_empty_weight(self, fullhtml_land, tmp_path):
+        """Edge file uses Gephi names Source/Target/Weight; Weight left empty."""
+        exp = Export('nodelinkcsv', fullhtml_land["land"], 1, fullhtml=True)
+        out = str(tmp_path / "pl.csv")
+        exp._write_pageslinksfullhtml(out)
+        with open(out, encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            header = reader.fieldnames
+            rows = list(reader)
+        assert header[:5] == ['Source', 'Target', 'Weight',
+                              'weightbody', 'weighthtml']
+        assert rows and all(r["Weight"] == "" for r in rows)
 
     def test_minrel_excludes_low_relevance_endpoints(self, fullhtml_land, tmp_path):
         """E4 (relevance 0) is neither a source nor a target with minrel=1."""
@@ -202,14 +261,15 @@ class TestClosedNetworkPageLinks:
         assert e["e4"].id not in ids_seen
 
     def test_robust_matching_trailing_slash_and_case(self, fullhtml_land, tmp_path):
-        """A href differing by trailing slash / host case still maps in-corpus."""
+        """A raw href differing by trailing slash / host case still maps.
+
+        E1's footer links to E3 via 'https://SITE-B.test/page/' (upper host +
+        trailing slash); the relaxed / host+path key must resolve it to the
+        in-corpus E3, producing the raw-only edge E1->E3.
+        """
         e = fullhtml_land["e"]
-        # E2 already links to E1; rewrite its html to a slashed/upper-host variant.
-        e["e2"].html = ('<html><body><a href="https://SITE-A.test/home/">h</a>'
-                        '</body></html>')
-        e["e2"].save()
         _, edges = self._write(fullhtml_land, tmp_path)
-        assert (e["e2"].id, e["e1"].id) in edges
+        assert (e["e1"].id, e["e3"].id) in edges
 
     def test_three_way_diff_counters(self, fullhtml_land, tmp_path):
         exp, edges = self._write(fullhtml_land, tmp_path)
@@ -217,33 +277,38 @@ class TestClosedNetworkPageLinks:
         # 4 qualifying sources (E1,E2,E3,E5); E5 has no html.
         assert stats["pages_total"] == 4
         assert stats["pages_with_html"] == 3
-        # raw edges: E1->E2, E1->E3, E2->E1, E3->E1
-        assert stats["raw_edges"] == 4
-        assert stats["matched"] == 3            # all but the footer edge
-        assert stats["raw_only"] == 1           # footer E1->E3
-        assert stats["mywi_only"] == 1          # E3->E2 absent from raw HTML
-        assert len(edges) == 4
+        # body edges: E1->E2, E2->E1, E3->E1, E3->E2 (ExpressionLink, non-self)
+        assert stats["body_edges"] == 4
+        # raw-only edge: footer E1->E3 (absent from ExpressionLink)
+        assert stats["rawonly_edges"] == 1
+        assert stats["total_edges"] == 5
+        assert len(edges) == 5
 
 
 class TestClosedNetworkDomainLinks:
 
-    def test_domain_links_inter_domain_with_in_mywi(self, fullhtml_land, tmp_path):
+    def test_domain_links_in_mwi_out_mwi(self, fullhtml_land, tmp_path):
         d = fullhtml_land["d"]
         exp = Export('nodelinkcsv', fullhtml_land["land"], 1, fullhtml=True)
         exp._write_pageslinksfullhtml(str(tmp_path / "pl.csv"))
         out = str(tmp_path / "dl.csv")
         exp._write_domainlinksfullhtml(out)
         with open(out, encoding="utf-8") as f:
-            rows = {(int(r["source_domain_id"]), int(r["target_domain_id"])): r
-                    for r in csv.DictReader(f)}
-        # Inter-domain only: (a->b) from footer E1->E3, (b->a) from E3->E1.
+            reader = csv.DictReader(f)
+            header = reader.fieldnames
+            rows = {(int(r["Source"]), int(r["Target"])): r for r in reader}
+        assert header[:5] == ['Source', 'Target', 'Weight', 'in_mwi', 'out_mwi']
+        # Inter-domain only: (b->a) from body E3->E1 & E3->E2; (a->b) from the
+        # raw-only footer E1->E3 (weighthtml=2).
         assert set(rows.keys()) == {(d["d_a"], d["d_b"]), (d["d_b"], d["d_a"])}
-        # MyWI only ever links site-b -> site-a (E3->E1, E3->E2): (b->a) is
-        # in_mywi=1, but (a->b) — the raw footer edge — is in_mywi=0. This shows
-        # page/domain in_mywi are computed independently at their own granularity.
-        assert rows[(d["d_b"], d["d_a"])]["in_mywi"] == "1"
-        assert rows[(d["d_a"], d["d_b"])]["in_mywi"] == "0"
-        # No intra-domain self pair.
+        # site-b -> site-a carries the two editorial edges -> in_mwi=2, out_mwi=0
+        assert rows[(d["d_b"], d["d_a"])]["in_mwi"] == "2"
+        assert rows[(d["d_b"], d["d_a"])]["out_mwi"] == "0"
+        # site-a -> site-b is the raw-only footer -> in_mwi=0, out_mwi=2
+        assert rows[(d["d_a"], d["d_b"])]["in_mwi"] == "0"
+        assert rows[(d["d_a"], d["d_b"])]["out_mwi"] == "2"
+        # Weight column left empty (Gephi default); no intra-domain self pair.
+        assert rows[(d["d_a"], d["d_b"])]["Weight"] == ""
         assert (d["d_a"], d["d_a"]) not in rows
 
 
@@ -329,6 +394,6 @@ class TestLandWithoutStoredHtml:
         assert exp._fullhtml_stats["pages_with_html"] == 0
         with open(out, encoding="utf-8") as f:
             rows = list(csv.reader(f))
-        assert rows == [['source_id', 'source_url', 'source_domain_id',
-                         'target_id', 'target_url', 'target_domain_id',
-                         'weight', 'in_mywi']]
+        assert rows == [['Source', 'Target', 'Weight', 'weightbody',
+                         'weighthtml', 'source_url', 'source_domain_id',
+                         'target_url', 'target_domain_id']]

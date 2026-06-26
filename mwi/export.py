@@ -550,21 +550,25 @@ class Export:
         return None
 
     def _write_pageslinksfullhtml(self, filename) -> int:
-        """Page link graph rebuilt from raw <a href> in expression.html.
+        """Union of the editorial (ExpressionLink) and raw-HTML link graphs.
 
-        Closed network: targets are restricted to in-land expressions
-        qualifying by minrel (same node set as _pageslinks). Columns:
-        source_id, source_url, source_domain_id, target_id, target_url,
-        target_domain_id, weight, in_mywi.
+        Closed network: both endpoints are in-land expressions qualifying by
+        minrel (same node set as _pageslinks). One row per distinct edge:
 
-        Single streaming pass over stored HTML. ALL lookups are preloaded
-        before the streaming cursor opens: MWI uses one shared DB connection,
-        so no second statement / lazy FK access may run during iteration.
-        weight = number of <a> anchors source->target; in_mywi = 1 when the
-        edge also exists in ExpressionLink (both endpoints qualified).
+        - edges from ExpressionLink (the Trafilatura-readable / body graph) ->
+          weightbody=1, weighthtml=0 (in_mwi=1);
+        - edges found ONLY in the raw <a href> of expression.html, not in
+          ExpressionLink -> weightbody=0, weighthtml=<raw anchor multiplicity>
+          (in_mwi=0). The two sets are disjoint.
 
-        Side effect: stashes the inter-domain accumulator on self for
-        _write_domainlinksfullhtml (avoids a second HTML pass).
+        Self-loops are dropped (in-page '#' anchors / self-references, not real
+        links). Columns use Gephi naming (Source/Target/Weight, Weight empty)
+        plus weightbody/weighthtml and the source/target url+domain.
+
+        ALL lookups are preloaded before the streaming cursor opens: MWI uses
+        one shared DB connection, so no second statement / lazy FK access may
+        run during iteration. Side effect: stashes the inter-domain accumulator
+        on self for _write_domainlinksfullhtml (avoids a second HTML pass).
         """
         land_id = self.land.get_id()
         minrel = self.relevance
@@ -603,35 +607,46 @@ class Export:
         for s, t in cur.fetchall():
             mywi_page_edges.add((s, t))
 
-        mywi_domain_edges = set()
-        cur = model.DB.execute_sql(
-            "WITH idx(x) AS (SELECT id FROM expression "
-            "WHERE land_id = ? AND relevance >= ?) "
-            "SELECT DISTINCT e1.domain_id, e2.domain_id "
-            "FROM expressionlink link "
-            "JOIN expression e1 ON e1.id = link.source_id "
-            "JOIN expression e2 ON e2.id = link.target_id "
-            "WHERE link.source_id IN idx AND link.target_id IN idx "
-            "AND e1.domain_id != e2.domain_id", (land_id, minrel))
-        for d1, d2 in cur.fetchall():
-            mywi_domain_edges.add((d1, d2))
-        self._fullhtml_mywi_domain_edges = mywi_domain_edges
-
-        # --- streaming pass over stored HTML (only live statement now) ---
-        header = ['source_id', 'source_url', 'source_domain_id',
-                  'target_id', 'target_url', 'target_domain_id',
-                  'weight', 'in_mywi']
-        domain_acc = {}
+        # --- emission: union of the editorial graph (ExpressionLink = body)
+        #     and the raw-only edges found ONLY in the full HTML.
+        # weightbody = 1 for an edge present in ExpressionLink (in_mwi=1);
+        # weighthtml = raw <a> multiplicity for an edge present ONLY in the
+        # raw HTML (in_mwi=0). The two sets are disjoint (the streaming pass
+        # skips edges already in mywi_page_edges). Self-loops are dropped:
+        # they come from in-page '#' anchors / self-references, not real
+        # hyperlinks (audit: ~96% of the raw weight was self-loop noise).
+        # Gephi-standard edge columns Source/Target/Weight; Weight is left
+        # empty so Gephi defaults it to 1.0 — the analytic signal lives in
+        # weightbody/weighthtml.
+        header = ['Source', 'Target', 'Weight', 'weightbody', 'weighthtml',
+                  'source_url', 'source_domain_id',
+                  'target_url', 'target_domain_id']
+        domain_acc = {}   # (sd, td) -> [in_mwi (Σweightbody), out_mwi (Σweighthtml)]
+        body_edges = rawonly_edges = count = 0
         pages_total = pages_with_html = 0
-        raw_edges = matched = count = 0
-
-        src_cursor = model.DB.execute_sql(
-            "SELECT id, url, domain_id, html FROM expression "
-            "WHERE land_id = ? AND relevance >= ?", (land_id, minrel))
 
         with open(filename, 'w', newline='\n', encoding='utf-8') as file:
             writer = csv.writer(file, quoting=csv.QUOTE_ALL)
             writer.writerow(header)
+
+            # 1) editorial edges (ExpressionLink, both endpoints qualified by
+            #    minrel). No DB cursor here — reads only preloaded sets.
+            for sid, tid in mywi_page_edges:
+                if sid == tid:
+                    continue
+                sdom, td = domain_of.get(sid), domain_of.get(tid)
+                writer.writerow([sid, tid, '', 1, 0,
+                                 url_of.get(sid), sdom, url_of.get(tid), td])
+                count += 1
+                body_edges += 1
+                if td is not None and sdom != td:
+                    domain_acc.setdefault((sdom, td), [0, 0])[0] += 1
+
+            # 2) raw-only edges — single streaming pass over stored HTML (the
+            #    only live DB statement; no DB access inside the loop).
+            src_cursor = model.DB.execute_sql(
+                "SELECT id, url, domain_id, html FROM expression "
+                "WHERE land_id = ? AND relevance >= ?", (land_id, minrel))
             for sid, surl, sdom, shtml in src_cursor:
                 pages_total += 1
                 if not shtml:
@@ -642,33 +657,32 @@ class Export:
                     tid = self._fullhtml_lookup(idx, href)
                     if tid is not None:
                         per_target[tid] = per_target.get(tid, 0) + 1
-                for tid, weight in per_target.items():
+                for tid, weighthtml in per_target.items():
+                    if sid == tid or (sid, tid) in mywi_page_edges:
+                        continue
                     td = domain_of.get(tid)
-                    is_in = 1 if (sid, tid) in mywi_page_edges else 0
-                    raw_edges += 1
-                    matched += is_in
-                    writer.writerow([sid, surl, sdom, tid, url_of.get(tid),
-                                     td, weight, is_in])
+                    writer.writerow([sid, tid, '', 0, weighthtml,
+                                     surl, sdom, url_of.get(tid), td])
                     count += 1
+                    rawonly_edges += 1
                     if td is not None and sdom != td:
-                        domain_acc[(sdom, td)] = domain_acc.get((sdom, td), 0) + weight
+                        domain_acc.setdefault((sdom, td), [0, 0])[1] += weighthtml
 
         self._fullhtml_domain_acc = domain_acc
         self._fullhtml_domain_name = domain_name
 
-        # --- coverage / 3-way diff report ---
-        raw_only = raw_edges - matched
-        mywi_only = len(mywi_page_edges) - matched
+        # --- coverage report ---
         self._fullhtml_stats = {
             'pages_total': pages_total, 'pages_with_html': pages_with_html,
-            'raw_edges': raw_edges, 'matched': matched,
-            'raw_only': raw_only, 'mywi_only': mywi_only,
+            'body_edges': body_edges, 'rawonly_edges': rawonly_edges,
+            'total_edges': body_edges + rawonly_edges,
         }
         pct = (100.0 * pages_with_html / pages_total) if pages_total else 0.0
-        print(f"  - pageslinksfullhtml.csv: {count} raw edges "
+        print(f"  - pageslinksfullhtml.csv: {count} edges "
               f"({pages_with_html}/{pages_total} pages have stored HTML, {pct:.1f}%)")
-        print(f"      raw∩mywi (in_mywi=1): {matched} | "
-              f"raw\\mywi (in_mywi=0): {raw_only} | mywi\\raw: {mywi_only}")
+        print(f"      MyWI/body (in_mwi=1): {body_edges} | "
+              f"fullhtml-only (in_mwi=0): {rawonly_edges} | "
+              f"total: {body_edges + rawonly_edges}")
         if pages_with_html == 0:
             print("      WARNING: no stored HTML for this land — crawl with "
                   "--fullhtml=TRUE or run 'land consolidate' on a "
@@ -676,26 +690,26 @@ class Export:
         return count
 
     def _write_domainlinksfullhtml(self, filename) -> int:
-        """Inter-domain link graph from the raw-HTML page edges.
+        """Inter-domain link graph rolled up from the raw-HTML page edges.
 
         Drains the accumulator built by _write_pageslinksfullhtml (no second
-        HTML pass). Inter-domain only; link_count = sum of page-edge weights;
-        in_mywi = 1 when the domain pair exists in the MyWI inter-domain graph.
+        HTML pass). Inter-domain only. Columns (Gephi naming): Source, Target,
+        Weight (left empty), in_mwi (Σ weightbody of the page edges between the
+        domain pair) and out_mwi (Σ weighthtml).
         """
         domain_acc = getattr(self, '_fullhtml_domain_acc', {})
         domain_name = getattr(self, '_fullhtml_domain_name', {})
-        mywi_domain_edges = getattr(self, '_fullhtml_mywi_domain_edges', set())
-        header = ['source_domain_id', 'source_domain_name', 'target_domain_id',
-                  'target_domain_name', 'link_count', 'in_mywi']
-        rows = sorted(domain_acc.items(), key=lambda kv: kv[1], reverse=True)
+        header = ['Source', 'Target', 'Weight', 'in_mwi', 'out_mwi',
+                  'source_domain_name', 'target_domain_name']
+        rows = sorted(domain_acc.items(),
+                      key=lambda kv: kv[1][0] + kv[1][1], reverse=True)
         count = 0
         with open(filename, 'w', newline='\n', encoding='utf-8') as file:
             writer = csv.writer(file, quoting=csv.QUOTE_ALL)
             writer.writerow(header)
-            for (sd, td), weight in rows:
-                is_in = 1 if (sd, td) in mywi_domain_edges else 0
-                writer.writerow([sd, domain_name.get(sd), td,
-                                 domain_name.get(td), weight, is_in])
+            for (sd, td), (in_mwi, out_mwi) in rows:
+                writer.writerow([sd, td, '', in_mwi, out_mwi,
+                                 domain_name.get(sd), domain_name.get(td)])
                 count += 1
         print(f"  - domainlinksfullhtml.csv: {count} domain links")
         return count
