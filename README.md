@@ -491,12 +491,26 @@ Delete an entire land or only expressions below a relevance threshold.
   python mywi.py land delete --name="MyResearchTopic" --maxrel=MAXIMUM_RELEVANCE
   # e.g., --maxrel=0.5
   ```
+- Delete low-relevance pages **and** the uncrawled links they orphaned:
+  ```bash
+  # Preview first (counts orphans, deletes nothing)
+  python mywi.py land delete --name="MyResearchTopic" --maxrel=1 --prune-orphans --dry-run
+  # Then apply
+  python mywi.py land delete --name="MyResearchTopic" --maxrel=1 --prune-orphans
+  ```
+  Deleting relevance-0 pages removes their outgoing links; the uncrawled URLs they
+  had discovered can be left with no incoming link at all. `--prune-orphans` deletes
+  those unreachable, still-uncrawled expressions (`depth > 0`, never fetched, no
+  incoming link). Seeds (`depth 0`), crawled pages, and links still reachable from a
+  surviving page are always kept.
 
-| Option   | Type   | Required | Default | Description                                         |
-|----------|--------|----------|---------|-----------------------------------------------------|
-| --name   | str    | Yes      |         | Name of the land to delete                          |
-| --maxrel | int    | No       |         | Only delete expressions with relevance < maxrel     |
-| --vacuum | flag   | No       |         | Run VACUUM after deletion to reclaim disk space (slow on large databases) |
+| Option         | Type | Required | Default | Description                                         |
+|----------------|------|----------|---------|-----------------------------------------------------|
+| --name         | str  | Yes      |         | Name of the land to delete                          |
+| --maxrel       | int  | No       |         | Only delete expressions with relevance < maxrel     |
+| --prune-orphans| flag | No       | False   | After the --maxrel deletion, also delete uncrawled expressions left with no incoming link (depth>0, fetched_at IS NULL). With --maxrel absent, prunes only currently-orphaned uncrawled URLs (never deletes the whole land). |
+| --dry-run      | flag | No       | False   | Preview only: report how many expressions/orphans would be deleted, without deleting anything |
+| --vacuum       | flag | No       |         | Run VACUUM after deletion to reclaim disk space (slow on large databases) |
 
 
 ## Multilingual Lands
