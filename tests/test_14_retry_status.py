@@ -9,8 +9,6 @@ import asyncio
 from datetime import datetime
 from unittest.mock import patch
 
-import pytest
-
 
 def run(coro):
     return asyncio.new_event_loop().run_until_complete(coro)
@@ -52,7 +50,7 @@ class TestRetryStatusSelection:
 
         seen = []
 
-        async def fake_with_media(expr, dictionary, session, store_html=False):
+        async def fake_with_media(expr, dictionary, session, store_html=False, issue_mode=None):
             seen.append(expr.url)
             return 1
 
@@ -78,7 +76,7 @@ class TestRetryStatusSelection:
 
         seen = []
 
-        async def fake_with_media(expr, dictionary, session, store_html=False):
+        async def fake_with_media(expr, dictionary, session, store_html=False, issue_mode=None):
             seen.append(expr.url)
             return 1
 
@@ -108,7 +106,7 @@ class TestRetryStatusSelection:
 
         seen = []
 
-        async def fake_with_media(expr, dictionary, session, store_html=False):
+        async def fake_with_media(expr, dictionary, session, store_html=False, issue_mode=None):
             seen.append(expr.url)
             return 1
 
@@ -130,7 +128,7 @@ class TestRetryStatusSelection:
 
         seen = []
 
-        async def fake_with_media(expr, dictionary, session, store_html=False):
+        async def fake_with_media(expr, dictionary, session, store_html=False, issue_mode=None):
             seen.append(expr.url)
             return 1
 
@@ -152,7 +150,7 @@ class TestRetryStatusSelection:
 
         seen = []
 
-        async def fake_with_media(expr, dictionary, session, store_html=False):
+        async def fake_with_media(expr, dictionary, session, store_html=False, issue_mode=None):
             seen.append(expr.url)
             return 1
 
@@ -183,7 +181,7 @@ class TestRetryStatusSelection:
 
         seen = []
 
-        async def fake_with_media(expr, dictionary, session, store_html=False):
+        async def fake_with_media(expr, dictionary, session, store_html=False, issue_mode=None):
             seen.append(expr.url)
             return 1
 

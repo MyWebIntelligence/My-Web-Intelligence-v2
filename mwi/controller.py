@@ -4,7 +4,6 @@ Application controller
 import asyncio
 import os
 import sys
-from typing import Any
 
 from peewee import JOIN, fn
 import aiohttp
@@ -714,6 +713,21 @@ class LandController:
         fetch_limit = core.get_arg_option('limit', args, set_type=int, default=0)
         depth = core.get_arg_option('depth', args, set_type=int, default=None)
         min_relevance = core.get_arg_option('minrel', args, set_type=int, default=0)
+        # --llm=true: re-run the OpenRouter gate during consolidation (idiom
+        # identical to `land readable --llm`). Without it, consolidate still
+        # respects stored verdicts (validllm='non' => relevance 0).
+        llm_option = core.get_arg_option('llm', args, set_type=str, default='false')
+        llm_revalidate = str(llm_option).strip().lower() in ('true', '1', 'yes', 'on')
+        # --issuecrawl: force the stricter "controversy analysis" prompt.
+        # None => the gate falls back to settings.openrouter_issue_mode.
+        issue_mode = True if getattr(args, 'issuecrawl', False) else None
+        if llm_revalidate and not (
+            getattr(settings, 'openrouter_enabled', False)
+            and settings.openrouter_api_key and settings.openrouter_model
+        ):
+            print('--llm=true ignored: OpenRouter not configured '
+                  '(openrouter_enabled / api_key / model) — consolidating without LLM')
+            llm_revalidate = False
         land = model.Land.get_or_none(model.Land.name == args.name)
         if land is None:
             print('Land "%s" not found' % args.name)
@@ -722,7 +736,8 @@ class LandController:
                 asyncio.set_event_loop(asyncio.ProactorEventLoop())
             loop = _get_event_loop()
             results = loop.run_until_complete(
-                core.consolidate_land(land, fetch_limit, depth, min_relevance)
+                core.consolidate_land(land, fetch_limit, depth, min_relevance,
+                                      llm_revalidate=llm_revalidate, issue_mode=issue_mode)
             )
             consolidated, errors = results
             print(
@@ -1436,10 +1451,14 @@ class LandController:
         # policy will apply, including --fullhtml=FALSE override scenarios.
         print(f'Full HTML storage: {"ON" if store_html else "OFF"} (source: {source})')
 
+        # --issuecrawl: stricter "controversy analysis" prompt for the LLM gate
+        # (None => settings.openrouter_issue_mode).
+        issue_mode = True if getattr(args, 'issuecrawl', False) else None
+
         loop = _get_event_loop()
         results = loop.run_until_complete(core.crawl_land(
             land, fetch_limit, http_status, depth,
-            store_html=store_html, retry_status=retry_status))
+            store_html=store_html, retry_status=retry_status, issue_mode=issue_mode))
         print("%d expressions processed (%d errors)" % results)
         return 1
 
@@ -1496,9 +1515,14 @@ class LandController:
         if sys.platform == 'win32':
             asyncio.set_event_loop(asyncio.ProactorEventLoop())
         
+        # --issuecrawl: stricter "controversy analysis" prompt for the LLM gate
+        # (None => settings.openrouter_issue_mode).
+        issue_mode = True if getattr(args, 'issuecrawl', False) else None
+
         loop = _get_event_loop()
         results = loop.run_until_complete(
-            run_readable_pipeline(land, fetch_limit, depth_limit, merge_strategy, llm_enabled)
+            run_readable_pipeline(land, fetch_limit, depth_limit, merge_strategy,
+                                  llm_enabled, issue_mode=issue_mode)
         )
         
         print("%d expressions processed (%d errors)" % results)
@@ -1607,6 +1631,9 @@ class LandController:
 
         limit = core.get_arg_option('limit', args, set_type=int, default=0)
         force = bool(getattr(args, 'force', False))
+        # --issuecrawl: force the stricter "controversy analysis" prompt.
+        # None => the gate falls back to settings.openrouter_issue_mode.
+        issue_mode = True if getattr(args, 'issuecrawl', False) else None
 
         # Expressions à valider: sans verdict ('oui'/'non') ET avec readable non NULL et suffisamment long
         # Base condition on previous verdicts
@@ -1638,7 +1665,7 @@ class LandController:
         updated = 0
         for expr in q:
             total += 1
-            verdict = llm.is_relevant_via_openrouter(land, expr)
+            verdict = llm.is_relevant_via_openrouter(land, expr, issue_mode=issue_mode)
             if verdict is True:
                 expr.validllm = 'oui'
                 expr.validmodel = settings.openrouter_model
@@ -1655,7 +1682,9 @@ class LandController:
                 # verdict None: ne pas toucher
                 pass
 
-        print(f'Validation LLM terminée: examinées={total}, mises à jour={updated}, modèle={settings.openrouter_model}, force={force}')
+        print(f'Validation LLM terminée: examinées={total}, mises à jour={updated}, '
+              f'modèle={settings.openrouter_model}, force={force}, '
+              f'issuecrawl={bool(getattr(args, "issuecrawl", False))}')
         return 1
 
 

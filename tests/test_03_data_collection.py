@@ -1,11 +1,9 @@
 """
 Tests for data collection: crawl, readable, SEO Rank, LLM validation.
 """
-import os
 import random
 import string
 import pytest
-from unittest.mock import patch, Mock
 from datetime import datetime
 
 
@@ -65,14 +63,12 @@ class TestLandCrawlMocked:
     def test_crawl_respects_limit(self, fresh_db, monkeypatch):
         """--limit=N ne crawle que N pages."""
         controller = fresh_db["controller"]
-        model = fresh_db["model"]
         core = fresh_db["core"]
 
         name = rand_name("test")
         controller.LandController.create(
             core.Namespace(name=name, desc="Test land", lang=["fr"])
         )
-        land = model.Land.get(model.Land.name == name)
 
         # Ajouter 3 URLs
         for i in range(3):
@@ -156,7 +152,7 @@ class TestLandReadableMocked:
         )
 
         # Mock readable pipeline
-        async def mock_readable_pipeline(land_obj, limit, depth, merge, llm):
+        async def mock_readable_pipeline(land_obj, limit, depth, merge, llm, issue_mode=None):
             expr_upd = model.Expression.get(model.Expression.id == expr.id)
             expr_upd.readable = "Extracted readable content"
             expr_upd.title = "Article Title"
@@ -202,7 +198,7 @@ class TestLandReadableMocked:
 
         process_count = [0]
 
-        async def mock_readable_pipeline(land_obj, limit, depth, merge, llm):
+        async def mock_readable_pipeline(land_obj, limit, depth, merge, llm, issue_mode=None):
             count = min(limit or 3, 3)
             process_count[0] = count
             return (count, 0)
@@ -235,7 +231,7 @@ class TestLandSeorank:
 
         # Créer expression avec relevance >= 1
         domain = model.Domain.create(name="example.com")
-        expr = model.Expression.create(
+        model.Expression.create(
             land=land,
             domain=domain,
             url="https://example.com/page",
@@ -376,7 +372,7 @@ class TestLandLlmValidateMocked:
 
         # Mock LLM validation
         from mwi import llm_openrouter
-        def mock_is_relevant(land_obj, expr_obj):
+        def mock_is_relevant(land_obj, expr_obj, issue_mode=None):
             return True  # oui
 
         monkeypatch.setattr(llm_openrouter, "is_relevant_via_openrouter", mock_is_relevant)
@@ -427,7 +423,7 @@ class TestLandLlmValidateMocked:
         )
 
         from mwi import llm_openrouter
-        def mock_is_relevant(land_obj, expr_obj):
+        def mock_is_relevant(land_obj, expr_obj, issue_mode=None):
             return False  # non
 
         monkeypatch.setattr(llm_openrouter, "is_relevant_via_openrouter", mock_is_relevant)
@@ -499,7 +495,7 @@ class TestLandConsolidate:
         )
 
         # Mock consolidate
-        async def mock_consolidate(land_obj, limit, depth, minrel):
+        async def mock_consolidate(land_obj, limit, depth, minrel, llm_revalidate=False, issue_mode=None):
             # Simulate relevance recalculation
             core.land_relevance(land_obj)
             return (1, 0)

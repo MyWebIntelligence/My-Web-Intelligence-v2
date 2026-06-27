@@ -5,6 +5,47 @@ The format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.
 
 ## [Unreleased]
 
+### Added — LLM Verdicts & Controversy Mode (sprint validate-update)
+
+- `land consolidate` now **respects stored LLM verdicts**. After the lexical
+  relevance recompute, an expression with `validllm='non'` has its relevance
+  forced to `0` — consolidate no longer silently resurrects pages the LLM had
+  rejected. `validllm='oui'` or `NULL` keeps the lexical score as before.
+  Consolidate does **not** call the LLM by default.
+- New `land consolidate --llm=true` flag (same idiom as `land readable
+  --llm=true`) — re-runs the OpenRouter relevance gate per expression
+  (respecting `openrouter_readable_min_chars`), refreshes `validllm`/`validmodel`,
+  then applies the verdict gate. If OpenRouter is not configured, the flag is
+  ignored with a warning and consolidate proceeds without LLM (still respecting
+  stored verdicts). Bound LLM calls with `--limit`/`--depth`/`--minrel`.
+- New **controversy-analysis mode** for the LLM relevance gate, reachable two ways:
+  - Global switch: setting `openrouter_issue_mode` (env `MWI_OPENROUTER_ISSUE_MODE`,
+    default `false`) — honored by **every** gate call: crawl, readable,
+    consolidate, `llm validate`.
+  - Per-run override: CLI flag `--issuecrawl` on `land crawl`, `land readable`,
+    `land consolidate` (with `--llm=true`), and `land llm validate`. The flag
+    forces issue mode for that run; when absent, the gate falls back to the
+    settings default.
+  In issue mode the prompt keeps only editorial / position-taking pages that
+  engage the project's issue (a stance, argument, opinion, analysis, or
+  substantive information) and rejects index/summary/navigation pages and generic
+  company-presentation pages that do not debate the issue (controversy-mapping
+  tradition — Venturini/Latour). Same yes/no verdict semantics; `validllm='non'`
+  still forces relevance `0`.
+- New tests `tests/test_32_validate_update.py`.
+
+### Changed
+
+- LLM gate prompts are now **English everywhere** and explicitly state the
+  project's working language (e.g. "The project's working language is French
+  (fr)"), instructing the model to think and reason within that linguistic and
+  cultural context. This applies to both the standard relevance prompt and the
+  controversy/issue prompt, and **supersedes** the previous French/English
+  template split (sprint-multilang "D7"). The yes/no parser still accepts
+  oui/non and yes/no.
+- Settings: new `openrouter_issue_mode` (env `MWI_OPENROUTER_ISSUE_MODE`,
+  default `false`).
+
 ### Added — Multi-API Search Router (sprint-searchrouter)
 
 - New `mwi/search/` package — orchestrates URL collection across 5 providers:

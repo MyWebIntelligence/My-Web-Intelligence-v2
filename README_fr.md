@@ -472,7 +472,7 @@ Points clés :
 ### 1. Crawler les URLs du land
 
 ```bash
-python mywi.py land crawl --name="MonProjet" [--limit N] [--http CODE] [--retry-status CSV] [--depth D] [--fullhtml=TRUE|FALSE]
+python mywi.py land crawl --name="MonProjet" [--limit N] [--http CODE] [--retry-status CSV] [--depth D] [--fullhtml=TRUE|FALSE] [--issuecrawl]
 ```
 
 - `--limit` : plafond d’URLs par run.
@@ -480,6 +480,7 @@ python mywi.py land crawl --name="MonProjet" [--limit N] [--http CODE] [--retry-
 - `--retry-status` : codes séparés par virgule à relancer, en ignorant `fetched_at` (`--retry-status=403,429`). Mode backfill cascade.
 - `--depth` : limite la profondeur.
 - `--fullhtml` : surcharge ponctuelle de la politique de stockage HTML (sinon hérite de `land.fullhtml`).
+- `--issuecrawl` : force le mode « analyse de controverse » de la gate LLM (OpenRouter) pour ce run (cf. [Pipeline de consolidation des lands](#pipeline-de-consolidation-des-lands)).
 
 > Astuce shell :
 > `for i in {1..100}; do python mywi.py land crawl --name="MonProjet" --depth=0 --limit=100; done`
@@ -521,13 +522,14 @@ python mywi.py land crawl --name="MonProjet" [--limit N] [--http CODE] [--retry-
 **Pré-requis** : `npm install -g @postlight/mercury-parser`
 
 ```bash
-python mywi.py land readable --name="MonProjet" [--limit N] [--depth D] [--merge stratégie] [--llm=true|false]
+python mywi.py land readable --name="MonProjet" [--limit N] [--depth D] [--merge stratégie] [--llm=true|false] [--issuecrawl]
 ```
 
 - `smart_merge` (défaut) : fusion intelligente.
 - `mercury_priority` : Mercury écrase tout.
 - `preserve_existing` : complète uniquement les champs vides.
 - `--llm=true` : filtre OpenRouter (si configuré).
+- `--issuecrawl` : force le mode « analyse de controverse » de la gate LLM pour ce run (cf. [Pipeline de consolidation des lands](#pipeline-de-consolidation-des-lands)).
 
 ### 3. Capturer les métriques SEO Rank
 
@@ -620,8 +622,39 @@ python mywi.py heuristic update
 ## Pipeline de consolidation des lands
 
 ```bash
-python mywi.py land consolidate --name="MonProjet" [--limit N] [--depth D]
+python mywi.py land consolidate --name="MonProjet" [--limit N] [--depth D] [--minrel R] [--llm=true] [--issuecrawl]
 ```
+
+Reconstruit les liens et médias et recalcule la pertinence lexicale. La
+consolidation **respecte les verdicts LLM déjà stockés** : après le recalcul
+lexical, si `expression.validllm = 'non'`, la pertinence est forcée à `0` (la
+page rejetée n'est jamais ressuscitée). `validllm = 'oui'` ou `NULL` → le score
+lexical s'applique normalement. Par défaut, `land consolidate` n'appelle pas le
+LLM.
+
+- `--llm=true` : relance la gate de pertinence OpenRouter par expression
+  (en respectant `openrouter_readable_min_chars`), rafraîchit
+  `validllm`/`validmodel`, puis applique la règle ci-dessus. Si OpenRouter n'est
+  pas configuré, le flag est ignoré avec un avertissement et la consolidation
+  continue sans LLM (en respectant toujours les verdicts stockés). Bornez les
+  appels avec `--limit` / `--depth` / `--minrel`.
+- `--issuecrawl` : avec `--llm=true`, force le mode « analyse de controverse »
+  pour ce run (voir ci-dessous).
+
+**Mode analyse de controverse** — activable globalement via le paramètre
+`openrouter_issue_mode` (variable d'environnement `MWI_OPENROUTER_ISSUE_MODE`,
+défaut `false`) ou ponctuellement via le flag `--issuecrawl` (sur `land crawl`,
+`land readable`, `land consolidate --llm=true` et `land llm validate`). Dans ce
+mode, la gate LLM ne retient que les pages éditoriales / de prise de position
+qui engagent la problématique du projet (argument, opinion, analyse ou
+information substantielle) et rejette les pages d'index, de sommaire, de
+navigation et les pages de présentation d'entreprise génériques qui ne débattent
+pas la question (tradition de la cartographie des controverses,
+Venturini/Latour). La sémantique du verdict oui/non est inchangée :
+`validllm = 'non'` force toujours la pertinence à `0`. Les prompts LLM
+(pertinence standard et controverse) sont rédigés en anglais et énoncent
+explicitement la langue de travail du projet, en demandant au modèle de
+raisonner dans cette langue.
 
 ## Normalisation des URLs
 
@@ -976,7 +1009,7 @@ mywi.py  →  mwi/cli.py  →  mwi/controller.py  →  mwi/core.py & mwi/export.
 
 - `data_location`, `archive`, `dynamic_media_extraction`, `parallel_connections`, `default_timeout`, `user_agent`, `heuristics`.
 - Embeddings : `embed_provider`, `embed_model_name`, `embed_api_url`, `embed_batch_size`, `embed_min_paragraph_chars`, `embed_max_paragraph_chars`, `embed_similarity_method`, `embed_similarity_threshold`, retrys.
-- OpenRouter : `openrouter_enabled`, `openrouter_api_key`, `openrouter_model`, `openrouter_timeout`, `openrouter_readable_min_chars`, `openrouter_readable_max_chars`, `openrouter_max_calls_per_run`.
+- OpenRouter : `openrouter_enabled`, `openrouter_api_key`, `openrouter_model`, `openrouter_timeout`, `openrouter_readable_min_chars`, `openrouter_readable_max_chars`, `openrouter_max_calls_per_run`, `openrouter_issue_mode`.
 - SEO Rank : `seorank_api_base_url`, `seorank_api_key`, `seorank_timeout`, `seorank_request_delay`.
 - SerpAPI : `serpapi_api_key`, `serpapi_base_url`, `serpapi_timeout`.
 - NLI : `nli_model_name`, `nli_fallback_model_name`, `nli_backend_preference`, `nli_batch_size`, `nli_max_tokens`, `nli_torch_num_threads`, `nli_progress_every_pairs`, `nli_show_throughput`, `nli_entailment_threshold`, `nli_contradiction_threshold`.

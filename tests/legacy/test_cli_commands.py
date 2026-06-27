@@ -2,7 +2,6 @@ import json
 import random
 import string
 from argparse import Namespace
-from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
@@ -88,7 +87,7 @@ def test_land_addterm_addurl_and_crawl_readable_export(fresh_db, tmp_path, monke
 
     llm_seen = []
 
-    async def _fake_readable_pipeline(land_obj, limit, depth, merge, llm_enabled):
+    async def _fake_readable_pipeline(land_obj, limit, depth, merge, llm_enabled, issue_mode=None):
         llm_seen.append(llm_enabled)
         return (0, 0)
 
@@ -135,7 +134,7 @@ def test_land_consolidate_and_medianalyse(fresh_db, monkeypatch):
     name = rand_name("land")
     assert controller.LandController.create(core.Namespace(name=name, desc="d", lang=["fr"])) == 1
 
-    async def _fake_consolidate_land(land_obj, limit, depth, min_rel):
+    async def _fake_consolidate_land(land_obj, limit, depth, min_rel, llm_revalidate=False, issue_mode=None):
         return (2, 0)
 
     async def _fake_medianalyse_land(land_obj, depth=None, minrel=None):
@@ -375,11 +374,9 @@ def test_domain_crawl_cli(fresh_db, monkeypatch):
 def test_tag_export_cli(fresh_db, monkeypatch):
     controller = fresh_db["controller"]
     core = fresh_db["core"]
-    model = fresh_db["model"]
 
     name = rand_name("land")
     assert controller.LandController.create(core.Namespace(name=name, desc="d", lang=["fr"])) == 1
-    land = model.Land.get(model.Land.name == name)
 
     calls = {"count": 0}
 
@@ -1242,7 +1239,7 @@ async def test_core_crawl_land(monkeypatch, fresh_db):
         expr.depth = i % 2
         expr.save()
 
-    async def fake_worker(expression, dictionary, session, store_html=False):
+    async def fake_worker(expression, dictionary, session, store_html=False, issue_mode=None):
         return 1
 
     class FakeSession:

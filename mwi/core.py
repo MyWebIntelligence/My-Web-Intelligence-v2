@@ -1474,7 +1474,7 @@ def get_keywords(soup: BeautifulSoup) -> str:
     return ""
 
 
-async def crawl_land(land: model.Land, limit: int = 0, http: Optional[str] = None, depth: Optional[int] = None, store_html: bool = False, retry_status: Optional[list] = None) -> tuple:
+async def crawl_land(land: model.Land, limit: int = 0, http: Optional[str] = None, depth: Optional[int] = None, store_html: bool = False, retry_status: Optional[list] = None, issue_mode: Optional[bool] = None) -> tuple:
     """Asynchronously crawl all expressions in a land.
 
     This function orchestrates the crawling process for a land, processing
@@ -1576,7 +1576,7 @@ async def crawl_land(land: model.Land, limit: int = 0, http: Optional[str] = Non
                 connector = aiohttp.TCPConnector(limit=settings.parallel_connections, ssl=False)
                 async with aiohttp.ClientSession(connector=connector, max_field_size=16384) as session:
                     tasks = [
-                        crawl_expression_with_media_analysis(expr, dictionary, session, store_html=store_html)
+                        crawl_expression_with_media_analysis(expr, dictionary, session, store_html=store_html, issue_mode=issue_mode)
                         for expr in current_batch_expressions
                     ]
                     # return_exceptions=True: a single expression raising
@@ -1696,7 +1696,7 @@ def _extract_content_and_links(raw_html, expression, source_method: str = "aioht
     return content, links
 
 
-async def crawl_expression_with_media_analysis(expression: model.Expression, dictionary, session: aiohttp.ClientSession, store_html: bool = False):
+async def crawl_expression_with_media_analysis(expression: model.Expression, dictionary, session: aiohttp.ClientSession, store_html: bool = False, issue_mode: Optional[bool] = None):
     """Crawl and process an expression with integrated media analysis.
 
     This function fetches an expression's URL, extracts content using Trafilatura,
@@ -1762,7 +1762,7 @@ async def crawl_expression_with_media_analysis(expression: model.Expression, dic
             try:
                 from .llm_openrouter import is_relevant_via_openrouter  # local import to avoid overhead when disabled
                 if getattr(settings, 'openrouter_enabled', False) and settings.openrouter_api_key and settings.openrouter_model:
-                    verdict = is_relevant_via_openrouter(expression.land, expression)  # type: ignore
+                    verdict = is_relevant_via_openrouter(expression.land, expression, issue_mode=issue_mode)  # type: ignore
                     if verdict is False:
                         expression.relevance = 0  # type: ignore
                     else:
@@ -1820,6 +1820,8 @@ async def consolidate_land(
     limit: int = 0,
     depth: Optional[int] = None,
     min_relevance: int = 0,
+    llm_revalidate: bool = False,
+    issue_mode: Optional[bool] = None,
 ) -> tuple:
     """Consolidate a land by reprocessing expressions and rebuilding relationships.
 
@@ -1838,6 +1840,11 @@ async def consolidate_land(
     Notes:
         - Only processes expressions that have been approved or have readable content.
         - Recalculates relevance scores based on current land dictionary.
+        - Respects existing LLM verdicts: an expression with validllm='non'
+          keeps relevance=0 (it is never resurrected by the lexical recompute).
+        - With llm_revalidate=True, re-runs the OpenRouter gate (issue_mode
+          honoured, None => settings.openrouter_issue_mode) and refreshes
+          validllm/validmodel before applying the verdict.
         - Deletes and recreates all expression links from content.
         - Extracts and analyzes media from existing content.
         - Useful for repairing data after manual content edits or dictionary updates.
@@ -1881,12 +1888,29 @@ async def consolidate_land(
                 model.ExpressionLink.delete().where(model.ExpressionLink.source == expr.id).execute()
                 model.Media.delete().where(model.Media.expression == expr.id).execute()
 
-                # 2. Recalculer la relevance sans appel OpenRouter
+                # 2. Re-validation LLM optionnelle (--llm=true), puis recalcul
+                #    lexical, puis respect du verdict LLM existant.
+                if (llm_revalidate and expr.readable and
+                        len(str(expr.readable)) >= getattr(settings, 'openrouter_readable_min_chars', 0)):
+                    from .llm_openrouter import is_relevant_via_openrouter
+                    verdict = is_relevant_via_openrouter(land, expr, issue_mode=issue_mode)
+                    if verdict is True:
+                        expr.validllm = 'oui'  # type: ignore
+                        expr.validmodel = settings.openrouter_model  # type: ignore
+                    elif verdict is False:
+                        expr.validllm = 'non'  # type: ignore
+                        expr.validmodel = settings.openrouter_model  # type: ignore
+                    # verdict None (désactivé/budget/erreur) : ne pas toucher validllm
                 try:
-                    expr.relevance = expression_relevance(dictionary, expr)  # type: ignore
+                    new_rel = expression_relevance(dictionary, expr)  # type: ignore
                 except Exception as e:
                     print(f"Error recalculating relevance for {expr.url}: {e}")
-                    expr.relevance = expr.relevance or 0  # type: ignore
+                    new_rel = expr.relevance or 0  # type: ignore
+                # Respecter le verdict LLM : ne pas ressusciter une page rejetée
+                # ('non' => 0). Traçabilité scientifique.
+                if getattr(expr, 'validllm', None) == 'non':
+                    new_rel = 0
+                expr.relevance = new_rel  # type: ignore
                 expr.save()
 
                 # 3. Extraire les liens sortants du contenu lisible
@@ -1949,7 +1973,7 @@ async def consolidate_land(
     return total_processed, total_errors
 
 
-async def crawl_expression(expression: model.Expression, dictionary, session: aiohttp.ClientSession, store_html: bool = False):
+async def crawl_expression(expression: model.Expression, dictionary, session: aiohttp.ClientSession, store_html: bool = False, issue_mode: Optional[bool] = None):
     """Crawl and process an expression using a multi-stage fallback pipeline.
 
     This function fetches and processes web content through a sophisticated pipeline
@@ -2002,7 +2026,7 @@ async def crawl_expression(expression: model.Expression, dictionary, session: ai
             try:
                 from .llm_openrouter import is_relevant_via_openrouter
                 if getattr(settings, 'openrouter_enabled', False) and settings.openrouter_api_key and settings.openrouter_model:
-                    verdict = is_relevant_via_openrouter(expression.land, expression)  # type: ignore
+                    verdict = is_relevant_via_openrouter(expression.land, expression, issue_mode=issue_mode)  # type: ignore
                     if verdict is False:
                         expression.relevance = 0  # type: ignore
                     else:

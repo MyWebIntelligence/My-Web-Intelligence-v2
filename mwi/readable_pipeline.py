@@ -118,7 +118,8 @@ class MercuryReadablePipeline:
                  merge_strategy: MergeStrategy = MergeStrategy.SMART_MERGE,
                  batch_size: int = 10,
                  max_retries: int = 3,
-                 llm_enabled: bool = False):
+                 llm_enabled: bool = False,
+                 issue_mode: Optional[bool] = None):
         """Initialize the Mercury Parser readable pipeline.
 
         Args:
@@ -127,6 +128,9 @@ class MercuryReadablePipeline:
             batch_size: Number of expressions to process concurrently in each batch.
             max_retries: Maximum number of retry attempts for failed extractions.
             llm_enabled: Whether to use LLM-based relevance validation via OpenRouter.
+            issue_mode: Forwarded to the OpenRouter gate. None (default) lets the
+                gate fall back to settings.openrouter_issue_mode; True/False
+                override per run (--issuecrawl).
 
         Notes:
             Statistics are tracked in self.stats dictionary including processed count,
@@ -138,6 +142,7 @@ class MercuryReadablePipeline:
         self.max_retries = max_retries
         self.logger = logging.getLogger(__name__)
         self.llm_enabled = llm_enabled
+        self.issue_mode = issue_mode
         self.stats = {
             'processed': 0,
             'updated': 0,
@@ -901,7 +906,7 @@ class MercuryReadablePipeline:
                 relevance = self._calculate_relevance(dictionary, expression)
                 if self.llm_enabled and getattr(settings, 'openrouter_enabled', False) and settings.openrouter_api_key and settings.openrouter_model:
                     from .llm_openrouter import is_relevant_via_openrouter
-                    verdict = is_relevant_via_openrouter(expression.land, expression)
+                    verdict = is_relevant_via_openrouter(expression.land, expression, issue_mode=self.issue_mode)
                     if verdict is False:
                         relevance = 0
             except Exception as e:
@@ -1138,7 +1143,8 @@ async def run_readable_pipeline(land: model.Land,
                               limit: Optional[int] = None,
                               depth: Optional[int] = None,
                               merge_strategy: str = 'smart_merge',
-                              llm_enabled: bool = False) -> Tuple[int, int]:
+                              llm_enabled: bool = False,
+                              issue_mode: Optional[bool] = None) -> Tuple[int, int]:
     """Point d'entrée pour le contrôleur.
 
     Entry point for the readable pipeline controller.
@@ -1172,7 +1178,8 @@ async def run_readable_pipeline(land: model.Land,
 
     pipeline = MercuryReadablePipeline(
         merge_strategy=strategy_map.get(merge_strategy, MergeStrategy.SMART_MERGE),
-        llm_enabled=llm_enabled
+        llm_enabled=llm_enabled,
+        issue_mode=issue_mode
     )
 
     print(f"🚀 Starting readable pipeline for land: {land.name}")

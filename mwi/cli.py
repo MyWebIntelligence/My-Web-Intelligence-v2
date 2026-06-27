@@ -224,6 +224,13 @@ def command_input():
                         help='Force: re-validate previous "non" verdicts (land llm validate), '
                              'refresh existing data (land seorank), '
                              'skip confirmation (embedding reset)')
+    parser.add_argument('--issuecrawl',
+                        action='store_true',
+                        help='LLM gate: stricter "controversy analysis" prompt — keep only '
+                             'editorial/position-taking pages on the project issue; drop '
+                             'index/navigation and generic company-presentation pages. '
+                             'Overrides settings.openrouter_issue_mode for this run '
+                             '(land crawl | readable | consolidate | llm validate)')
     # Media maintenance verbs (land media_stats / preview_deletion / reanalyze)
     parser.add_argument('--minwidth',
                         type=int,

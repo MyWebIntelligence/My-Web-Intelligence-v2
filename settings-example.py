@@ -133,6 +133,12 @@ openrouter_model_examples = [
     # Deepseek
     "deepseek/deepseek-v4-flash",
 ]
+# "Controversy analysis" mode: when True, the LLM gate uses a stricter prompt
+# that keeps only editorial / position-taking pages on the project's issue and
+# drops index/navigation and generic company-presentation pages. Global default
+# for every gate call (crawl, readable, consolidate, llm validate); the
+# --issuecrawl CLI flag overrides it per run.
+openrouter_issue_mode = os.getenv("MWI_OPENROUTER_ISSUE_MODE", "false").lower() == "true"
 openrouter_timeout = int(os.getenv("MWI_OPENROUTER_TIMEOUT", "15"))
 # Bounds to control costs/latency
 openrouter_readable_min_chars = int(os.getenv("MWI_OPENROUTER_MIN_CHARS", "140"))

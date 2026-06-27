@@ -552,6 +552,7 @@ python mywi.py land crawl --name="MyResearchTopic" [--limit=NUMBER] [--http=HTTP
 | --retry-status | str    | No       |                | Comma-separated codes to retry, ignoring `fetched_at` (e.g., `403,429`)     |
 | --depth        | int    | No       |                | Only crawl URLs that remain to be crawled at the specified depth            |
 | --fullhtml     | str    | No       | (land default) | Override the land's HTML-storage policy (`TRUE`/`FALSE`) for this crawl     |
+| --issuecrawl   | flag   | No       | off            | Force the OpenRouter gate into controversy-analysis mode for this run (see below); when absent, the gate uses the `openrouter_issue_mode` setting default |
 
 **Examples:**
 ```bash
@@ -562,7 +563,17 @@ python mywi.py land crawl --name="AsthmaResearch" --depth=2
 python mywi.py land crawl --name="AsthmaResearch" --depth=1 --limit=5
 python mywi.py land crawl --name="AsthmaResearch" --fullhtml=TRUE   # archive the raw HTML
 python mywi.py land crawl --name="AsthmaResearch" --retry-status=403,429   # backfill cascade
+python mywi.py land crawl --name="AsthmaResearch" --issuecrawl     # controversy-analysis gate
 ```
+
+> **Controversy-analysis mode (`--issuecrawl`)** — when the OpenRouter gate is
+> enabled, `--issuecrawl` forces it into *issue mode* for this run, overriding
+> the `openrouter_issue_mode` setting default. In issue mode the gate keeps only
+> editorial / position-taking pages that engage the project's issue (a stance,
+> argument, opinion, analysis, or substantive information) and rejects
+> index/summary/navigation pages and generic company-presentation pages. See
+> [OpenRouter Relevance Gate](#optional-openrouter-relevance-gate-ai-yesno-filter)
+> for details.
 
 > **Anti-Cloudflare cascade** — if `aiohttp` returns a "retryable" status
 > (`403`, `406`, `429`, `503`, `520`, `521`, `523`, `526`, `ERR`), MWI automatically falls
@@ -612,7 +623,7 @@ sudo npm install -g @postlight/mercury-parser
 
 **Command:**
 ```bash
-python mywi.py land readable --name="MyResearchTopic" [--limit=NUMBER] [--depth=NUMBER] [--merge=STRATEGY] [--llm=true|false]
+python mywi.py land readable --name="MyResearchTopic" [--limit=NUMBER] [--depth=NUMBER] [--merge=STRATEGY] [--llm=true|false] [--issuecrawl]
 ```
 
 | Option   | Type   | Required | Default | Description                                         |
@@ -622,6 +633,7 @@ python mywi.py land readable --name="MyResearchTopic" [--limit=NUMBER] [--depth=
 | --depth  | int    | No       |         | Maximum crawl depth to process (e.g., 2 = seeds + 2 levels) |
 | --merge  | str    | No       | smart_merge | Merge strategy for content fusion (see below)    |
 | --llm    | bool   | No       | false   | Enable OpenRouter relevance check (`true` to activate) |
+| --issuecrawl | flag | No     | off     | Force the OpenRouter gate into controversy-analysis mode for this run (overrides the `openrouter_issue_mode` setting default) |
 
 **Merge Strategies:**
 
@@ -668,6 +680,9 @@ python mywi.py land readable --name="AsthmaResearch" --limit=100 --depth=1 --mer
 
 # Trigger OpenRouter validation (requires OpenRouter configuration)
 python mywi.py land readable --name="AsthmaResearch" --llm=true
+
+# Validate in controversy-analysis mode (issue mode) for this run
+python mywi.py land readable --name="AsthmaResearch" --llm=true --issuecrawl
 ```
 
 **Output:** The pipeline provides detailed statistics including:
@@ -907,6 +922,7 @@ The `land consolidate` pipeline is designed to re-compute and repair the interna
 - Re-extracts and recreates all outgoing links (ExpressionLink) and media (Media) for these pages.
 - Adds any missing documents referenced by links.
 - Rebuilds the link graph and media associations from scratch, replacing any outdated or inconsistent data.
+- **Respects stored LLM verdicts**: after the lexical recompute, any expression with `validllm='non'` keeps `relevance=0` — consolidation never resurrects a page the LLM previously rejected (`validllm='oui'` or NULL applies the lexical score as before).
 
 **When to use:**  
 - After importing or modifying data in the database with external tools (e.g., MyWebClient).
@@ -914,19 +930,29 @@ The `land consolidate` pipeline is designed to re-compute and repair the interna
 
 **Command:**
 ```bash
-python mywi.py land consolidate --name=LAND_NAME [--limit=LIMIT] [--depth=NbDEEP]
+python mywi.py land consolidate --name=LAND_NAME [--limit=LIMIT] [--depth=NbDEEP] [--minrel=MIN_RELEVANCE] [--llm=true|false] [--issuecrawl]
 ```
 - `--name` (required): Name of the land to consolidate.
 - `--limit` (optional): Maximum number of pages to process.
 - `--depth` (optional): Only process pages at the specified crawl depth.
+- `--minrel` (optional): Only process pages with relevance ≥ this value.
+- `--llm` (optional, default `false`): When `true`, re-run the OpenRouter relevance gate per expression (same idiom as `land readable --llm=true`), refresh `validllm`/`validmodel`, then apply the verdict gate above. If OpenRouter is not configured, the flag is ignored with a warning and consolidation proceeds without the LLM (still respecting stored verdicts). Use `--limit`/`--depth`/`--minrel` to bound LLM calls.
+- `--issuecrawl` (optional): With `--llm=true`, force the gate into controversy-analysis mode for this run (overrides the `openrouter_issue_mode` setting default).
 
 **Example:**
 ```bash
 python mywi.py land consolidate --name="AsthmaResearch" --depth=0
+
+# Re-validate with the LLM gate while consolidating
+python mywi.py land consolidate --name="AsthmaResearch" --llm=true --limit=200
+
+# Same, in controversy-analysis mode
+python mywi.py land consolidate --name="AsthmaResearch" --llm=true --issuecrawl
 ```
 
 **Notes:**
 - Only pages that have already been crawled (`fetched_at` is set) are affected.
+- Consolidation does **not** call the LLM by default; it only respects already-stored verdicts unless `--llm=true` is passed.
 - For each page, the number of extracted links and media is displayed.
 - This pipeline is especially useful after bulk imports, migrations, or when using third-party clients that may not maintain all MyWI invariants.
 
@@ -1483,7 +1509,23 @@ Notes:
 
 #### Optional: OpenRouter Relevance Gate (AI yes/no filter)
 
-If enabled, pages are first judged by an LLM (via OpenRouter) as relevant (yes) or not (no). A "no" sets `relevance=0` and skips further processing; otherwise, the classic weighted relevance is computed. This applies during crawl/readable/consolidation, but not during bulk recomputation (`land addterm`).
+If enabled, pages are first judged by an LLM (via OpenRouter) as relevant (yes) or not (no). A "no" sets `relevance=0` and skips further processing; otherwise, the classic weighted relevance is computed. This applies during crawl/readable/`llm validate`, but not during bulk recomputation (`land addterm`). `land consolidate` does not call the LLM by default but **respects** any stored `validllm='non'` verdict (and can re-run the gate with `--llm=true`).
+
+The prompts are **English everywhere** and explicitly state the project's working
+language (e.g. *"The project's working language is French (fr)"*), instructing the
+model to reason within the project's cultural and linguistic context. The yes/no
+parser accepts both `oui`/`non` and `yes`/`no`.
+
+**Controversy-analysis mode (issue mode)** — when on, the gate keeps only
+editorial / position-taking pages that engage the project's issue (a stance,
+argument, opinion, analysis, or substantive information) and rejects
+index/summary/navigation pages and generic company-presentation pages that do
+not debate the issue (controversy-mapping tradition, Venturini/Latour). Same
+yes/no verdict semantics; a `non` still forces `relevance=0`. Enable it globally
+via the `openrouter_issue_mode` setting (env `MWI_OPENROUTER_ISSUE_MODE`), or
+per-run with the `--issuecrawl` flag on `land crawl`, `land readable`,
+`land consolidate --llm=true`, and `land llm validate` (the flag overrides the
+setting default for that run).
 
 Environment-configurable variables:
 - `MWI_OPENROUTER_ENABLED` (default `false`)
@@ -1492,6 +1534,7 @@ Environment-configurable variables:
 - `MWI_OPENROUTER_TIMEOUT` (default `15` seconds)
 - `MWI_OPENROUTER_MAX_CHARS` (default `12000`)
 - `MWI_OPENROUTER_MAX_CALLS` (default `500`)
+- `MWI_OPENROUTER_ISSUE_MODE` (default `false`) — global controversy-analysis mode for every gate call (`openrouter_issue_mode` in `settings.py`)
 
 Note: When disabled or not configured, the system behaves exactly as before.
 
@@ -1500,12 +1543,15 @@ Validate relevance in bulk via OpenRouter and record the verdict in DB (`express
 
 Command:
 ```bash
-python mywi.py land llm validate --name=LAND [--limit N] [--force]
+python mywi.py land llm validate --name=LAND [--limit N] [--force] [--issuecrawl]
 ```
 
 Requirements:
 - In `settings.py`: set `openrouter_enabled=True`, and provide `openrouter_api_key` and `openrouter_model`.
 - If your DB is old: `python mywi.py db migrate` (adds columns if missing).
+
+`--issuecrawl` option:
+- Force the gate into controversy-analysis mode for this run (overrides the `openrouter_issue_mode` setting default). See [OpenRouter Relevance Gate](#optional-openrouter-relevance-gate-ai-yesno-filter).
 
 Behavior:
 - For each expression without a verdict, call the LLM to answer yes/no.

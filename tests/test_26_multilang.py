@@ -305,8 +305,12 @@ class TestLlmPromptLanguage:
         expr = SimpleNamespace(title="T", description="D", url="https://x.example")
         prompt_fr = llm_openrouter.build_relevance_prompt(land_fr, expr, "texte")
         prompt_en = llm_openrouter.build_relevance_prompt(land_en, expr, "text")
-        assert '"oui" ou "non"' in prompt_fr
+        # sprint validate-update: prompts are now English wrappers that state the
+        # project's working language (supersedes the FR/EN split of D7).
+        assert '"yes" or "no"' in prompt_fr
         assert '"yes" or "no"' in prompt_en
+        assert 'French' in prompt_fr
+        assert 'English' in prompt_en
 
 
 class TestLanguageInheritance:
