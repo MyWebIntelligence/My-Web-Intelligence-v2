@@ -2713,6 +2713,74 @@ def update_heuristic():
     print(f"{updated} domain(s) updated")
 
 
+def prune_orphan_expressions(land: model.Land, *, dry_run: bool = False,
+                             maxrel: int = 0, chunk: int = 500):
+    """Delete (or, in dry-run, count) uncrawled orphan expressions of a land.
+
+    An orphan is an expression that is uncrawled (``fetched_at IS NULL``), not a
+    seed (``depth > 0``, which also excludes ``depth IS NULL``), and has no
+    incoming ``ExpressionLink``. Such an expression is an unreachable leaf in the
+    crawl frontier: nothing points to it anymore, so keeping it in the queue is
+    pointless. Because an uncrawled expression never has outgoing links (links are
+    only created at crawl/readable time), deleting it creates no new orphan — a
+    single pass is exact, no transitive closure is needed.
+
+    In dry-run the orphan set is *projected* as it would be AFTER a pending
+    ``--maxrel`` deletion (sources falling under ``maxrel`` are treated as already
+    gone), so the preview equals the real run. The real run is meant to be called
+    AFTER the ``--maxrel`` DELETE, when the cascade has already removed the deleted
+    parents' links, so the plain "no incoming link" query is exact.
+
+    Args:
+        land: The land whose orphan expressions are considered.
+        dry_run: When True, nothing is deleted; the projected set is only counted.
+        maxrel: The ``--maxrel`` threshold used to project survivors in dry-run.
+        chunk: Batch size for the chunked DELETE (SQLITE_MAX_VARIABLE_NUMBER).
+
+    Returns:
+        Tuple[int, list]: count of orphans (deleted, or projected in dry-run) and
+        a sample of up to 20 ``(url, depth)`` tuples (empty list on the real run).
+    """
+    if dry_run:
+        if maxrel > 0:
+            doomed = ((model.Expression.relevance < maxrel)
+                      & model.Expression.fetched_at.is_null(False))
+            survivors = (model.Expression
+                         .select(model.Expression.id)
+                         .where((model.Expression.land == land) & ~doomed))
+        else:
+            survivors = (model.Expression
+                         .select(model.Expression.id)
+                         .where(model.Expression.land == land))
+        inbound_ok = (model.ExpressionLink
+                      .select(model.ExpressionLink.target_id)
+                      .where(model.ExpressionLink.source_id.in_(survivors)))
+        rows = list(model.Expression
+                    .select()
+                    .where((model.Expression.land == land)
+                           & model.Expression.fetched_at.is_null(True)
+                           & (model.Expression.depth > 0)
+                           & model.Expression.id.not_in(inbound_ok)))
+        return len(rows), [(str(r.url), r.depth) for r in rows[:20]]
+
+    inbound = model.ExpressionLink.select(model.ExpressionLink.target_id)
+    ids = [e.id for e in (model.Expression
+                          .select(model.Expression.id)
+                          .where((model.Expression.land == land)
+                                 & model.Expression.fetched_at.is_null(True)
+                                 & (model.Expression.depth > 0)
+                                 & model.Expression.id.not_in(inbound)))]
+    deleted = 0
+    with model.DB.atomic():
+        for start in range(0, len(ids), chunk):
+            batch = ids[start:start + chunk]
+            deleted += (model.Expression
+                        .delete()
+                        .where(model.Expression.id.in_(batch))
+                        .execute())
+    return deleted, []
+
+
 def delete_media(land: model.Land, max_width: int = 0, max_height: int = 0, max_size: int = 0):
     """Delete all media associated with expressions in a land.
 

@@ -1,11 +1,9 @@
 """
 Tests for land management: CRUD operations, terms, URLs management.
 """
-import os
 import random
 import string
 import pytest
-from unittest.mock import patch
 
 
 def rand_name(prefix="land"):
@@ -425,6 +423,199 @@ class TestLandDelete:
         )
 
         assert ret == 0, "Deleting non-existent land should fail gracefully"
+
+
+def _build_orphan_graph(fresh_db):
+    """Build the reference graph for orphan-pruning tests.
+
+    seed     : depth 0, fetched_at=NULL, relevance NULL  -> uncrawled seed
+    p0       : depth 0, fetched (crawled), relevance 0    -> deleted by maxrel=1
+    r5       : depth 1, fetched (crawled), relevance 5    -> survivor (crawled orphan)
+    c_orphan : depth 1, fetched_at=NULL                   -> linked only by p0
+    c_multi  : depth 1, fetched_at=NULL                   -> linked by p0 AND r5
+    links    : p0->c_orphan, p0->c_multi, r5->c_multi
+    """
+    from datetime import datetime
+    controller = fresh_db["controller"]
+    model = fresh_db["model"]
+    core = fresh_db["core"]
+
+    name = rand_name("orph")
+    controller.LandController.create(
+        core.Namespace(name=name, desc="d", lang=["fr"])
+    )
+    land = model.Land.get(model.Land.name == name)
+    domain, _ = model.Domain.get_or_create(name="example.com")
+    now = datetime.now()
+
+    def expr(slug, depth, relevance=None, fetched=False):
+        return model.Expression.create(
+            land=land, domain=domain,
+            url="https://example.com/%s" % slug,
+            depth=depth, relevance=relevance,
+            fetched_at=(now if fetched else None),
+        )
+
+    nodes = {
+        "seed": expr("seed", 0),
+        "p0": expr("p0", 0, relevance=0, fetched=True),
+        "r5": expr("r5", 1, relevance=5, fetched=True),
+        "c_orphan": expr("c_orphan", 1),
+        "c_multi": expr("c_multi", 1),
+    }
+    model.ExpressionLink.create(source=nodes["p0"], target=nodes["c_orphan"])
+    model.ExpressionLink.create(source=nodes["p0"], target=nodes["c_multi"])
+    model.ExpressionLink.create(source=nodes["r5"], target=nodes["c_multi"])
+    return name, land, nodes
+
+
+class TestLandPruneOrphans:
+    """Tests for `land delete --prune-orphans` (sprint delete-orphelin, TDD)."""
+
+    @staticmethod
+    def _alive(model, node):
+        return model.Expression.get_or_none(model.Expression.id == node.id) is not None
+
+    def test_delete_maxrel_without_prune_keeps_orphans(self, fresh_db, monkeypatch):
+        """T8 (non-regression): --maxrel alone never touches uncrawled orphans."""
+        model = fresh_db["model"]
+        core = fresh_db["core"]
+        controller = fresh_db["controller"]
+        name, land, nodes = _build_orphan_graph(fresh_db)
+        monkeypatch.setattr(core, "confirm", lambda msg: True, raising=True)
+
+        ret = controller.LandController.delete(
+            core.Namespace(name=name, maxrel=1)
+        )
+
+        assert ret == 1
+        assert self._alive(model, nodes["p0"]) is False      # crawled rel<1 deleted
+        assert self._alive(model, nodes["c_orphan"]) is True  # orphan SURVIVES (legacy)
+
+    def test_prune_orphans_real_deletes_uncrawled_orphan(self, fresh_db, monkeypatch):
+        """T1: with the flag, the uncrawled orphan is pruned after the maxrel pass."""
+        model = fresh_db["model"]
+        core = fresh_db["core"]
+        controller = fresh_db["controller"]
+        name, land, nodes = _build_orphan_graph(fresh_db)
+        monkeypatch.setattr(core, "confirm", lambda msg: True, raising=True)
+
+        ret = controller.LandController.delete(
+            core.Namespace(name=name, maxrel=1, prune_orphans=True, dry_run=False)
+        )
+
+        assert ret == 1
+        assert self._alive(model, nodes["p0"]) is False        # maxrel
+        assert self._alive(model, nodes["c_orphan"]) is False   # pruned orphan
+        assert self._alive(model, nodes["r5"]) is True          # survivor
+        assert self._alive(model, nodes["seed"]) is True        # seed
+        assert model.Land.get_or_none(model.Land.name == name) is not None
+
+    def test_prune_orphans_protects_seed(self, fresh_db, monkeypatch):
+        """T2: a depth-0 seed (no incoming link) is never pruned."""
+        model = fresh_db["model"]
+        core = fresh_db["core"]
+        controller = fresh_db["controller"]
+        name, land, nodes = _build_orphan_graph(fresh_db)
+        monkeypatch.setattr(core, "confirm", lambda msg: True, raising=True)
+
+        controller.LandController.delete(
+            core.Namespace(name=name, maxrel=1, prune_orphans=True, dry_run=False)
+        )
+
+        assert self._alive(model, nodes["seed"]) is True
+
+    def test_prune_orphans_protects_multiparent(self, fresh_db, monkeypatch):
+        """T3: a child still linked by a surviving parent is not an orphan."""
+        model = fresh_db["model"]
+        core = fresh_db["core"]
+        controller = fresh_db["controller"]
+        name, land, nodes = _build_orphan_graph(fresh_db)
+        monkeypatch.setattr(core, "confirm", lambda msg: True, raising=True)
+
+        controller.LandController.delete(
+            core.Namespace(name=name, maxrel=1, prune_orphans=True, dry_run=False)
+        )
+
+        assert self._alive(model, nodes["c_multi"]) is True  # r5 still links it
+
+    def test_prune_orphans_protects_crawled_orphan(self, fresh_db, monkeypatch):
+        """T4: a crawled page with no incoming link is kept (only uncrawled pruned)."""
+        model = fresh_db["model"]
+        core = fresh_db["core"]
+        controller = fresh_db["controller"]
+        name, land, nodes = _build_orphan_graph(fresh_db)  # r5 is crawled, no inbound
+        monkeypatch.setattr(core, "confirm", lambda msg: True, raising=True)
+
+        controller.LandController.delete(
+            core.Namespace(name=name, maxrel=1, prune_orphans=True, dry_run=False)
+        )
+
+        assert self._alive(model, nodes["r5"]) is True
+
+    def test_prune_orphans_dry_run_changes_nothing(self, fresh_db, monkeypatch):
+        """T5: --dry-run reports but deletes nothing."""
+        model = fresh_db["model"]
+        core = fresh_db["core"]
+        controller = fresh_db["controller"]
+        name, land, nodes = _build_orphan_graph(fresh_db)
+        monkeypatch.setattr(core, "confirm", lambda msg: True, raising=True)
+
+        before = model.Expression.select().where(
+            model.Expression.land == land
+        ).count()
+        ret = controller.LandController.delete(
+            core.Namespace(name=name, maxrel=1, prune_orphans=True, dry_run=True)
+        )
+        after = model.Expression.select().where(
+            model.Expression.land == land
+        ).count()
+
+        assert ret == 1
+        assert after == before  # nothing deleted in dry-run
+
+    def test_prune_orphans_dry_run_matches_real(self, fresh_db):
+        """T6: the dry-run projection equals what the real run deletes."""
+        model = fresh_db["model"]
+        core = fresh_db["core"]
+        name, land, nodes = _build_orphan_graph(fresh_db)
+
+        projected, _ = core.prune_orphan_expressions(land, dry_run=True, maxrel=1)
+
+        # perform the maxrel delete exactly as the controller would
+        model.Expression.delete().where(
+            (model.Expression.land == land)
+            & (model.Expression.relevance < 1)
+            & (model.Expression.fetched_at.is_null(False))
+        ).execute()
+        deleted, _ = core.prune_orphan_expressions(land, dry_run=False)
+
+        assert projected == deleted == 1  # only c_orphan
+
+    def test_prune_orphans_alone_does_not_delete_land(self, fresh_db, monkeypatch):
+        """T7: --prune-orphans without --maxrel prunes current orphans, keeps the land."""
+        model = fresh_db["model"]
+        core = fresh_db["core"]
+        controller = fresh_db["controller"]
+        name, land, nodes = _build_orphan_graph(fresh_db)
+        domain = model.Domain.get(model.Domain.name == "example.com")
+        pre_orphan = model.Expression.create(
+            land=land, domain=domain, url="https://example.com/pre_orphan",
+            depth=2, relevance=None, fetched_at=None,  # uncrawled, no inbound link
+        )
+        monkeypatch.setattr(core, "confirm", lambda msg: True, raising=True)
+
+        ret = controller.LandController.delete(
+            core.Namespace(name=name, maxrel=None, prune_orphans=True, dry_run=False)
+        )
+
+        assert ret == 1
+        assert model.Land.get_or_none(model.Land.name == name) is not None  # NOT nuked
+        assert self._alive(model, nodes["p0"]) is True   # no maxrel -> crawled kept
+        assert self._alive(model, nodes["r5"]) is True
+        assert self._alive(model, nodes["c_orphan"]) is True  # still linked by p0
+        assert self._alive(model, nodes["c_multi"]) is True
+        assert self._alive(model, pre_orphan) is False    # genuine orphan pruned
 
 
 # Note: Tests SerpAPI et autres tests avec API keys sont volontairement omis

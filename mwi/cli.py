@@ -116,6 +116,13 @@ def command_input():
                         action='store_true',
                         default=False,
                         help='Run VACUUM after deletion to reclaim disk space (slow on large databases)')
+    parser.add_argument('--prune-orphans',
+                        action='store_true',
+                        default=False,
+                        dest='prune_orphans',
+                        help='For land delete: after the --maxrel deletion, also delete '
+                             'uncrawled expressions left with no incoming link '
+                             '(depth>0, fetched_at IS NULL). Combine with --dry-run to preview.')
     parser.add_argument('--http',
                         type=str,
                         help='Limit crawling to specific http status (re crawling)',

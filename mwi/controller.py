@@ -1366,28 +1366,50 @@ class LandController:
         """
         core.check_args(args, 'name')
         maxrel = core.get_arg_option('maxrel', args, set_type=int, default=0)
+        prune = getattr(args, 'prune_orphans', False)
+        dry = getattr(args, 'dry_run', False)
         do_vacuum = getattr(args, 'vacuum', False)
 
-        if core.confirm("Land and/or underlying objects will be deleted, type 'Y' to proceed : "):
-            land = model.Land.get_or_none(model.Land.name == args.name)
-            if land is None:
-                print('Land "%s" not found' % args.name)
-                return 0
+        land = model.Land.get_or_none(model.Land.name == args.name)
+        if land is None:
+            print('Land "%s" not found' % args.name)
+            return 0
+
+        if dry:
             if maxrel > 0:
-                query = model.Expression.delete().where((model.Expression.land == land)
-                                                & (model.Expression.relevance < maxrel)
-                                                & (model.Expression.fetched_at.is_null(False)))
-                deleted = query.execute()
-                print("%d expression(s) deleted" % deleted)
-            else:
-                land.delete_instance(recursive=True)
-                print("Land %s deleted" % args.name)
-            if do_vacuum:
-                print("Running VACUUM (this may take a while on large databases)...")
-                model.DB.execute_sql("VACUUM")
-                print("VACUUM done")
+                n = model.Expression.select().where(
+                    (model.Expression.land == land)
+                    & (model.Expression.relevance < maxrel)
+                    & (model.Expression.fetched_at.is_null(False))).count()
+                print("[dry-run] %d expression(s) would be deleted by --maxrel" % n)
+            if prune:
+                count, sample = core.prune_orphan_expressions(land, dry_run=True, maxrel=maxrel)
+                print("[dry-run] %d uncrawled orphan(s) would be pruned" % count)
+                for url, depth in sample:
+                    print("    - [d%s] %s" % (depth, url))
             return 1
-        return 0
+
+        if not core.confirm(
+                "Land and/or underlying objects will be deleted, type 'Y' to proceed : "):
+            return 0
+        if maxrel > 0:
+            query = model.Expression.delete().where(
+                (model.Expression.land == land)
+                & (model.Expression.relevance < maxrel)
+                & (model.Expression.fetched_at.is_null(False)))
+            deleted = query.execute()
+            print("%d expression(s) deleted" % deleted)
+        elif not prune:
+            land.delete_instance(recursive=True)
+            print("Land %s deleted" % args.name)
+        if prune:
+            count, _ = core.prune_orphan_expressions(land, dry_run=False)
+            print("%d uncrawled orphan(s) pruned" % count)
+        if do_vacuum:
+            print("Running VACUUM (this may take a while on large databases)...")
+            model.DB.execute_sql("VACUUM")
+            print("VACUUM done")
+        return 1
 
     @staticmethod
     def crawl(args: core.Namespace):
