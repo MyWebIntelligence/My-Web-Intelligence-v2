@@ -1575,7 +1575,11 @@ class LandController:
             links CSV), 'corpus' (raw text corpus), 'pseudolinks' (embedding
             similarity links), 'pseudolinkspage' (page-level pseudolinks),
             'pseudolinksdomain' (domain-level pseudolinks), 'nodelinkcsv'
-            (4 CSV files: pagesnodes, pageslinks, domainnodes, domainlinks).
+            (4 CSV files: pagesnodes, pageslinks, domainnodes, domainlinks),
+            'nodesjson' (domain force-graph {nodes, links} JSON, with a
+            per-domain url corpus), 'pagesjson' (page force-graph {nodes,
+            links} JSON, tags array + nested seorank), 'htmldump' (zip of
+            raw stored HTML).
 
             --fullhtml=TRUE (nodelinkcsv only): also emit the raw-HTML closed
             link network — 4 extra *fullhtml.csv files built from every <a href>
@@ -1589,7 +1593,7 @@ class LandController:
         valid_types = ['pagecsv', 'fullpagecsv', 'nodecsv', 'pagegexf',
                        'nodegexf', 'mediacsv', 'corpus', 'pseudolinks',
                        'pseudolinkspage', 'pseudolinksdomain', 'nodelinkcsv',
-                       'htmldump']
+                       'nodesjson', 'pagesjson', 'htmldump']
 
         if isinstance(args.minrel, int) and (args.minrel >= 0):
             minimum_relevance = args.minrel

@@ -870,6 +870,8 @@ python mywi.py land export --name="MyResearchTopic" --type=EXPORT_TYPE [--minrel
   - `*_domainnodes.csv`: Domain nodes with aggregations (id, name, title, description, http_status, nbexpressions, average_relevance, first_expression_date, last_expression_date)
   - `*_domainlinks.csv`: Aggregated inter-domain links (source_domain_id, source_domain_name, target_domain_id, target_domain_name, link_count)
   - With `--fullhtml=TRUE` (requires a land crawled with `--fullhtml`), emits the 4 `*fullhtml.csv` files **instead of** the base 4 — the flag *switches* which network is exported (not additive), so run a separate export without it to also get the MyWI network. These are the **raw link network** rebuilt from *every* `<a href>` in `expression.html` (closed network — targets restricted to corpus pages qualified by `--minrel`). `*_pageslinksfullhtml.csv` adds a `weight` column (anchor multiplicity) and an `in_mywi` column (`1` if the edge also exists in `ExpressionLink`); `*_domainlinksfullhtml.csv` uses `link_count` + `in_mywi`. This lets you compare MyWI's *editorial* link network (`ExpressionLink`, from the readable content) to a classic crawler's *whole-page* network. The export prints a 3-way coverage report (raw∩mywi / raw\mywi / mywi\raw). Without stored HTML the files are emitted empty (header only) with a warning.
+- `nodesjson`: **Domain** graph as a force-graph `{nodes, links}` JSON file (for `react-force-graph`, D3, Sigma). One node per domain carrying at least one expression with `relevance >= minrel`, with 9 analytical fields (`id, name, title, description, keywords, nbexpressions, average_relevance, first_expression_date, last_expression_date`) **plus** `corpus` — the sorted array of that domain's expression URLs. Links are directed inter-domain edges with `value` = page-to-page link count. Output is deterministic. Conforms to `docs/graph.schema.json`.
+- `pagesjson`: **Page** graph as a force-graph `{nodes, links}` JSON file. One node per `Expression` with the `pagecsv` fields (minus `depth`/`readable`), `tags` as a sorted array, and `seorank` as a nested object (`{}` when absent). Absent values are JSON `null` (not the CSV `na` sentinel). Links are page-to-page edges of the closed `minrel` network (intra-domain kept, no aggregation). Output is deterministic. Conforms to `docs/graph.schema.json`.
 - `htmldump` (sprint-html E): Zip archive of the raw HTML stored via
   `--fullhtml`. Contains one `{expression_id}.html` per expression where
   `html IS NOT NULL` plus a `manifest.csv` listing
@@ -886,6 +888,8 @@ python mywi.py land export --name="AsthmaResearch" --type=pseudolinkspage
 python mywi.py land export --name="AsthmaResearch" --type=pseudolinksdomain
 python mywi.py land export --name="AsthmaResearch" --type=nodelinkcsv --minrel=1
 python mywi.py land export --name="AsthmaResearch" --type=nodelinkcsv --fullhtml=TRUE --minrel=1  # raw network only (omit flag for base 4)
+python mywi.py land export --name="AsthmaResearch" --type=nodesjson --minrel=1  # domain force-graph JSON
+python mywi.py land export --name="AsthmaResearch" --type=pagesjson --minrel=1  # page force-graph JSON
 python mywi.py land export --name="AsthmaArchive"  --type=htmldump --minrel=1
 ```
 

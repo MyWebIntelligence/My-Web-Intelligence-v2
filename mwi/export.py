@@ -90,6 +90,8 @@ class Export:
             filename += '.gexf'
         elif export_type.endswith('corpus'):
             filename += '.zip'
+        elif export_type.endswith('json'):        # nodesjson + pagesjson (force-graph)
+            filename += '.json'
         elif export_type == 'htmldump':
             filename += '.zip'
         return call_write(filename)
@@ -240,6 +242,162 @@ class Export:
         """
         cursor = self.get_sql_cursor(sql, col_map)
         return self.write_csv(filename, col_map.keys(), cursor)
+
+    def write_nodesjson(self, filename) -> int:
+        """Write the domain graph as a force-graph {nodes, links} JSON file.
+
+        A node is a domain of the land carrying at least one expression with
+        relevance >= minrel. Node variables = 9 analytical fields (union of the
+        two domain node exports, the technical http_status is dropped) plus
+        ``corpus``, the sorted list of the domain's expression URLs filtered by
+        minrel. Links mirror _write_domainlinks (directed inter-domain edges,
+        value = page-to-page link count). Deterministic ordering throughout.
+
+        Args:
+            filename: Path to output JSON file.
+
+        Returns:
+            int: Number of domain nodes written (0 for an empty graph).
+        """
+        node_cols = {
+            'id': 'd.id',
+            'name': 'd.name',
+            'title': 'd.title',
+            'description': 'd.description',
+            'keywords': 'd.keywords',
+            'nbexpressions': 'COUNT(e.id)',
+            'average_relevance': 'ROUND(AVG(e.relevance), 2)',
+            'first_expression_date': 'MIN(e.published_at)',
+            'last_expression_date': 'MAX(e.published_at)',
+        }
+        node_sql = """
+            SELECT {}
+            FROM domain AS d
+            JOIN expression AS e ON e.domain_id = d.id
+            WHERE e.land_id = ? AND e.relevance >= ?
+            GROUP BY d.id
+            ORDER BY nbexpressions DESC, d.id
+        """
+        nodes = [
+            dict(zip(node_cols.keys(), row))
+            for row in self.get_sql_cursor(node_sql, node_cols)
+        ]
+
+        # corpus : (domain_id, url) sorted then grouped in Python (deterministic
+        # order ; SQLite GROUP_CONCAT has no guaranteed ordering).
+        corpus_cols = {'domain_id': 'e.domain_id', 'url': 'e.url'}
+        corpus_sql = """
+            SELECT {}
+            FROM expression AS e
+            WHERE e.land_id = ? AND e.relevance >= ?
+            ORDER BY e.domain_id, e.url
+        """
+        urls_by_domain = {}
+        for domain_id, url in self.get_sql_cursor(corpus_sql, corpus_cols):
+            urls_by_domain.setdefault(domain_id, []).append(url)
+        for node in nodes:
+            node['corpus'] = urls_by_domain.get(node['id'], [])
+
+        # inter-domain links (logic of _write_domainlinks, with a deterministic
+        # tiebreaker so the output is byte-identical for identical data).
+        link_cols = {'source': 'e1.domain_id', 'target': 'e2.domain_id',
+                     'value': 'COUNT(*)'}
+        link_sql = """
+            WITH idx(x) AS (
+                SELECT id FROM expression
+                WHERE land_id = ? AND relevance >= ?
+            )
+            SELECT {}
+            FROM expressionlink AS link
+            JOIN expression AS e1 ON e1.id = link.source_id
+            JOIN expression AS e2 ON e2.id = link.target_id
+            WHERE link.source_id IN idx
+              AND link.target_id IN idx
+              AND e1.domain_id != e2.domain_id
+            GROUP BY e1.domain_id, e2.domain_id
+            ORDER BY value DESC, e1.domain_id, e2.domain_id
+        """
+        links = [
+            dict(zip(link_cols.keys(), row))
+            for row in self.get_sql_cursor(link_sql, link_cols)
+        ]
+
+        graph = {'nodes': nodes, 'links': links}
+        with open(filename, 'w', encoding='utf-8') as file:
+            json.dump(graph, file, ensure_ascii=False)
+        return len(nodes)
+
+    def write_pagesjson(self, filename) -> int:
+        """Write the page graph as a force-graph {nodes, links} JSON file.
+
+        A node is an Expression. Variables = those of write_pagecsv (without
+        ``depth`` nor ``readable``), with ``tags`` as a sorted array and
+        ``seorank`` as a nested object ({} when absent). Raw values are kept:
+        missing fields serialise to JSON ``null`` (never the CSV ``na``
+        sentinel). Links are page-to-page edges of the closed minrel network
+        (no aggregation, intra-domain edges kept). Deterministic ordering.
+
+        Args:
+            filename: Path to output JSON file.
+
+        Returns:
+            int: Number of page nodes written (0 for an empty graph).
+        """
+        page_cols = {
+            'id': 'e.id',
+            'url': 'e.url',
+            'title': 'e.title',
+            'description': 'e.description',
+            'keywords': 'e.keywords',
+            'published_at': 'e.published_at',
+            'relevance': 'e.relevance',
+            'domain_id': 'e.domain_id',
+            'domain_name': 'd.name',
+            'domain_description': 'd.description',
+            'domain_keywords': 'd.keywords',
+            'tags': 'GROUP_CONCAT(DISTINCT t.name)',
+        }
+        page_sql = """
+            SELECT {}
+            FROM expression AS e
+            JOIN domain AS d ON d.id = e.domain_id
+            LEFT JOIN taggedcontent tc ON tc.expression_id = e.id
+            LEFT JOIN tag t ON t.id = tc.tag_id
+            WHERE e.land_id = ? AND relevance >= ?
+            GROUP BY e.id
+            ORDER BY e.id
+        """
+        # Reuse the existing SEO Rank parser (export.py): records is a list of
+        # (raw base_data, seorank_payload dict).
+        records, _ = self._fetch_page_rows_with_seorank(page_cols, page_sql)
+        nodes = []
+        for base, seorank in records:
+            node = dict(base)                  # raw values -> None becomes JSON null
+            node['tags'] = sorted(base['tags'].split(',')) if base.get('tags') else []
+            node['seorank'] = seorank or {}    # nested object, {} when absent
+            nodes.append(node)
+
+        # page-to-page links (closed minrel network) ; no aggregation, intra-domain kept.
+        link_cols = {'source': 'link.source_id', 'target': 'link.target_id'}
+        link_sql = """
+            WITH idx(x) AS (
+                SELECT id FROM expression
+                WHERE land_id = ? AND relevance >= ?
+            )
+            SELECT {}
+            FROM expressionlink AS link
+            WHERE link.source_id IN idx AND link.target_id IN idx
+            ORDER BY link.source_id, link.target_id
+        """
+        links = [
+            dict(zip(link_cols.keys(), row))
+            for row in self.get_sql_cursor(link_sql, link_cols)
+        ]
+
+        graph = {'nodes': nodes, 'links': links}
+        with open(filename, 'w', encoding='utf-8') as file:
+            json.dump(graph, file, ensure_ascii=False)
+        return len(nodes)
 
     def write_mediacsv(self, filename) -> int:
         """Write media links to CSV file.

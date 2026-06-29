@@ -2641,7 +2641,10 @@ def export_land(land: model.Land, export_type: str, minimum_relevance: int,
     Notes:
         - Output filename includes land name, export type, and timestamp.
         - Files are saved to settings.data_location directory.
-        - Supports formats: pagecsv, fullpagecsv, pagegexf, nodecsv, nodegexf, mediacsv, corpus.
+        - Supports formats: pagecsv, fullpagecsv, nodecsv, pagegexf, nodegexf,
+          mediacsv, corpus, pseudolinks, pseudolinkspage, pseudolinksdomain,
+          nodelinkcsv, nodesjson (domain force-graph JSON), pagesjson (page
+          force-graph JSON), htmldump.
         - Prints success message with record count or error message.
         - See Export class for format-specific details.
     """

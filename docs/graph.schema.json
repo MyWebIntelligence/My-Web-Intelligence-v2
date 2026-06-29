@@ -1,0 +1,37 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://mywebintelligence/graph.schema.json",
+  "title": "MWI force-graph export (nodesjson / pagesjson)",
+  "type": "object",
+  "required": ["nodes", "links"],
+  "additionalProperties": false,
+  "properties": {
+    "nodes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id"],
+        "additionalProperties": true,
+        "properties": {
+          "id": { "type": ["integer", "string"] },
+          "corpus": { "type": "array", "items": { "type": "string" } },
+          "tags": { "type": "array", "items": { "type": "string" } },
+          "seorank": { "type": "object" }
+        }
+      }
+    },
+    "links": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["source", "target"],
+        "additionalProperties": true,
+        "properties": {
+          "source": { "type": ["integer", "string"] },
+          "target": { "type": ["integer", "string"] },
+          "value": { "type": "number" }
+        }
+      }
+    }
+  }
+}

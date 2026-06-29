@@ -589,9 +589,18 @@ python mywi.py land export --name="MonProjet" --type=corpus
 python mywi.py land export --name="MonProjet" --type=pseudolinks
 python mywi.py land export --name="MonProjet" --type=nodelinkcsv --minrel=1
 python mywi.py land export --name="MonProjet" --type=nodelinkcsv --fullhtml=TRUE --minrel=1  # réseau brut SEUL (sans le flag = 4 de base)
+python mywi.py land export --name="MonProjet" --type=nodesjson --minrel=1  # graphe de domaines JSON force-graph
+python mywi.py land export --name="MonProjet" --type=pagesjson --minrel=1  # graphe de pages JSON force-graph
 ```
 
-Types : `pagecsv`, `fullpagecsv`, `nodecsv`, `pagegexf`, `nodegexf`, `mediacsv`, `corpus`, `pseudolinks`, `pseudolinkspage`, `pseudolinksdomain`, `nodelinkcsv`, `htmldump`.
+Types : `pagecsv`, `fullpagecsv`, `nodecsv`, `pagegexf`, `nodegexf`, `mediacsv`, `corpus`, `pseudolinks`, `pseudolinkspage`, `pseudolinksdomain`, `nodelinkcsv`, `nodesjson`, `pagesjson`, `htmldump`.
+
+> **Exports JSON force-graph (`nodesjson` / `pagesjson`)** — format `{nodes, links}`
+> directement consommable par un visualiseur React/JS (`react-force-graph`, D3,
+> Sigma). `nodesjson` = graphe de **domaines** (9 variables analytiques + `corpus`,
+> le tableau trié des URL du domaine) ; `pagesjson` = graphe de **pages** (`tags`
+> en tableau trié, `seorank` en objet imbriqué, `null` pour les valeurs absentes).
+> Exports **déterministes**. Contrat : `docs/graph.schema.json`.
 
 > **Réseau de liens brut (`nodelinkcsv --fullhtml=TRUE`, sprint
 > fullhtml-linknetwork)** — émet **uniquement** les 4 fichiers `*fullhtml.csv`
