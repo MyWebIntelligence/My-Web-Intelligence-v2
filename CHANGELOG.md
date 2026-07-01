@@ -5,6 +5,28 @@ The format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.
 
 ## [Unreleased]
 
+### Added — HTML-aware Domain Resolution (sprint-heuristique)
+
+- `heuristic update` gains `--html`: for **opaque platforms** whose editorial
+  entity is not derivable from the URL path (video channels, social accounts,
+  hosted blogs, participatory press...), the domain is resolved from the page
+  HTML instead of the URL. A generic signal cascade recovers a better URL
+  (JSON-LD `author` → `rel="author"` → `<link canonical>` → `og:url`, **author
+  first**) and feeds it back through the existing URL heuristic — one source of
+  truth, two entry doors. Hosts outside the opaque set keep URL resolution and
+  are never fetched.
+- New `--fetch-missing` flag (requires `--html` **and** an explicit `--limit`):
+  volatile async fetch (aiohttp → curl_cffi → archive.org cascade) of the HTML
+  for opaque-host expressions with no stored HTML. The HTML is used, not stored.
+- `heuristic update` also gains `--land` (scope to one land) and honors `--limit`.
+  The command now batches domain reassignment in chunked transactions and is
+  deterministic (`order_by(id)`).
+- Opaque-platform set ships in code (`mwi.core._DEFAULT_OPAQUE_PLATFORMS`, ~150
+  host suffixes), overridable via `settings.opaque_platforms`. **No migration.**
+- New read-only diagnostic `scripts/measure_heuristic_resolution.py` reports, per
+  opaque suffix, how often the HTML cascade improves domain resolution.
+- New tests `tests/test_33_domain_heuristics.py` (37 tests).
+
 ### Added — LLM Verdicts & Controversy Mode (sprint validate-update)
 
 - `land consolidate` now **respects stored LLM verdicts**. After the lexical

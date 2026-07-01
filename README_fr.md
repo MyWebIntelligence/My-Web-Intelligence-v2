@@ -625,9 +625,26 @@ python mywi.py tag export --name="MonProjet" --type=content
 
 ## Mettre à jour les domaines depuis les heuristiques
 
+Recalcule le domaine de chaque expression selon `settings.heuristics`.
+
 ```bash
+# Heuristique URL sur toutes les expressions (comportement historique)
 python mywi.py heuristic update
+
+# Résout les plateformes opaques (youtube, linkedin, mediapart...) depuis le HTML
+python mywi.py heuristic update --name=LAND --html
+
+# Land non-fullhtml : scrap volatile du HTML manquant (--limit obligatoire)
+python mywi.py heuristic update --name=LAND --html --fetch-missing --limit=500
 ```
+
+Options : `--land`, `--limit` ; `--html` résout l'entité éditoriale des
+plateformes opaques (chaînes vidéo, comptes sociaux, blogs hébergés) depuis le
+HTML (JSON-LD author → `rel="author"` → `<link canonical>` → `og:url`) au lieu de
+l'URL ; hors set opaque l'URL reste autoritaire (aucun fetch). `--fetch-missing`
+(exige `--html` **et** `--limit`) récupère le HTML absent à la volée (non
+persisté). Aucune migration ; set opaque dans `mwi.core._DEFAULT_OPAQUE_PLATFORMS`
+(override `settings.opaque_platforms`).
 
 ## Pipeline de consolidation des lands
 
