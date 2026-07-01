@@ -15,7 +15,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeou
 from datetime import date, datetime, timedelta
 from os import path
 from typing import Callable, Dict, List, Optional, Union
-from urllib.parse import urlparse, urljoin, quote
+from urllib.parse import urlparse, urljoin, quote, unquote
 
 import aiohttp # type: ignore
 import nltk # type: ignore
@@ -35,6 +35,7 @@ import settings
 from . import link_context
 from . import model
 from .export import Export
+from .platform_heuristics import PLATFORM_HEURISTICS as _PLATFORM_HEURISTICS
 
 
 # Circuit breaker and fetch pipeline live in mwi.fetcher; re-exported here
@@ -2230,132 +2231,113 @@ def unwrap_archive_url(url: str) -> str:
 
 
 def domain_from_url(url: str) -> str:
-    """Extract the domain name from a URL with heuristic-based refinement.
+    """Extract the logical domain from a URL via the platform heuristics table.
 
-    This function extracts the domain from a URL and applies configured heuristics
-    to handle special cases like social media profile URLs or platform-specific patterns.
-
-    Args:
-        url: The URL to extract the domain from.
-
-    Returns:
-        str: The extracted domain name, possibly refined by heuristics.
-
-    Notes:
-        - Default extraction uses urllib's urlparse to get netloc.
-        - Unwraps archive.org and ghostarchive.org URLs to get the original domain.
-        - Applies heuristics from settings.heuristics for special domains.
-        - Heuristics can extract sub-paths (e.g., 'twitter.com/username').
-        - Useful for grouping URLs by logical domain/account.
-        - The heuristics loop has no early break: it iterates every entry and
-          the last matching one wins. Order in settings.heuristics is preserved.
+    Unwraps archive URLs, then looks the host up in the platform heuristics
+    table (``mwi.platform_heuristics.PLATFORM_HEURISTICS``, overridable via
+    ``settings.platform_heuristics``). If the host matches a listed platform
+    that has a ``url`` regex, the captured editorial entity is returned (e.g.
+    ``youtube.com/@channel``, ``twitter.com/handle``); otherwise the bare
+    netloc is returned. Hosts absent from the table always resolve to their
+    netloc — only listed platforms are ever refined. Pure: no I/O.
     """
-    # First unwrap any archive URLs to get the original URL
     unwrapped_url = unwrap_archive_url(url)
+    netloc = urlparse(unwrapped_url).netloc
+    rule = _platform_rule(_host_key(netloc))
+    if rule and rule.get('url'):
+        matches = re.findall(rule['url'], unwrapped_url)
+        if matches:
+            return _normalize_entity(matches[0], rule)
+    return netloc
 
-    parsed = urlparse(unwrapped_url)
-    domain_name = parsed.netloc
-    for key, value in settings.heuristics.items():
-        if domain_name.endswith(key):
-            matches = re.findall(value, unwrapped_url)
-            domain_name = matches[0] if matches else domain_name
-    return domain_name
+
+def _normalize_entity(entity: str, rule: dict) -> str:
+    """Apply optional per-platform normalizations to a captured entity.
+
+    - ``lower``: lowercase the entity — for platforms whose handle is
+      case-insensitive (twitter/x, instagram...), so ``JLMelenchon`` and
+      ``jlmelenchon`` collapse to one node.
+    - ``alias``: replace the platform host with a canonical alias and drop any
+      subdomain, unifying e.g. ``twitter.com`` / ``www.twitter.com`` / ``x.com``
+      under a single ``x.com/<handle>`` node.
+    - ``prefix``: prepend a fixed ``host/`` to a capture that is only the entity
+      segment (used when a single regex must extract the author from two URL
+      forms, e.g. ``blogs.mediapart.fr/<author>/blog`` and the legacy
+      ``blogs.mediapart.fr/blog/<author>``).
+
+    The captured entity is URL-decoded first (``unquote``) so a percent-encoded
+    accented slug — e.g. ``s%C3%A9bastien-melenchon`` — becomes
+    ``sébastien-melenchon`` instead of being truncated at the ``%``.
+    """
+    entity = unquote(entity)
+    prefix = rule.get('prefix')
+    if prefix:
+        entity = prefix + entity
+    if rule.get('lower'):
+        entity = entity.lower()
+    alias = rule.get('alias')
+    if alias and '/' in entity:
+        entity = alias + '/' + entity.split('/', 1)[1]
+    return entity
 
 
 # Backwards-compatible alias: get_domain_name is the historical name that
 # link_expression, update_heuristic, normalize_pipeline and the controller
-# still call. domain_from_url is the canonical name (sprint-heuristique) and
-# the entry point re-used by the HTML resolution path below.
+# still call. domain_from_url is the canonical name (sprint-heuristique).
 get_domain_name = domain_from_url
 
 
-# --- HTML-based domain resolution (sprint-heuristique) -----------------------
+# --- Platform heuristics table (sprint-heuristique) --------------------------
 #
-# domain_from_url resolves the editorial entity from the URL alone. That is
-# correct when the entity lives in the path (blog subdomain, twitter.com/handle)
-# but collapses on platforms whose editorial space is not encoded in the URL
-# (youtube.com/watch, linkedin.com/posts). For those "opaque" hosts we read the
-# page HTML to recover a *better* URL (the channel / author / canonical target)
-# and feed it back through domain_from_url. One source of truth, two doors:
-# adding a platform to settings.heuristics benefits both paths.
-
-# Hosts whose editorial entity is not reliably derivable from the URL path.
-# Suffix match on a label boundary. Overridable via settings.opaque_platforms
-# (a set/iterable of host suffixes). Archives are intentionally excluded:
-# unwrap_archive_url already handles them upstream.
-_DEFAULT_OPAQUE_PLATFORMS = frozenset({
-    # A. Video
-    "youtube.com", "youtu.be", "dailymotion.com", "vimeo.com", "tiktok.com",
-    "twitch.tv", "rumble.com", "odysee.com", "bitchute.com", "brighteon.com",
-    "bilibili.com",
-    # B. Social
-    "facebook.com", "fb.com", "twitter.com", "x.com", "instagram.com",
-    "threads.net", "linkedin.com", "reddit.com", "pinterest.com",
-    "pinterest.fr", "tumblr.com", "bsky.app", "vk.com", "ok.ru", "weibo.com",
-    "t.me",
-    # C. Hosted blogs
-    "over-blog.com", "canalblog.com", "eklablog.com", "eklablog.fr",
-    "blog4ever.com", "hautetfort.com", "blogspot.com", "wordpress.com",
-    "medium.com", "substack.com", "ghost.io", "skyrock.com", "e-monsite.com",
-    "jimdo.com", "jimdofree.com", "wixsite.com", "squarespace.com",
-    "weebly.com", "webnode.fr", "pagesperso-orange.fr", "livejournal.com",
-    "typepad.com",
-    # D. Participatory press
-    "mediapart.fr", "blogs.mediapart.fr", "agoravox.fr", "agoravox.tv",
-    "contrepoints.org", "atlantico.fr", "bondyblog.fr", "slate.fr",
-    "huffingtonpost.fr", "lesechos.fr", "latribune.fr", "nouvelobs.com",
-    # E. Q&A / forums
-    "quora.com", "fr.quora.com", "stackexchange.com", "stackoverflow.com",
-    "forumactif.com", "forumactif.org", "xooit.com", "xooit.org",
-    "proboards.com", "doctissimo.fr", "jeuxvideo.com", "hardware.fr",
-    "commentcamarche.net", "futura-sciences.com",
-    # F. Content farms
-    "wikihow.com", "fr.wikihow.com", "ehow.com", "answers.com", "ask.com",
-    "hubpages.com", "instructables.com", "journaldunet.com", "linternaute.com",
-    "gentside.com", "demotivateur.fr", "topito.com", "buzzfeed.com",
-    "ezinearticles.com",
-    # G. Wikis
-    "fandom.com", "wikia.com", "wikidot.com", "fextralife.com",
-    "miraheze.org", "gamepedia.com", "wikibooks.org", "wikiversity.org",
-    # H. Documents / slides / repos
-    "scribd.com", "slideshare.net", "fr.slideshare.net", "issuu.com",
-    "calameo.com", "fr.calameo.com", "academia.edu", "researchgate.net",
-    "ssrn.com", "zenodo.org", "figshare.com", "prezi.com", "speakerdeck.com",
-    "docdroid.net",
-    # I. Curation / aggregation
-    "scoop.it", "paper.li", "flipboard.com", "pearltrees.com", "diigo.com",
-    "getpocket.com", "feedly.com", "netvibes.com", "padlet.com", "wakelet.com",
-    "list.ly", "trello.com",
-    # J. Media / creative UGC
-    "soundcloud.com", "bandcamp.com", "mixcloud.com", "deviantart.com",
-    "flickr.com", "500px.com", "imgur.com", "behance.net", "dribbble.com",
-    "artstation.com", "patreon.com", "ko-fi.com", "gumroad.com", "wattpad.com",
-    # K. Marketplaces / review UGC
-    "amazon.fr", "tripadvisor.fr", "yelp.fr", "trustpilot.com", "leboncoin.fr",
-    "etsy.com", "allocine.fr", "senscritique.com",
-    # L. Petitions / link aggregators / press portals
-    "change.org", "mesopinions.com", "linktr.ee", "news.google.com",
-})
+# One unified table, host suffix -> {"url": regex|None, "html": signal}. The URL
+# rule extracts the editorial entity from the path (channel / handle / subreddit
+# / author...) where it is present; the HTML signal recovers it from the page
+# for opaque hosts (heuristic update --html), then re-resolves through the URL
+# rule. Only hosts in the table are ever re-grouped by heuristic update; every
+# other host keeps its bare netloc. The 163-entry default lives in
+# mwi/platform_heuristics.py; override via settings.platform_heuristics.
 
 
-def _opaque_platforms() -> frozenset:
-    """Return the configured opaque-platform suffix set (settings override)."""
-    override = getattr(settings, 'opaque_platforms', None)
-    return frozenset(override) if override else _DEFAULT_OPAQUE_PLATFORMS
+def _platform_heuristics() -> dict:
+    """Return the active platform heuristics table (settings override wins)."""
+    override = getattr(settings, 'platform_heuristics', None)
+    return override if override else _PLATFORM_HEURISTICS
+
+
+def _host_key(netloc_or_url: str) -> str:
+    """Lowercased host without a leading 'www.' (accepts a netloc or a URL)."""
+    host = netloc_or_url
+    if '/' in host:
+        host = urlparse(host).netloc
+    host = host.lower()
+    return host[4:] if host.startswith('www.') else host
+
+
+def _platform_rule(host: str):
+    """Return the platform rule for a host (label-suffix match), or None."""
+    if not host:
+        return None
+    for suffix, rule in _platform_heuristics().items():
+        if host == suffix or host.endswith('.' + suffix):
+            return rule
+    return None
 
 
 def _is_opaque(url: str) -> bool:
-    """True when the URL host is (a label-suffix of) a known opaque platform."""
-    host = urlparse(url).netloc.lower()
-    if host.startswith('www.'):
-        host = host[4:]
-    if not host:
-        return False
-    for suffix in _opaque_platforms():
-        if host == suffix or host.endswith('.' + suffix):
-            return True
-    return False
+    """True when the URL host is a listed platform (in the heuristics table)."""
+    return _platform_rule(_host_key(url)) is not None
 
+
+def _opaque_platforms() -> frozenset:
+    """Compat: the set of listed platform suffixes (tooling/tests)."""
+    return frozenset(_platform_heuristics().keys())
+
+
+# --- HTML signal extractors (sprint-heuristique) -----------------------------
+# Each maps a declarative signal name (the "html" field of a platform rule) to a
+# function that recovers the editorial URL that signal points to, resolved
+# against base_url, or None. domain_from_html applies the ONE signal declared
+# for the page's platform — no fixed cascade.
 
 def _meta_url(soup: BeautifulSoup, key: str) -> str:
     """Return a meta tag's content by property= (og:) or name= (twitter:)."""
@@ -2368,13 +2350,11 @@ def _meta_url(soup: BeautifulSoup, key: str) -> str:
     return ""
 
 
-def _author_url_from_ldjson(soup: BeautifulSoup, base_url: str) -> Optional[str]:
-    """Extract an author (else publisher) URL from any JSON-LD block.
+def _ldjson_url(soup: BeautifulSoup, base_url: str, keys) -> Optional[str]:
+    """First url/@id under any of ``keys`` (e.g. author, publisher) in JSON-LD.
 
-    Walks every ``application/ld+json`` script, flattening ``@graph``, and
-    returns the first ``author.url`` / ``author["@id"]`` found, falling back to
-    ``publisher.url``. The result is resolved against ``base_url``. Never
-    raises: malformed or empty JSON blocks are skipped.
+    Walks every ``application/ld+json`` script, flattening ``@graph``. Resolves
+    the result against ``base_url``. Never raises: malformed blocks are skipped.
     """
     def _url_of(node) -> Optional[str]:
         if isinstance(node, dict):
@@ -2402,77 +2382,150 @@ def _author_url_from_ldjson(soup: BeautifulSoup, base_url: str) -> Optional[str]
             nodes = [nodes]
         if not isinstance(nodes, list):
             continue
-        for node in nodes:
-            if isinstance(node, dict):
-                author_url = _url_of(node.get('author'))
-                if author_url:
-                    return urljoin(base_url, author_url)
-        for node in nodes:  # publisher is a weaker signal than any author
-            if isinstance(node, dict):
-                pub_url = _url_of(node.get('publisher'))
-                if pub_url:
-                    return urljoin(base_url, pub_url)
+        for key in keys:
+            for node in nodes:
+                if isinstance(node, dict):
+                    found = _url_of(node.get(key))
+                    if found:
+                        return urljoin(base_url, found)
     return None
 
 
-def editorial_url_from_html(html: str, base_url: str) -> Optional[str]:
-    """Recover the real editorial URL (channel / author / canonical) from HTML.
-
-    Signal cascade, first hit wins. Author-bearing signals come FIRST on
-    purpose: on an opaque host, ``<link canonical>`` / ``og:url`` usually
-    re-point at the same item (the video, the post), which collapses under the
-    platform host; the editorial entity (channel, author) lives in JSON-LD
-    ``author`` / ``rel="author"``. Canonical/og then resolve custom-domain
-    blogs and off-host sources when no author signal exists. Returns ``None``
-    when nothing usable is present (caller falls back to the URL heuristic).
-
-    NOTE (sprint-heuristique): this author-first order deviates from the
-    original spec order (canonical→og→ld+json). It is required by the sprint's
-    flagship success criterion — YouTube ``watch`` pages carry a canonical to
-    the *video*, so canonical-first would collapse every video to
-    ``youtube.com`` and never reach the channel. Trade-off: for syndication /
-    aggregation hosts a JSON-LD author (the curator) now wins over a canonical
-    pointing at the original source. The order lives in this one function so
-    the measurement task can flip it without touching callers.
-    """
-    if not html:
-        return None
-    soup = BeautifulSoup(html, 'html.parser')
-
-    author_url = _author_url_from_ldjson(soup, base_url)
-    if author_url:
-        return author_url
-
-    a = soup.find('a', attrs={'rel': 'author'})
-    if a and a.has_attr('href'):  # type: ignore
-        href = a['href']  # type: ignore
-        if isinstance(href, str) and href.strip():
-            return urljoin(base_url, href.strip())
-
+def _sig_canonical(soup: BeautifulSoup, base_url: str) -> Optional[str]:
     link = soup.find('link', attrs={'rel': 'canonical'})
     if link and link.has_attr('href'):  # type: ignore
         href = link['href']  # type: ignore
         if isinstance(href, str) and href.strip():
             return urljoin(base_url, href.strip())
+    return None
 
+
+def _sig_og_url(soup: BeautifulSoup, base_url: str) -> Optional[str]:
     for key in ('og:url', 'twitter:url'):
         content = _meta_url(soup, key)
         if content:
             return urljoin(base_url, content)
-
     return None
+
+
+def _sig_rel_author(soup: BeautifulSoup, base_url: str) -> Optional[str]:
+    a = soup.find('a', attrs={'rel': 'author'})
+    if a and a.has_attr('href'):  # type: ignore
+        href = a['href']  # type: ignore
+        if isinstance(href, str) and href.strip():
+            return urljoin(base_url, href.strip())
+    return None
+
+
+def _sig_ldjson_author(soup: BeautifulSoup, base_url: str) -> Optional[str]:
+    return _ldjson_url(soup, base_url, ('author',))
+
+
+def _sig_ldjson_publisher(soup: BeautifulSoup, base_url: str) -> Optional[str]:
+    return _ldjson_url(soup, base_url, ('publisher',))
+
+
+def _sig_itemprop_author(soup: BeautifulSoup, base_url: str) -> Optional[str]:
+    """Author URL from schema.org microdata (``itemprop``).
+
+    YouTube ``/watch`` pages carry no JSON-LD; the channel lives in a
+    ``<span itemprop="author"><link itemprop="url" href=".../@Channel"></span>``
+    Person block. Reads the nested ``itemprop="url"`` href, falling back to the
+    author element's own ``href`` (``<a itemprop="author" href=…>`` sites).
+    """
+    author = soup.find(attrs={'itemprop': 'author'})
+    if author is None:
+        return None
+    link = author.find(attrs={'itemprop': 'url'})  # type: ignore
+    for node in (link, author):
+        if node is not None and node.has_attr('href'):  # type: ignore
+            href = node['href']  # type: ignore
+            if isinstance(href, str) and href.strip():
+                return urljoin(base_url, href.strip())
+    return None
+
+
+def _sig_dailymotion_channel(soup: BeautifulSoup, base_url: str) -> Optional[str]:
+    """Dailymotion channel from the embedded SSR state JSON.
+
+    Video pages return a 200 JS shell with no JSON-LD/canonical/microdata, but
+    the uploader lives in a ``"channel":{…,"name":"<screenname>"}`` blob inside
+    a ``<script>``. ``name`` is the URL slug (``dailymotion.com/<name>``), so
+    the recovered URL re-resolves through the platform rule to the channel.
+    """
+    for script in soup.find_all('script'):
+        text = script.string or ''
+        if '"channel"' not in text:
+            continue
+        match = re.search(r'"channel":\{[^{}]*?"name":"([^"]+)"', text)
+        if match:
+            return urljoin(base_url, '/' + match.group(1))
+    return None
+
+
+# dc_creator / citation_author are name-only meta tags (an author NAME, not a
+# URL). Without a URL to re-resolve they cannot refine the domain, so they fall
+# back to canonical (the record URL) — which resolves to the host, i.e. no harm.
+_SIGNAL_EXTRACTORS = {
+    'canonical': _sig_canonical,
+    'og_url': _sig_og_url,
+    'rel_author': _sig_rel_author,
+    'ldjson_author': _sig_ldjson_author,
+    'ldjson_publisher': _sig_ldjson_publisher,
+    'itemprop_author': _sig_itemprop_author,
+    'dailymotion_channel': _sig_dailymotion_channel,
+    'dc_creator': _sig_canonical,
+    'citation_author': _sig_canonical,
+}
+
+
+def editorial_url_from_html(html: str, base_url: str,
+                            signal: str = 'canonical') -> Optional[str]:
+    """Recover the editorial URL a platform's declarative ``signal`` points to.
+
+    Applies exactly ONE signal (the platform's ``html`` field) — not a fixed
+    cascade — so each platform resolves via the signal the annex assigned it
+    (a video's channel via ``ldjson_author``, a custom-domain blog via
+    ``canonical``, etc.). Returns ``None`` when the signal yields nothing; the
+    caller then falls back to the URL heuristic.
+    """
+    if not html:
+        return None
+    soup = BeautifulSoup(html, 'html.parser')
+    extractor = _SIGNAL_EXTRACTORS.get(signal, _sig_canonical)
+    return extractor(soup, base_url)
 
 
 def domain_from_html(url: str, html: str) -> Optional[str]:
     """Resolve the logical domain from the page HTML.
 
-    Extracts the real editorial URL via :func:`editorial_url_from_html` then
-    resolves it through the existing URL heuristic (:func:`domain_from_url`).
-    Returns ``None`` when no exploitable signal is present, so the caller can
-    fall back to the URL heuristic.
+    Looks up the page host's platform rule, applies its declared HTML signal via
+    :func:`editorial_url_from_html` to recover a better editorial URL, then
+    re-resolves it through :func:`domain_from_url`. Returns ``None`` when the
+    host is unlisted or the signal yields nothing, so the caller can fall back
+    to the URL heuristic.
     """
-    editorial_url = editorial_url_from_html(html, url)
+    rule = _platform_rule(_host_key(url))
+    if not rule:
+        return None
+    editorial_url = editorial_url_from_html(html, url, rule.get('html', 'canonical'))
     return domain_from_url(editorial_url) if editorial_url else None
+
+
+def _needs_html(url: str) -> bool:
+    """True when HTML resolution could actually help for this URL.
+
+    Two conditions: (1) the platform declares an HTML signal (not a subdomain
+    host and not unlisted), and (2) the URL alone did NOT extract the entity —
+    ``domain_from_url`` still returns the bare netloc. When a url rule already
+    captured the entity (e.g. ``blogs.mediapart.fr/jacqueslancier``), the URL is
+    authoritative and no fetch is needed.
+    """
+    rule = _platform_rule(_host_key(url))
+    if not rule or not rule.get('html'):
+        return False
+    netloc = urlparse(unwrap_archive_url(url)).netloc
+    return domain_from_url(url) == netloc
 
 
 def resolve_domain(expression: model.Expression, *,
@@ -2488,7 +2541,9 @@ def resolve_domain(expression: model.Expression, *,
     """
     url = str(expression.url)
     url_domain = domain_from_url(url)
-    if not _is_opaque(url):
+    if not _needs_html(url):
+        # Entity already extracted from the URL (path/subdomain), no HTML signal,
+        # or unlisted host: the URL resolution is authoritative.
         return url_domain
     effective_html = html if html is not None else getattr(expression, 'html', None)
     if not effective_html:
@@ -2928,29 +2983,36 @@ def update_heuristic(land: Optional[model.Land] = None, *,
                      use_html: bool = False, fetch_missing: bool = False,
                      limit: Optional[int] = None,
                      html_map: Optional[Dict[str, str]] = None,
-                     chunk: int = 500) -> int:
-    """Recompute expression domains from current heuristics; return the count.
+                     only_listed: bool = True, dry_run: bool = False,
+                     minrel: Optional[int] = None, chunk: int = 500) -> int:
+    """Re-group expressions of LISTED platforms from the heuristics table.
 
-    Default behaviour (no arguments) is unchanged: recompute every expression's
-    domain from the URL heuristic alone. Optional scoping / behaviour:
+    Scope / behaviour:
 
-    - ``land``: restrict to one land (``None`` = all expressions, legacy global run).
+    - ``only_listed`` (default ``True``): only expressions whose host is a
+      **listed platform** (in the platform heuristics table) are ever
+      reassigned; every other host keeps its bare netloc, untouched. This is the
+      safe default — it never re-baselines the whole corpus. Set ``False`` for a
+      full recompute (used by the standalone reconstruction script).
+    - ``land``: restrict to one land (``None`` = all expressions).
     - ``limit``: cap the number of expressions processed.
-    - ``use_html``: for opaque-platform hosts, resolve via the page HTML
-      (``Expression.html`` or a pre-fetched ``html_map``) instead of the URL alone.
-    - ``html_map``: ``{url: html}`` of volatile HTML fetched by the caller for
-      expressions with no stored html (see :func:`fetch_missing_opaque_html`).
-    - ``fetch_missing``: accepted for call symmetry; the actual network fetch is
-      done by the caller and its result passed via ``html_map``.
+    - ``use_html``: for listed hosts, resolve via the page HTML
+      (``Expression.html`` or a pre-fetched ``html_map``) instead of the URL.
+    - ``html_map``: ``{url: html}`` of volatile HTML fetched by the caller (see
+      :func:`fetch_missing_opaque_html`).
+    - ``fetch_missing``: accepted for call symmetry; the network fetch is done by
+      the caller and passed via ``html_map``.
+    - ``dry_run``: report what WOULD change (count + sample) and write nothing.
 
-    Writes are batched in chunked transactions (WAL single-writer friendly),
-    mirroring :func:`prune_orphan_expressions`. Returns the number of
-    expressions whose domain was reassigned.
+    Writes are batched in chunked transactions (WAL single-writer friendly).
+    Returns the number of expressions reassigned (or that would be, in dry-run).
     """
     html_map = html_map or {}
     query = model.Expression.select().order_by(model.Expression.id)
     if land is not None:
         query = query.where(model.Expression.land == land)
+    if minrel is not None:
+        query = query.where(model.Expression.relevance >= minrel)
     if limit:
         query = query.limit(limit)
 
@@ -2959,7 +3021,10 @@ def update_heuristic(land: Optional[model.Land] = None, *,
     pending = []  # (expression, new_domain_name) for rows whose domain changed
     for expression in query:
         url = str(expression.url)
-        if use_html and _is_opaque(url):
+        listed = _is_opaque(url)
+        if only_listed and not listed:
+            continue  # heuristic touches only listed platforms — never global
+        if use_html and listed:
             new_domain = resolve_domain(
                 expression, html=(expression.html or html_map.get(url)))
         else:
@@ -2967,6 +3032,28 @@ def update_heuristic(land: Optional[model.Land] = None, *,
         current = (domains.get(expression.domain_id) or {}).get('name')
         if new_domain != current:
             pending.append((expression, new_domain))
+
+    # --- change report (bilan): old -> new transitions + samples ------------
+    def _old_name(expr) -> Optional[str]:
+        return (domains.get(expr.domain_id) or {}).get('name')
+
+    verb = "would change (dry-run — nothing written)" if dry_run else "updated"
+    print(f"{len(pending)} domain(s) {verb}")
+    if pending:
+        counts: Dict[tuple, int] = {}
+        for expr, new_domain in pending:
+            key = (_old_name(expr), new_domain)
+            counts[key] = counts.get(key, 0) + 1
+        top = sorted(counts.items(), key=lambda kv: (-kv[1], str(kv[0])))[:25]
+        print("  transitions (old -> new : count):")
+        for (old, new), n in top:
+            print(f"    {n:>5}  {old!r} -> {new!r}")
+        print(f"  samples ({min(20, len(pending))}):")
+        for expr, new_domain in pending[:20]:
+            print(f"    {_old_name(expr)!r} -> {new_domain!r}   {expr.url}")
+
+    if dry_run:
+        return len(pending)
 
     updated = 0
     dom_cache: Dict[str, model.Domain] = {}
@@ -2981,12 +3068,12 @@ def update_heuristic(land: Optional[model.Land] = None, *,
                 expression.domain = to_domain
                 expression.save()
                 updated += 1
-    print(f"{updated} domain(s) updated")
     return updated
 
 
 async def fetch_missing_opaque_html(land: Optional[model.Land] = None,
-                                    limit: Optional[int] = None) -> Dict[str, str]:
+                                    limit: Optional[int] = None,
+                                    minrel: Optional[int] = None) -> Dict[str, str]:
     """Fetch HTML for opaque-host expressions that have no stored html.
 
     Selects expressions with ``html IS NULL`` on an opaque platform (optionally
@@ -3004,10 +3091,12 @@ async def fetch_missing_opaque_html(land: Optional[model.Land] = None,
              .order_by(model.Expression.id))  # deterministic selection (JOSS)
     if land is not None:
         query = query.where(model.Expression.land == land)
+    if minrel is not None:
+        query = query.where(model.Expression.relevance >= minrel)
     targets = []
     for expression in query:
         url = str(expression.url)
-        if _is_opaque(url):
+        if _needs_html(url):  # only fetch where the URL didn't resolve the entity
             targets.append(url)
             if limit and len(targets) >= limit:
                 break  # stop scanning early: no full-table walk on big lands

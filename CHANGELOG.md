@@ -5,27 +5,32 @@ The format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.
 
 ## [Unreleased]
 
-### Added — HTML-aware Domain Resolution (sprint-heuristique)
+### Added — Unified Platform Heuristics & HTML-aware Domain Resolution (sprint-heuristique)
 
-- `heuristic update` gains `--html`: for **opaque platforms** whose editorial
-  entity is not derivable from the URL path (video channels, social accounts,
-  hosted blogs, participatory press...), the domain is resolved from the page
-  HTML instead of the URL. A generic signal cascade recovers a better URL
-  (JSON-LD `author` → `rel="author"` → `<link canonical>` → `og:url`, **author
-  first**) and feeds it back through the existing URL heuristic — one source of
-  truth, two entry doors. Hosts outside the opaque set keep URL resolution and
-  are never fetched.
-- New `--fetch-missing` flag (requires `--html` **and** an explicit `--limit`):
-  volatile async fetch (aiohttp → curl_cffi → archive.org cascade) of the HTML
-  for opaque-host expressions with no stored HTML. The HTML is used, not stored.
-- `heuristic update` also gains `--land` (scope to one land) and honors `--limit`.
-  The command now batches domain reassignment in chunked transactions and is
+- **Unified platform heuristics table** (`mwi/platform_heuristics.py`, 144
+  **host** entries — publishers/éditeurs excluded, LCEN criterion —
+  `{host: {"url": regex|None, "html": signal}}`, overridable via
+  `settings.platform_heuristics`). It **supersedes** the flat `settings.heuristics`
+  dict (existing URL regexes merged in verbatim) and fixes the YouTube
+  `channel`/`c`/`user` over-capture that collapsed every channel to one node.
+  `domain_from_url` now reads this table; **only listed hosts are ever refined**,
+  every other host keeps its bare netloc.
+- `heuristic update` gains `--html`: for listed platforms it resolves the
+  editorial entity from the page HTML via the platform's **declarative signal**
+  (`ldjson_author` / `canonical` / `og_url` / `rel_author` / `ldjson_publisher`)
+  instead of the URL, then re-resolves through the URL rule.
+- `heuristic update` is now **safe by default**: it only re-groups listed-host
+  expressions (never a global re-baseline), gains `--land`, honors `--limit`,
+  and adds **`--dry-run`** (preview without writing). Writes are chunked and
   deterministic (`order_by(id)`).
-- Opaque-platform set ships in code (`mwi.core._DEFAULT_OPAQUE_PLATFORMS`, ~150
-  host suffixes), overridable via `settings.opaque_platforms`. **No migration.**
-- New read-only diagnostic `scripts/measure_heuristic_resolution.py` reports, per
-  opaque suffix, how often the HTML cascade improves domain resolution.
-- New tests `tests/test_33_domain_heuristics.py` (37 tests).
+- New `--fetch-missing` flag (requires `--html` **and** an explicit `--limit`):
+  volatile async fetch of the HTML for listed-host expressions with no stored
+  HTML. The HTML is used, not stored. Skipped under `--dry-run`.
+- New `scripts/reconstruct_domains.py` — full-corpus domain reconstruction from
+  URLs (dry-run by default, `--apply` to write); recovery/rebaseline tool that
+  cleans section-path garbage left by an older heuristic state.
+- New read-only diagnostic `scripts/measure_heuristic_resolution.py`.
+- **No migration.** New tests `tests/test_33_domain_heuristics.py` (42 tests).
 
 ### Added — LLM Verdicts & Controversy Mode (sprint validate-update)
 

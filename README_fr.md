@@ -625,26 +625,37 @@ python mywi.py tag export --name="MonProjet" --type=content
 
 ## Mettre à jour les domaines depuis les heuristiques
 
-Recalcule le domaine de chaque expression selon `settings.heuristics`.
+Re-groupe le domaine de chaque expression via la **table unifiée**
+`platform_heuristics` (`mwi/platform_heuristics.py`, 144 entrées **hébergeurs**
+— éditeurs/presse exclus (critère LCEN),
+`{host: {"url", "html"}}` ; override `settings.platform_heuristics`), qui
+supersède le flat `settings.heuristics`. **Ne touche QUE les hôtes listés** ;
+tout autre hôte garde son netloc.
 
 ```bash
-# Heuristique URL sur toutes les expressions (comportement historique)
-python mywi.py heuristic update
+# Règles URL sur les plateformes listées (sûr — jamais de re-baseline global)
+python mywi.py heuristic update --name=LAND
 
-# Résout les plateformes opaques (youtube, linkedin, mediapart...) depuis le HTML
-python mywi.py heuristic update --name=LAND --html
+# Aperçu sans écrire
+python mywi.py heuristic update --name=LAND --dry-run
 
-# Land non-fullhtml : scrap volatile du HTML manquant (--limit obligatoire)
+# Résout les plateformes listées depuis le HTML (signal déclaratif par plateforme)
 python mywi.py heuristic update --name=LAND --html --fetch-missing --limit=500
 ```
 
-Options : `--land`, `--limit` ; `--html` résout l'entité éditoriale des
-plateformes opaques (chaînes vidéo, comptes sociaux, blogs hébergés) depuis le
-HTML (JSON-LD author → `rel="author"` → `<link canonical>` → `og:url`) au lieu de
-l'URL ; hors set opaque l'URL reste autoritaire (aucun fetch). `--fetch-missing`
-(exige `--html` **et** `--limit`) récupère le HTML absent à la volée (non
-persisté). Aucune migration ; set opaque dans `mwi.core._DEFAULT_OPAQUE_PLATFORMS`
-(override `settings.opaque_platforms`).
+Options : `--land`, `--limit`, `--dry-run` ; `--html` résout l'entité via le
+signal déclaré de la plateforme (`ldjson_author`/`canonical`/`og_url`/
+`rel_author`/`ldjson_publisher`) ; `--fetch-missing` (exige `--html` **et**
+`--limit`) récupère le HTML absent à la volée (non persisté). Aucune migration.
+
+**Reconstruction complète** (récupération/rebaseline) — `heuristic update` ne
+touche que les hôtes listés ; pour recalculer **toutes** les expressions depuis
+l'URL (nettoyer le garbage de sections d'un ancien état) :
+
+```bash
+python scripts/reconstruct_domains.py --name=LAND --db=data/mwi_x.db          # dry-run
+python scripts/reconstruct_domains.py --name=LAND --db=data/mwi_x.db --apply  # écrit
+```
 
 ## Pipeline de consolidation des lands
 
