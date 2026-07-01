@@ -123,6 +123,19 @@ def command_input():
                         help='For land delete: after the --maxrel deletion, also delete '
                              'uncrawled expressions left with no incoming link '
                              '(depth>0, fetched_at IS NULL). Combine with --dry-run to preview.')
+    parser.add_argument('--html',
+                        action='store_true',
+                        default=False,
+                        help='For heuristic update: resolve opaque-platform domains '
+                             '(youtube, linkedin, mediapart...) from the page HTML '
+                             '(canonical / og:url / JSON-LD author) instead of the URL.')
+    parser.add_argument('--fetch-missing',
+                        action='store_true',
+                        default=False,
+                        dest='fetch_missing',
+                        help='For heuristic update --html: fetch HTML on the fly for '
+                             'opaque-host expressions with no stored html. Requires an '
+                             'explicit --limit to bound network fetches; not persisted.')
     parser.add_argument('--http',
                         type=str,
                         help='Limit crawling to specific http status (re crawling)',
