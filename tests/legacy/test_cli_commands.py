@@ -399,7 +399,7 @@ def test_heuristic_update_cli(fresh_db, monkeypatch):
 
     called = {"ok": False}
 
-    def fake_update():
+    def fake_update(*args, **kwargs):
         called["ok"] = True
 
     monkeypatch.setattr(controller.core, "update_heuristic", fake_update)

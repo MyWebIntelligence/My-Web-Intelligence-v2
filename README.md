@@ -923,13 +923,34 @@ python mywi.py tag export --name="AsthmaResearch" --type=content --minrel=0.5
 
 ## Update Domains from Heuristic Settings
 
-Update domain information based on predefined or learned heuristics.
+Recompute each expression's domain from `settings.heuristics`.
 
 ```bash
+# URL heuristic over all expressions (historical behaviour)
 python mywi.py heuristic update
+
+# Resolve opaque platforms (youtube, linkedin, mediapart...) from the page HTML
+python mywi.py heuristic update --name=LAND --html
+
+# Non-fullhtml land: fetch missing HTML on the fly (--limit is required)
+python mywi.py heuristic update --name=LAND --html --fetch-missing --limit=500
 ```
 
-_No options for this command._
+Options:
+
+- `--land=LAND` — restrict to one land (default: all expressions).
+- `--limit=N` — cap the expressions processed (or the fetches with `--fetch-missing`).
+- `--html` — for **opaque platforms** whose editorial entity is not in the URL
+  path (video channels, social accounts, hosted blogs), resolve the domain from
+  the page HTML (JSON-LD author → `rel="author"` → `<link canonical>` → `og:url`)
+  instead of the URL. Hosts outside the opaque set keep URL resolution (no fetch).
+- `--fetch-missing` — with `--html`, fetch HTML on the fly for opaque-host pages
+  that have no stored HTML. **Requires an explicit `--limit`** to bound network
+  I/O; the fetched HTML is used, not persisted.
+
+No database migration is required. The opaque-platform set ships in the code
+(`mwi.core._DEFAULT_OPAQUE_PLATFORMS`, ~150 host suffixes) and can be overridden
+via `settings.opaque_platforms`.
 
 ## Land Consolidation Pipeline
 
@@ -1486,7 +1507,7 @@ mywi.py  →  mwi/cli.py  →  mwi/controller.py  →  mwi/core.py & mwi/export.
 - **SEO Rank Enrichment**: `python mywi.py land seorank --name=LAND [--limit N] [--depth D] [--force]`
 - **Domain Processing**: `python mywi.py domain crawl`
 - **Tag Export**: `python mywi.py tag export`
-- **Heuristics Update**: `python mywi.py heuristic update`
+- **Heuristics Update**: `python mywi.py heuristic update [--land=X] [--html] [--fetch-missing --limit=N]`
 - **Embeddings & Similarity**:
   - Generate: `python mywi.py embedding generate --name=LAND [--limit N]`
   - Similarity: `python mywi.py embedding similarity --name=LAND [--threshold 0.85] [--method cosine]`

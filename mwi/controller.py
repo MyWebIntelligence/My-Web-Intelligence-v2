@@ -2088,26 +2088,58 @@ class HeuristicController:
 
     @staticmethod
     def update(args: core.Namespace):
-        """Update domains using specified heuristics.
+        """Recompute expression domains from settings.heuristics.
 
-        Applies domain-specific heuristics from settings to update and enrich
-        domain information. Useful for extracting social media profiles or
-        other structured data from domain URLs.
+        Default (no flags): recompute every expression's domain from the URL
+        heuristic alone (legacy global behaviour). Optional flags:
+
+        - ``--land NAME``: restrict to one land (0 if the land is not found).
+        - ``--limit N``: cap the expressions processed.
+        - ``--html``: for opaque-platform hosts (settings.opaque_platforms),
+          resolve the editorial entity from the page HTML (Expression.html)
+          instead of the URL alone.
+        - ``--fetch-missing``: when ``--html`` is set, fetch HTML on the fly for
+          opaque-host expressions lacking stored html. Requires an explicit
+          ``--limit`` to bound network I/O; the fetched HTML is used, not stored.
 
         Args:
-            args: Namespace object containing command-line arguments (unused
-                but required for controller interface).
+            args: Namespace with optional ``land``, ``limit``, ``html``,
+                ``fetch_missing``.
 
         Returns:
-            int: 1 indicating successful completion.
-
-        Notes:
-            Delegates to core.update_heuristic which processes domains according
-            to patterns defined in settings.heuristics. Heuristics typically
-            include regex patterns for extracting social media handles, RSS
-            feeds, or other domain-specific metadata.
+            int: 1 on success, 0 on a validation error (unknown land, or
+            ``--fetch-missing`` without ``--html`` / without ``--limit``).
         """
-        core.update_heuristic()
+        use_html = bool(getattr(args, 'html', False))
+        fetch_missing = bool(getattr(args, 'fetch_missing', False))
+        limit = core.get_arg_option('limit', args, set_type=int, default=None)
+        land_name = getattr(args, 'land', None)
+
+        land = None
+        if land_name:
+            land = model.Land.get_or_none(model.Land.name == land_name)
+            if land is None:
+                print('Land "%s" not found' % land_name)
+                return 0
+
+        if fetch_missing and not use_html:
+            print('--fetch-missing requires --html')
+            return 0
+        if fetch_missing and not limit:
+            print('--fetch-missing requires an explicit --limit to bound '
+                  'network fetches')
+            return 0
+
+        html_map = {}
+        if fetch_missing:
+            loop = _get_event_loop()
+            html_map = loop.run_until_complete(
+                core.fetch_missing_opaque_html(land, limit))
+            print(f'Volatile fetch: {len(html_map)} page(s) retrieved')
+
+        core.update_heuristic(
+            land, use_html=use_html, fetch_missing=fetch_missing,
+            limit=(None if fetch_missing else limit), html_map=html_map)
         return 1
 
 

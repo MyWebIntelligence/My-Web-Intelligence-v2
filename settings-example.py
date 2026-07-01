@@ -98,6 +98,17 @@ heuristics = {
     "pinterest.fr": r"([a-z0-9\-_]+\.pinterest\.fr/[a-zA-Z0-9\.\-_]+)/?\??",
 }
 
+# Opaque platforms (sprint-heuristique) — hosts whose editorial entity
+# (channel, author, blog) is NOT reliably derivable from the URL path, so
+# `heuristic update --html` reads the page HTML (canonical / og:url / JSON-LD
+# author) to recover a better URL before applying the heuristics above.
+#
+# The canonical ~150-suffix set lives in mwi.core._DEFAULT_OPAQUE_PLATFORMS.
+# Define `opaque_platforms` below (a set/iterable of host suffixes, matched on
+# a label boundary) ONLY to override that default; leave it undefined to use
+# the built-in list. Example:
+# opaque_platforms = {"youtube.com", "youtu.be", "linkedin.com", "mediapart.fr"}
+
 # Media Analysis Settings
 media_analysis = True
 media_min_width = 200
