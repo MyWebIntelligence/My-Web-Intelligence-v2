@@ -142,7 +142,7 @@ class TestDomainFromUrl:
         merely contain those substrings are preserved."""
         core = fresh_db["core"]
         fb_url = (r"([a-z0-9\-_]+\.facebook\.com/(?:groups/[a-zA-Z0-9%\.\-_]+"
-                  r"|pages/[a-zA-Z0-9%\.\-_]+/[0-9]+"
+                  r"|pages/[^?#]*[^?#/]"
                   r"|(?!(?:[a-zA-Z0-9_\-]+\.php)(?:[/?]|$)|(?:dialog)(?:[/?]|$)"
                   r"|(?:plugins)(?:[/?]|$)|(?:pages)(?:[/?]|$))"
                   r"[a-zA-Z0-9%\.\-_]+))/?\??")
@@ -155,9 +155,21 @@ class TestDomainFromUrl:
             "https://www.facebook.com/dialog/feed?a=1") == "www.facebook.com"
         assert core.domain_from_url(
             "https://www.facebook.com/plugins/like.php") == "www.facebook.com"
+        # old-format page (name/id) captured whole
         assert core.domain_from_url(
             "https://www.facebook.com/pages/RT-France/153671") == \
             "facebook.com/pages/rt-france/153671"
+        # category-format page: full path captured, alias normalises the
+        # subdomain so www./fr-fr. collapse to the same entity
+        assert core.domain_from_url(
+            "https://www.facebook.com/pages/category/Cause/Gilets-Toulouse-218") == \
+            "facebook.com/pages/category/cause/gilets-toulouse-218"
+        assert core.domain_from_url(
+            "https://fr-fr.facebook.com/pages/category/Cause/Gilets-Toulouse-218") == \
+            "facebook.com/pages/category/cause/gilets-toulouse-218"
+        # bare /pages hub -> netloc
+        assert core.domain_from_url(
+            "https://www.facebook.com/pages") == "www.facebook.com"
         # real page containing a reserved substring is NOT blocked
         assert core.domain_from_url(
             "https://www.facebook.com/dialogue-2-sourds-112") == \

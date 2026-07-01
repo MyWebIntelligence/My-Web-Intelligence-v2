@@ -58,7 +58,7 @@ PLATFORM_HEURISTICS = {
     'eventbrite.com': {"url": r"(eventbrite\.com/o/[a-zA-Z0-9%\.\-_]+)", "html": 'canonical'},
     'eventbrite.fr': {"url": r"(eventbrite\.fr/o/[a-zA-Z0-9%\.\-_]+)", "html": 'canonical'},
     'ezinearticles.com': {"url": None, "html": 'ldjson_author'},
-    'facebook.com': {"url": r"([a-z0-9\-_]+\.facebook\.com/(?:groups/[a-zA-Z0-9%\.\-_]+|pages/[a-zA-Z0-9%\.\-_]+/[0-9]+|(?!(?:notes)|(?:share)|(?:sharer)|(?:login)|(?:help)|(?:watch)|(?:events)|(?:groups)|(?:marketplace)|(?:gaming)|(?:stories)|(?:reel)|(?:wui)|(?:[a-zA-Z0-9%_\-]+\.php)(?:[/?]|$)|(?:dialog)(?:[/?]|$)|(?:plugins)(?:[/?]|$)|(?:pages)(?:[/?]|$))[a-zA-Z0-9%\.\-_]+))/?\??", "html": 'og_url', "alias": 'facebook.com', "lower": True},  # noqa: E501
+    'facebook.com': {"url": r"([a-z0-9\-_]+\.facebook\.com/(?:groups/[a-zA-Z0-9%\.\-_]+|pages/[^?#]*[^?#/]|(?!(?:notes)|(?:share)|(?:sharer)|(?:login)|(?:help)|(?:watch)|(?:events)|(?:groups)|(?:marketplace)|(?:gaming)|(?:stories)|(?:reel)|(?:wui)|(?:[a-zA-Z0-9%_\-]+\.php)(?:[/?]|$)|(?:dialog)(?:[/?]|$)|(?:plugins)(?:[/?]|$)|(?:pages)(?:[/?]|$))[a-zA-Z0-9%\.\-_]+))/?\??", "html": 'og_url', "alias": 'facebook.com', "lower": True},  # noqa: E501
     'fandom.com': {"url": r"([a-z0-9\-_]+\.fandom\.com)", "html": 'canonical'},
     'fb.com': {"url": None, "html": 'og_url'},
     'feedly.com': {"url": None, "html": 'canonical'},
