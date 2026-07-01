@@ -311,16 +311,33 @@ class TestLandExportNodesJSON:
             for field in self._NODE_FIELDS:
                 assert field in node, f"missing analytical field {field}"
             assert isinstance(node["corpus"], list)
+            for entry in node["corpus"]:
+                assert set(entry) == {
+                    "title", "urlarticle", "description", "published_at"
+                }
             assert "http_status" not in node  # technical field dropped (decision 5)
 
     def test_corpus_sorted_and_counts_match(self, populated_land):
-        """corpus trié et de longueur == nbexpressions, par domain_id."""
+        """corpus trié par urlarticle, longueur == nbexpressions, par domain_id."""
         graph = _export_graph(populated_land, "nodesjson", 0)
 
         assert graph["nodes"], "fixture must yield nodes (else assertions vacuous)"
         for node in graph["nodes"]:
-            assert node["corpus"] == sorted(node["corpus"])
+            urls = [entry["urlarticle"] for entry in node["corpus"]]
+            assert urls == sorted(urls)
             assert len(node["corpus"]) == node["nbexpressions"]
+
+    def test_corpus_entry_shape_and_values(self, populated_land):
+        """Chaque entrée corpus = objet {title, urlarticle, description, published_at}."""
+        graph = _export_graph(populated_land, "nodesjson", 0)
+
+        entries = [e for node in graph["nodes"] for e in node["corpus"]]
+        assert entries, "fixture must yield corpus entries"
+        for entry in entries:
+            assert entry["urlarticle"].startswith("https://example.com/page")
+            assert entry["title"].startswith("Page ")
+            assert entry["description"].startswith("Description with research keyword")
+            assert entry["published_at"] is None  # fixture ne fixe pas published_at
 
     def test_node_values(self, populated_land):
         """Valeurs concrètes : noms de domaines et average_relevance par nœud."""
@@ -379,7 +396,8 @@ class TestLandExportNodesJSON:
             links, key=lambda lk: (-lk["value"], lk["source"], lk["target"])
         )
         for node in nodes:
-            assert node["corpus"] == sorted(node["corpus"])
+            urls = [entry["urlarticle"] for entry in node["corpus"]]
+            assert urls == sorted(urls)
 
     def test_misspelled_type_rejected(self, populated_land):
         """Un type mal orthographié est rejeté (whitelist) -> ret==0."""
@@ -455,6 +473,22 @@ class TestLandExportNodesJSON:
         assert node["name"] == "solo.example"
         assert node["nbexpressions"] == 3
         assert node["average_relevance"] == 4.0  # (2+4+6)/3
+
+    def test_corpus_published_at_per_article(self, nodesjson_land):
+        """published_at = date de publication de chaque article, ordonné par url."""
+        graph = _export_graph(nodesjson_land, "nodesjson", 1)
+
+        corpus = graph["nodes"][0]["corpus"]
+        assert [c["urlarticle"] for c in corpus] == [
+            "https://solo.example/1",
+            "https://solo.example/2",
+            "https://solo.example/3",
+        ]
+        assert [c["published_at"] for c in corpus] == [
+            "2024-03-05 00:00:00",
+            "2024-01-10 00:00:00",
+            "2024-06-20 00:00:00",
+        ]
 
 
 class TestLandExportPagesJSON:

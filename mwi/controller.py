@@ -1577,7 +1577,8 @@ class LandController:
             'pseudolinksdomain' (domain-level pseudolinks), 'nodelinkcsv'
             (4 CSV files: pagesnodes, pageslinks, domainnodes, domainlinks),
             'nodesjson' (domain force-graph {nodes, links} JSON, with a
-            per-domain url corpus), 'pagesjson' (page force-graph {nodes,
+            per-domain corpus of {title, urlarticle, description,
+            published_at} objects), 'pagesjson' (page force-graph {nodes,
             links} JSON, tags array + nested seorank), 'htmldump' (zip of
             raw stored HTML).
 

@@ -249,9 +249,11 @@ class Export:
         A node is a domain of the land carrying at least one expression with
         relevance >= minrel. Node variables = 9 analytical fields (union of the
         two domain node exports, the technical http_status is dropped) plus
-        ``corpus``, the sorted list of the domain's expression URLs filtered by
-        minrel. Links mirror _write_domainlinks (directed inter-domain edges,
-        value = page-to-page link count). Deterministic ordering throughout.
+        ``corpus``, the sorted list of the domain's expressions filtered by
+        minrel, each a nested object ``{title, urlarticle, description,
+        published_at}`` (raw values ; ``null`` when absent). Links mirror
+        _write_domainlinks (directed inter-domain edges, value = page-to-page
+        link count). Deterministic ordering throughout.
 
         Args:
             filename: Path to output JSON file.
@@ -283,20 +285,34 @@ class Export:
             for row in self.get_sql_cursor(node_sql, node_cols)
         ]
 
-        # corpus : (domain_id, url) sorted then grouped in Python (deterministic
-        # order ; SQLite GROUP_CONCAT has no guaranteed ordering).
-        corpus_cols = {'domain_id': 'e.domain_id', 'url': 'e.url'}
+        # corpus : one nested {title, urlarticle, description, published_at}
+        # object per expression, sorted by (domain_id, url) then grouped in
+        # Python (deterministic order ; SQLite GROUP_CONCAT has no guaranteed
+        # ordering). Raw values are kept — None serialises to JSON null.
+        corpus_cols = {
+            'domain_id': 'e.domain_id',
+            'title': 'e.title',
+            'urlarticle': 'e.url',
+            'description': 'e.description',
+            'published_at': 'e.published_at',
+        }
         corpus_sql = """
             SELECT {}
             FROM expression AS e
             WHERE e.land_id = ? AND e.relevance >= ?
             ORDER BY e.domain_id, e.url
         """
-        urls_by_domain = {}
-        for domain_id, url in self.get_sql_cursor(corpus_sql, corpus_cols):
-            urls_by_domain.setdefault(domain_id, []).append(url)
+        corpus_by_domain = {}
+        for domain_id, title, urlarticle, description, published_at in \
+                self.get_sql_cursor(corpus_sql, corpus_cols):
+            corpus_by_domain.setdefault(domain_id, []).append({
+                'title': title,
+                'urlarticle': urlarticle,
+                'description': description,
+                'published_at': published_at,
+            })
         for node in nodes:
-            node['corpus'] = urls_by_domain.get(node['id'], [])
+            node['corpus'] = corpus_by_domain.get(node['id'], [])
 
         # inter-domain links (logic of _write_domainlinks, with a deterministic
         # tiebreaker so the output is byte-identical for identical data).

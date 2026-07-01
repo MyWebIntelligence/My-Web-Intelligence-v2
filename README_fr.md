@@ -598,7 +598,8 @@ Types : `pagecsv`, `fullpagecsv`, `nodecsv`, `pagegexf`, `nodegexf`, `mediacsv`,
 > **Exports JSON force-graph (`nodesjson` / `pagesjson`)** — format `{nodes, links}`
 > directement consommable par un visualiseur React/JS (`react-force-graph`, D3,
 > Sigma). `nodesjson` = graphe de **domaines** (9 variables analytiques + `corpus`,
-> le tableau trié des URL du domaine) ; `pagesjson` = graphe de **pages** (`tags`
+> tableau trié des expressions du domaine, chacune un objet imbriqué
+> `{title, urlarticle, description, published_at}`) ; `pagesjson` = graphe de **pages** (`tags`
 > en tableau trié, `seorank` en objet imbriqué, `null` pour les valeurs absentes).
 > Exports **déterministes**. Contrat : `docs/graph.schema.json`.
 
