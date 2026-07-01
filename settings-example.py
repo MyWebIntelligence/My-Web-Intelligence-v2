@@ -56,15 +56,21 @@ crawl_fallback_curl_cffi_impersonate = "chrome120"  # or "safari17_2"
 # only when curl_cffi is not enough for your sites.
 # Requires: `playwright install chromium`.
 crawl_fallback_playwright = False
-crawl_fallback_playwright_max_concurrent = 4   # bounds RAM (1 page ~= 80 MB)
+crawl_fallback_playwright_max_concurrent = 4  # bounds RAM (1 page ~= 80 MB)
 crawl_fallback_playwright_timeout_sec = 30
 
 # crawl_retry_status_codes: status strings that trigger retry-only
 # strategies (curl_cffi, Playwright). Keep "ERR" to retry on unhandled
 # exceptions during the primary fetch.
 crawl_retry_status_codes = [
-    "403", "406", "429",
-    "503", "520", "521", "523", "526",
+    "403",
+    "406",
+    "429",
+    "503",
+    "520",
+    "521",
+    "523",
+    "526",
     "ERR",
 ]
 
@@ -80,34 +86,107 @@ fullhtml_max_size_kb = 5120
 # Link-context (sprint link-context): tailles max des métadonnées de lien
 # stockées dans expressionlink (migration 012). context = paragraphe markdown
 # du readable contenant le lien ; dom_html = outerHTML du bloc ancêtre du <a>.
-link_context_max_chars = 1000     # troncature de expressionlink.context
-link_dom_html_max_chars = 4000    # troncature de expressionlink.dom_html
+link_context_max_chars = 1000  # troncature de expressionlink.context
+link_dom_html_max_chars = 4000  # troncature de expressionlink.dom_html
 
 # Cut Domains
 
+
 heuristics = {
-    "facebook.com": r"([a-z0-9\-_]+\.facebook\.com/(?!(?:permalink.php)|(?:notes))[a-zA-Z0-9\.\-_]+)/?\??",
-    "twitter.com": r"([a-z0-9\-_]*\.?twitter\.com/(?!(?:hashtag)|(?:search)|(?:home)|(?:share))[a-zA-Z0-9\.\-_]+)",
-    "linkedin.com": r"([a-z0-9\-_]+\.linkedin\.com/[a-zA-Z0-9\.\-_]+)/?\??",
-    "slideshare.net": r"([a-z0-9\-_]+\.slideshare\.com/[a-zA-Z0-9\.\-_]+)/?\??",
-    "instagram.com": r"([a-z0-9\-_]+\.instagram\.com/[a-zA-Z0-9\.\-_]+)/?\??",
-    "youtube.com": r"([a-z0-9\-_]+\.youtube\.com/(?!watch)[a-zA-Z0-9\.\-_]+)/?\??",
-    "vimeo.com": r"([a-z0-9\-_]+\.vimeo\.com/[a-zA-Z0-9\.\-_]+)/?\??",
-    "dailymotion.com": r"([a-z0-9\-_]+\.dailymotion\.com/(?!video)[a-zA-Z0-9\.\-_]+)/?\??",
-    "pinterest.com": r"([a-z0-9\-_]+\.pinterest\.com/(?!pin)[a-zA-Z0-9\.\-_]+)/?\??",
-    "pinterest.fr": r"([a-z0-9\-_]+\.pinterest\.fr/[a-zA-Z0-9\.\-_]+)/?\??",
+    # =========================================================================
+    # Social media — extract user/page/profile as logical domain
+    # =========================================================================
+    "facebook.com": r"([a-z0-9\-_]+\.facebook\.com/(?!(?:permalink\.php)|(?:notes)|(?:share)|(?:sharer)|(?:login)|(?:help)|(?:watch)|(?:events)|(?:groups)|(?:marketplace)|(?:gaming)|(?:stories))[a-zA-Z0-9\.\-_]+)/?\??",
+    "twitter.com": r"([a-z0-9\-_]*\.?twitter\.com/(?!(?:hashtag)|(?:search)|(?:home)|(?:share)|(?:explore)|(?:login)|(?:i/)|(?:settings)|(?:notifications)|(?:messages)|(?:compose)|(?:tos)|(?:privacy))[a-zA-Z0-9\.\-_]+)",
+    "x.com": r"([a-z0-9\-_]*\.?x\.com/(?!(?:hashtag)|(?:search)|(?:home)|(?:share)|(?:explore)|(?:login)|(?:i/)|(?:settings)|(?:notifications)|(?:messages)|(?:compose)|(?:tos)|(?:privacy))[a-zA-Z0-9\.\-_]+)",
+    "instagram.com": r"([a-z0-9\-_]+\.instagram\.com/(?!(?:explore)|(?:accounts)|(?:about)|(?:legal)|(?:developer)|(?:p/)|(?:reel/)|(?:stories/))[a-zA-Z0-9\.\-_]+)/?\??",
+    "linkedin.com": r"([a-z0-9\-_]+\.linkedin\.com/(?:in|company)/[a-zA-Z0-9\.\-_]+)/?\??",
+    "tiktok.com": r"([a-z0-9\-_]*\.?tiktok\.com/@[a-zA-Z0-9\.\-_]+)",
+    "reddit.com": r"([a-z0-9\-_]*\.?reddit\.com/r/(?!(?:all)|(?:popular)|(?:home))[a-zA-Z0-9\.\-_]+)",
+    "threads.net": r"([a-z0-9\-_]*\.?threads\.net/@[a-zA-Z0-9\.\-_]+)",
+    "bsky.app": r"([a-z0-9\-_]*\.?bsky\.app/profile/[a-zA-Z0-9\.\-_]+)",
+    "t.me": r"(t\.me/(?!(?:addstickers)|(?:joinchat)|(?:addtheme)|(?:share)|(?:login)|(?:auth)|(?:dl))[a-zA-Z0-9\.\-_]+)",
+    "telegram.me": r"(telegram\.me/(?!(?:addstickers)|(?:joinchat)|(?:share))[a-zA-Z0-9\.\-_]+)",
+    "vk.com": r"(vk\.com/(?!(?:feed)|(?:im)|(?:friends)|(?:search)|(?:login)|(?:join)|(?:about)|(?:away\.php)|(?:share\.php))[a-zA-Z0-9\.\-_]+)",
+    "pinterest.com": r"([a-z0-9\-_]+\.pinterest\.com/(?!(?:pin)|(?:search)|(?:ideas)|(?:today)|(?:business))[a-zA-Z0-9\.\-_]+)/?\??",
+    "pinterest.fr": r"([a-z0-9\-_]+\.pinterest\.fr/(?!(?:pin)|(?:search)|(?:ideas))[a-zA-Z0-9\.\-_]+)/?\??",
+    "snapchat.com": r"([a-z0-9\-_]*\.?snapchat\.com/add/[a-zA-Z0-9\.\-_]+)",
+    # =========================================================================
+    # Video platforms — extract channel/user as logical domain
+    # =========================================================================
+    "youtube.com": r"([a-z0-9\-_]+\.youtube\.com/(?!(?:watch)|(?:results)|(?:feed)|(?:shorts)|(?:playlist)|(?:gaming)|(?:premium)|(?:about))[a-zA-Z0-9@\.\-_]+)/?\??",
+    "vimeo.com": r"([a-z0-9\-_]+\.vimeo\.com/(?!(?:search)|(?:categories)|(?:watch)|(?:features)|(?:about))[a-zA-Z0-9\.\-_]+)/?\??",
+    "dailymotion.com": r"([a-z0-9\-_]+\.dailymotion\.com/(?!(?:video)|(?:search)|(?:topic)|(?:explore))[a-zA-Z0-9\.\-_]+)/?\??",
+    "twitch.tv": r"([a-z0-9\-_]*\.?twitch\.tv/(?!(?:directory)|(?:search)|(?:downloads)|(?:jobs)|(?:turbo)|(?:settings)|(?:subscriptions)|(?:p/))[a-zA-Z0-9\.\-_]+)",
+    "rumble.com": r"(rumble\.com/(?:c|user)/[a-zA-Z0-9\.\-_]+)",
+    "odysee.com": r"(odysee\.com/@[a-zA-Z0-9\.\-_:]+)",
+    "bitchute.com": r"(bitchute\.com/channel/[a-zA-Z0-9\.\-_]+)",
+    # =========================================================================
+    # Blogging platforms — path-based (subdomain ones handled by netloc)
+    # =========================================================================
+    "medium.com": r"([a-z0-9\-_]*\.?medium\.com/(?!(?:search)|(?:explore)|(?:topics)|(?:me/)|(?:plans)|(?:about)|(?:creators)|(?:tag/)|(?:membership)|(?:p/))[a-zA-Z0-9@\.\-_]+)",
+    "dev.to": r"(dev\.to/(?!(?:search)|(?:tags)|(?:top)|(?:latest)|(?:enter)|(?:about)|(?:contact)|(?:privacy)|(?:terms)|(?:t/)|(?:pod)|(?:videos))[a-zA-Z0-9\.\-_]+)",
+    "note.com": r"(note\.com/(?!(?:search)|(?:explore)|(?:ranking)|(?:topics)|(?:hashtag)|(?:login)|(?:signup))[a-zA-Z0-9\.\-_]+)",
+    "ameblo.jp": r"(ameblo\.jp/(?!(?:search)|(?:hashtag)|(?:login))[a-zA-Z0-9\.\-_]+)",
+    "slideshare.net": r"([a-z0-9\-_]+\.slideshare\.net/(?!(?:search)|(?:explore)|(?:featured))[a-zA-Z0-9\.\-_]+)/?\??",
+    # =========================================================================
+    # Code & documentation platforms
+    # =========================================================================
+    "github.com": r"(github\.com/(?!(?:search)|(?:explore)|(?:trending)|(?:login)|(?:join)|(?:settings)|(?:notifications)|(?:marketplace)|(?:sponsors)|(?:features)|(?:pricing)|(?:about)|(?:topics)|(?:collections)|(?:events)|(?:orgs))[a-zA-Z0-9\.\-_]+)",
+    "gitlab.com": r"(gitlab\.com/(?!(?:explore)|(?:search)|(?:help)|(?:users/sign_in)|(?:dashboard))[a-zA-Z0-9\.\-_]+)",
+    "bitbucket.org": r"(bitbucket\.org/(?!(?:product)|(?:account)|(?:dashboard)|(?:search))[a-zA-Z0-9\.\-_]+)",
+    # =========================================================================
+    # Audio & podcast platforms
+    # =========================================================================
+    "soundcloud.com": r"(soundcloud\.com/(?!(?:search)|(?:discover)|(?:stream)|(?:upload)|(?:you/)|(?:charts)|(?:tags/)|(?:stations)|(?:login)|(?:pages))[a-zA-Z0-9\.\-_]+)",
+    "anchor.fm": r"(anchor\.fm/(?!(?:switch)|(?:dashboard))[a-zA-Z0-9\.\-_]+)",
+    "open.spotify.com": r"(open\.spotify\.com/(?:show|artist)/[a-zA-Z0-9]+)",
+    # =========================================================================
+    # Crowdfunding, events & creator platforms
+    # =========================================================================
+    "patreon.com": r"(patreon\.com/(?!(?:search)|(?:explore)|(?:login)|(?:signup)|(?:about)|(?:policy)|(?:careers)|(?:c/))[a-zA-Z0-9\.\-_]+)",
+    "ko-fi.com": r"(ko-fi\.com/(?!(?:explore)|(?:about)|(?:gold)|(?:manage))[a-zA-Z0-9\.\-_]+)",
+    "gofundme.com": r"(gofundme\.com/f/[a-zA-Z0-9\.\-_]+)",
+    "change.org": r"(change\.org/p/[a-zA-Z0-9\.\-_]+)",
+    "linktr.ee": r"(linktr\.ee/(?!(?:admin)|(?:s/))[a-zA-Z0-9\.\-_]+)",
+    "eventbrite.com": r"(eventbrite\.com/o/[a-zA-Z0-9\.\-_]+)",
+    "eventbrite.fr": r"(eventbrite\.fr/o/[a-zA-Z0-9\.\-_]+)",
+    "meetup.com": r"(meetup\.com/(?!(?:find)|(?:topics)|(?:cities)|(?:login)|(?:register)|(?:about)|(?:help))[a-zA-Z0-9\.\-_]+)",
+    # =========================================================================
+    # E-commerce — extract seller/shop as logical domain
+    # =========================================================================
+    "etsy.com": r"(etsy\.com/(?:shop|people)/[a-zA-Z0-9\.\-_]+)",
+    # =========================================================================
+    # Academic / research
+    # =========================================================================
+    "researchgate.net": r"(researchgate\.net/profile/[a-zA-Z0-9\.\-_]+)",
+    "academia.edu": r"([a-z0-9\-_]*\.?academia\.edu/(?!(?:search)|(?:Documents)|(?:login)|(?:signup)|(?:about)|(?:hiring))[a-zA-Z0-9\.\-_]+)",
+    # =========================================================================
+    # Wiki platforms — subdomain = wiki identity
+    # =========================================================================
+    "fandom.com": r"([a-z0-9\-_]+\.fandom\.com)",
 }
 
-# Opaque platforms (sprint-heuristique) — hosts whose editorial entity
-# (channel, author, blog) is NOT reliably derivable from the URL path, so
-# `heuristic update --html` reads the page HTML (canonical / og:url / JSON-LD
-# author) to recover a better URL before applying the heuristics above.
+# Platform heuristics (sprint-heuristique) — UNIFIED table superseding the flat
+# `heuristics` dict above. Domain resolution now reads a per-platform rule
+#     {host: {"url": <regex|None>, "html": <signal>}}
+# where "url" extracts the editorial entity from the path (channel/handle/...)
+# and "html" is the declarative signal `heuristic update --html` uses to recover
+# it from the page (ldjson_author / canonical / og_url / rel_author / ...). The
+# canonical 144-host table (hebergeurs only — editeurs/press excluded, LCEN
+# criterion) — your URL regexes above are merged in, the YouTube
+# channel over-capture fixed) lives in mwi/platform_heuristics.py.
 #
-# The canonical ~150-suffix set lives in mwi.core._DEFAULT_OPAQUE_PLATFORMS.
-# Define `opaque_platforms` below (a set/iterable of host suffixes, matched on
-# a label boundary) ONLY to override that default; leave it undefined to use
-# the built-in list. Example:
-# opaque_platforms = {"youtube.com", "youtu.be", "linkedin.com", "mediapart.fr"}
+# The flat `heuristics` dict above is now IGNORED by domain resolution — kept
+# only for reference. To customize, define `platform_heuristics` below (same
+# {host: {"url", "html"}} shape); leave it undefined to use the built-in table.
+# Only hosts listed in the table are ever re-grouped; every other host keeps its
+# bare netloc. Example:
+# platform_heuristics = {
+#     "youtube.com": {"url": r"(youtube\.com/(?:@[\w.-]+|channel/UC[\w-]+))",
+#                     "html": "ldjson_author"},
+#     "mediapart.fr": {"url": None, "html": "ldjson_author"},
+# }
 
 # Media Analysis Settings
 media_analysis = True
@@ -149,7 +228,9 @@ openrouter_model_examples = [
 # drops index/navigation and generic company-presentation pages. Global default
 # for every gate call (crawl, readable, consolidate, llm validate); the
 # --issuecrawl CLI flag overrides it per run.
-openrouter_issue_mode = os.getenv("MWI_OPENROUTER_ISSUE_MODE", "false").lower() == "true"
+openrouter_issue_mode = (
+    os.getenv("MWI_OPENROUTER_ISSUE_MODE", "false").lower() == "true"
+)
 openrouter_timeout = int(os.getenv("MWI_OPENROUTER_TIMEOUT", "15"))
 # Bounds to control costs/latency
 openrouter_readable_min_chars = int(os.getenv("MWI_OPENROUTER_MIN_CHARS", "140"))
@@ -157,7 +238,6 @@ openrouter_readable_max_chars = int(os.getenv("MWI_OPENROUTER_MAX_CHARS", "12000
 # Per-run safety cap on LLM gate calls. Set to 0 (or MWI_OPENROUTER_MAX_CALLS=0)
 # for no limit — e.g. a full `land llm validate` over a large land in one run.
 openrouter_max_calls_per_run = int(os.getenv("MWI_OPENROUTER_MAX_CALLS", "500"))
-
 
 
 # SEO Rank enrichment (land seorank)
@@ -172,14 +252,16 @@ seorank_request_delay = 1.0  # polite sleep between API calls
 serpapi_api_key = os.getenv("MWI_SERPAPI_API_KEY", "")
 serpapi_base_url = "https://serpapi.com/search"
 serpapi_timeout = 15  # seconds
-serpapi_max_retries = 3  # attempts per request on timeout / 429 / 5xx (backoff 2s, 4s, 8s…)
+serpapi_max_retries = (
+    3  # attempts per request on timeout / 429 / 5xx (backoff 2s, 4s, 8s…)
+)
 
 
 # --- Embedding Settings ---
 
 # Embedding settings (bi-encoder)
 # Provider: one of 'fake', 'http', 'openai', 'mistral', 'gemini', 'huggingface', 'ollama'
-embed_provider = os.getenv('MWI_EMBED_PROVIDER', 'mistral')
+embed_provider = os.getenv("MWI_EMBED_PROVIDER", "mistral")
 
 # Common
 embed_model_name = os.getenv("MWI_EMBED_MODEL", "mistral-embed")
@@ -187,7 +269,7 @@ embed_batch_size = 32
 embed_min_paragraph_chars = 150
 embed_max_paragraph_chars = 6000
 embed_similarity_threshold = 0.75
-embed_similarity_method = 'cosine'  # 'cosine' | 'cosine_lsh'
+embed_similarity_method = "cosine"  # 'cosine' | 'cosine_lsh'
 embed_max_retries = 5
 embed_backoff_initial = 1.0
 embed_backoff_multiplier = 2.0
@@ -228,7 +310,7 @@ nli_model_name = os.getenv(
 nli_batch_size = 64
 
 # Backend preference: 'auto', 'transformers', 'crossencoder', 'fallback'
-nli_backend_preference = os.getenv("MWI_NLI_BACKEND", 'fallback')
+nli_backend_preference = os.getenv("MWI_NLI_BACKEND", "fallback")
 
 # CPU threading
 nli_torch_num_threads = int(os.getenv("MWI_NLI_TORCH_THREADS", "1"))
@@ -247,12 +329,12 @@ nli_progress_every_pairs = 1000
 nli_show_throughput = True
 
 # ANN Backend Configuration (recall)
-similarity_backend = os.getenv('MWI_SIMILARITY_BACKEND', 'faiss')
-similarity_top_k = int(os.getenv('MWI_SIMILARITY_TOP_K', '50'))
+similarity_backend = os.getenv("MWI_SIMILARITY_BACKEND", "faiss")
+similarity_top_k = int(os.getenv("MWI_SIMILARITY_TOP_K", "50"))
 
 # NLI Classification Thresholds
-nli_entailment_threshold = float(os.getenv('MWI_NLI_ENTAILMENT_THRESHOLD', '0.8'))
-nli_contradiction_threshold = float(os.getenv('MWI_NLI_CONTRADICTION_THRESHOLD', '0.8'))
+nli_entailment_threshold = float(os.getenv("MWI_NLI_ENTAILMENT_THRESHOLD", "0.8"))
+nli_contradiction_threshold = float(os.getenv("MWI_NLI_CONTRADICTION_THRESHOLD", "0.8"))
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -270,15 +352,26 @@ url_normalization = {
     # Unwrap linkedin.com/redir?url=… and cold-join?session_redirect=…
     # wrappers to their real target. Off by default (may diverge existing
     # lands, like force_https/strip_www). See sprint-extractlinks LINK-6.
-    "unwrap_linkedin_redirect": os.getenv(
-        "MWI_URL_UNWRAP_LINKEDIN", "false").lower() == "true",
+    "unwrap_linkedin_redirect": os.getenv("MWI_URL_UNWRAP_LINKEDIN", "false").lower()
+    == "true",
     "lowercase_host": True,
     "force_https": os.getenv("MWI_URL_FORCE_HTTPS", "false").lower() == "true",
     "strip_www": os.getenv("MWI_URL_STRIP_WWW", "false").lower() == "true",
-    "strip_mobile_subdomain": os.getenv("MWI_URL_STRIP_MOBILE", "false").lower() == "true",
+    "strip_mobile_subdomain": os.getenv("MWI_URL_STRIP_MOBILE", "false").lower()
+    == "true",
     "strip_trackers": [
-        "utm_*", "fbclid", "gclid", "mc_eid", "ref_src", "_ga",
-        "yclid", "_openstat", "wt_*", "msclkid", "igshid", "spm",
+        "utm_*",
+        "fbclid",
+        "gclid",
+        "mc_eid",
+        "ref_src",
+        "_ga",
+        "yclid",
+        "_openstat",
+        "wt_*",
+        "msclkid",
+        "igshid",
+        "spm",
     ],
     "normalize_query_order": True,
     "trailing_slash": "preserve",  # 'preserve' | 'strip' | 'add'
@@ -301,11 +394,11 @@ SEARXNG_BASE_URL = os.getenv("SEARXNG_BASE_URL", "http://localhost:8888")
 BRAVE_API_KEY = os.getenv("BRAVE_API_KEY")
 SERPER_API_KEY = os.getenv("SERPER_API_KEY")
 SERPAPI_API_KEY = os.getenv("SERPAPI_API_KEY")  # distinct from the historical
-                                                # `serpapi_api_key` (snake-case)
-                                                # used by `land urlist`. The
-                                                # search router falls back to
-                                                # the snake-case key when the
-                                                # UPPER one is unset.
+# `serpapi_api_key` (snake-case)
+# used by `land urlist`. The
+# search router falls back to
+# the snake-case key when the
+# UPPER one is unset.
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 
 # Default orchestration strategy:

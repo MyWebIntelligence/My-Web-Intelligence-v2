@@ -2112,7 +2112,9 @@ class HeuristicController:
         """
         use_html = bool(getattr(args, 'html', False))
         fetch_missing = bool(getattr(args, 'fetch_missing', False))
+        dry_run = bool(getattr(args, 'dry_run', False))
         limit = core.get_arg_option('limit', args, set_type=int, default=None)
+        minrel = core.get_arg_option('minrel', args, set_type=int, default=None)
         land_name = getattr(args, 'land', None)
 
         land = None
@@ -2131,15 +2133,16 @@ class HeuristicController:
             return 0
 
         html_map = {}
-        if fetch_missing:
+        if fetch_missing and not dry_run:  # dry-run stays offline
             loop = _get_event_loop()
             html_map = loop.run_until_complete(
-                core.fetch_missing_opaque_html(land, limit))
+                core.fetch_missing_opaque_html(land, limit, minrel))
             print(f'Volatile fetch: {len(html_map)} page(s) retrieved')
 
         core.update_heuristic(
             land, use_html=use_html, fetch_missing=fetch_missing,
-            limit=(None if fetch_missing else limit), html_map=html_map)
+            limit=(None if fetch_missing else limit), html_map=html_map,
+            minrel=minrel, dry_run=dry_run)
         return 1
 
 

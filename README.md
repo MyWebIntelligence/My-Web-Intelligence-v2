@@ -923,13 +923,21 @@ python mywi.py tag export --name="AsthmaResearch" --type=content --minrel=0.5
 
 ## Update Domains from Heuristic Settings
 
-Recompute each expression's domain from `settings.heuristics`.
+Re-group each expression's domain using the unified **platform heuristics
+table** (`mwi/platform_heuristics.py`, 144 **host** entries — publishers
+excluded; `{host: {"url", "html"}}`;
+override via `settings.platform_heuristics`). It supersedes the flat
+`settings.heuristics` dict. **Only listed platforms are ever re-grouped**; every
+other host keeps its bare netloc.
 
 ```bash
-# URL heuristic over all expressions (historical behaviour)
-python mywi.py heuristic update
+# URL rules over listed platforms (safe — never a global re-baseline)
+python mywi.py heuristic update --name=LAND
 
-# Resolve opaque platforms (youtube, linkedin, mediapart...) from the page HTML
+# Preview without writing
+python mywi.py heuristic update --name=LAND --dry-run
+
+# Resolve listed platforms from the page HTML (per-platform declarative signal)
 python mywi.py heuristic update --name=LAND --html
 
 # Non-fullhtml land: fetch missing HTML on the fly (--limit is required)
@@ -938,19 +946,28 @@ python mywi.py heuristic update --name=LAND --html --fetch-missing --limit=500
 
 Options:
 
-- `--land=LAND` — restrict to one land (default: all expressions).
-- `--limit=N` — cap the expressions processed (or the fetches with `--fetch-missing`).
-- `--html` — for **opaque platforms** whose editorial entity is not in the URL
-  path (video channels, social accounts, hosted blogs), resolve the domain from
-  the page HTML (JSON-LD author → `rel="author"` → `<link canonical>` → `og:url`)
-  instead of the URL. Hosts outside the opaque set keep URL resolution (no fetch).
-- `--fetch-missing` — with `--html`, fetch HTML on the fly for opaque-host pages
-  that have no stored HTML. **Requires an explicit `--limit`** to bound network
-  I/O; the fetched HTML is used, not persisted.
+- `--land=LAND` — restrict to one land. `--limit=N` — cap expressions processed
+  (or fetches with `--fetch-missing`). `--dry-run` — preview, write nothing.
+- `--html` — resolve a listed platform's editorial entity from the page HTML via
+  its declarative signal (`ldjson_author` / `canonical` / `og_url` /
+  `rel_author` / `ldjson_publisher`), instead of the URL.
+- `--fetch-missing` — with `--html`, fetch HTML on the fly for listed-host pages
+  with no stored HTML. **Requires an explicit `--limit`**; the HTML is used, not
+  persisted.
 
-No database migration is required. The opaque-platform set ships in the code
-(`mwi.core._DEFAULT_OPAQUE_PLATFORMS`, ~150 host suffixes) and can be overridden
-via `settings.opaque_platforms`.
+No database migration is required.
+
+### Full-corpus reconstruction (recovery / rebaseline)
+
+`heuristic update` only touches listed platforms. To recompute **every**
+expression's domain from its URL (e.g. to clean section-path garbage left by an
+older heuristic state), use the standalone reconstruction tool — dry-run by
+default, `--apply` to write, chunked and URL-only (no network):
+
+```bash
+python scripts/reconstruct_domains.py --name=LAND --db=data/mwi_x.db
+python scripts/reconstruct_domains.py --name=LAND --db=data/mwi_x.db --apply
+```
 
 ## Land Consolidation Pipeline
 
