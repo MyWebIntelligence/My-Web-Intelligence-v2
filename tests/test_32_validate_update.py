@@ -262,3 +262,44 @@ class TestIssuePrompts:
         assert '"yes" or "no"' in prompt
         assert 'French' in prompt
         assert 'table of contents' in prompt
+
+
+class TestCallBudget:
+    """Per-run LLM call cap: a positive value bounds the run, 0 means unlimited."""
+
+    def test_gate_skips_when_positive_budget_reached(self, fresh_db, monkeypatch):
+        import settings
+        from mwi import llm_openrouter
+        _enable_openrouter(monkeypatch)
+        monkeypatch.setattr(settings, "openrouter_max_calls_per_run", 2)
+        monkeypatch.setattr(llm_openrouter, "_call_count", 2)
+        called = []
+        monkeypatch.setattr(llm_openrouter, "ask_openrouter_yesno",
+                            lambda prompt: called.append(prompt) or "oui")
+
+        _, land = _make_land(fresh_db)
+        expr = _make_expr(fresh_db, land)
+
+        verdict = llm_openrouter.is_relevant_via_openrouter(land, expr)
+
+        assert verdict is None        # budget reached → gate skipped
+        assert called == []           # no OpenRouter call made
+
+    def test_zero_budget_means_unlimited(self, fresh_db, monkeypatch):
+        import settings
+        from mwi import llm_openrouter
+        _enable_openrouter(monkeypatch)
+        # 0 = no limit: even a huge prior count must not skip the gate.
+        monkeypatch.setattr(settings, "openrouter_max_calls_per_run", 0)
+        monkeypatch.setattr(llm_openrouter, "_call_count", 10_000)
+        called = []
+        monkeypatch.setattr(llm_openrouter, "ask_openrouter_yesno",
+                            lambda prompt: called.append(prompt) or "oui")
+
+        _, land = _make_land(fresh_db)
+        expr = _make_expr(fresh_db, land)
+
+        verdict = llm_openrouter.is_relevant_via_openrouter(land, expr)
+
+        assert verdict is True        # gate ran despite the high counter
+        assert len(called) == 1

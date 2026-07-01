@@ -198,7 +198,11 @@ def is_relevant_via_openrouter(land: model.Land, expression: model.Expression,
     if not settings.openrouter_api_key or not settings.openrouter_model:
         print("OpenRouter disabled: missing API key or model")
         return None
-    if _call_count >= settings.openrouter_max_calls_per_run:
+    # Per-run safety cap on LLM calls. 0 (or any non-positive value) means
+    # "no limit", matching the codebase convention for budget knobs
+    # (e.g. --limit, fullhtml_max_size_kb). A positive value bounds the run.
+    max_calls = settings.openrouter_max_calls_per_run
+    if max_calls > 0 and _call_count >= max_calls:
         print("OpenRouter budget reached for this run; skipping gate")
         return None
 

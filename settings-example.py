@@ -143,6 +143,8 @@ openrouter_timeout = int(os.getenv("MWI_OPENROUTER_TIMEOUT", "15"))
 # Bounds to control costs/latency
 openrouter_readable_min_chars = int(os.getenv("MWI_OPENROUTER_MIN_CHARS", "140"))
 openrouter_readable_max_chars = int(os.getenv("MWI_OPENROUTER_MAX_CHARS", "12000"))
+# Per-run safety cap on LLM gate calls. Set to 0 (or MWI_OPENROUTER_MAX_CALLS=0)
+# for no limit — e.g. a full `land llm validate` over a large land in one run.
 openrouter_max_calls_per_run = int(os.getenv("MWI_OPENROUTER_MAX_CALLS", "500"))
 
 
