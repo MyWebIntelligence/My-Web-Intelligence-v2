@@ -139,6 +139,31 @@ def _is_same_page(absolute: str, base_norm: Optional[str]) -> bool:
         return False
 
 
+def _resolve_href(href: Optional[str], base_url: str,
+                  base_norm: Optional[str]) -> Optional[str]:
+    """Absolute http(s) URL for one ``<a href>``, or None when it is not a link.
+
+    Single definition of what counts as an outgoing hyperlink, shared by
+    :func:`extract_link_dom_map`, :func:`extract_all_links` and
+    ``body_links.extract_body_links`` so the three can never drift apart
+    (sprint body-links, T2). Drops ``mailto:``/``javascript:``/``tel:``/
+    ``data:``/``#``, anything that does not resolve to http(s), and same-page
+    navigation written as an absolute URL plus a fragment.
+    """
+    href = (href or '').strip()
+    if not href or href.lower().startswith(SKIP_HREF_PREFIXES):
+        return None
+    if href.startswith(('http://', 'https://')):
+        absolute = href
+    else:
+        absolute = urljoin(base_url, href)
+        if not absolute.startswith(('http://', 'https://')):
+            return None
+    if _is_same_page(absolute, base_norm):
+        return None
+    return absolute
+
+
 def _quiet_soup(raw_html: str, parser: str):
     """BeautifulSoup parse with the noisy XMLParsedAsHTMLWarning silenced.
 
@@ -179,17 +204,8 @@ def extract_link_dom_map(raw_html: Optional[str], base_url: str,
         base_norm = _same_page_norm(base_url)
 
         for a_tag in soup.find_all('a', href=True):
-            href = (a_tag.get('href') or '').strip()
-            if not href or href.lower().startswith(SKIP_HREF_PREFIXES):
-                continue
-            if href.startswith(('http://', 'https://')):
-                absolute = href
-            else:
-                absolute = urljoin(base_url, href)
-                if not absolute.startswith(('http://', 'https://')):
-                    continue
-
-            if _is_same_page(absolute, base_norm):
+            absolute = _resolve_href(a_tag.get('href'), base_url, base_norm)
+            if absolute is None:
                 continue
             try:
                 key = normalize_url(absolute)
@@ -238,16 +254,8 @@ def extract_all_links(raw_html: Optional[str], base_url: str,
 
         base_norm = _same_page_norm(base_url)
         for a_tag in soup.find_all('a', href=True):
-            href = (a_tag.get('href') or '').strip()
-            if not href or href.lower().startswith(SKIP_HREF_PREFIXES):
-                continue
-            if href.startswith(('http://', 'https://')):
-                absolute = href
-            else:
-                absolute = urljoin(base_url, href)
-                if not absolute.startswith(('http://', 'https://')):
-                    continue
-            if _is_same_page(absolute, base_norm):
+            absolute = _resolve_href(a_tag.get('href'), base_url, base_norm)
+            if absolute is None:
                 continue
             links.append(absolute)
         return links
