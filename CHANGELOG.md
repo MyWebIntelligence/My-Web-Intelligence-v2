@@ -5,6 +5,43 @@ The format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.
 
 ## [Unreleased]
 
+### Added — Body-links benchmark and stratified gold set (sprint body-links, T0)
+
+- **Ground truth** `benchmarks/body_links/gold_v1.csv` (1543 coded links of the
+  `airegulation` land, 13 columns) plus `benchmarks/body_links/README.md`
+  documenting provenance, the labelling function, and the limits of validity.
+  Projected by `scripts/build_gold_v1.py` from a frozen 3-judge coding campaign;
+  the file is versioned and immutable (a new labelling function yields `gold_v2`).
+- **Stratified estimator.** The coding sample was drawn separately from the
+  `retained` (600 of 7442) and `eliminated` (943 of 8559) strata, at different
+  rates. Precision and recall are therefore ratios of Horvitz-Thompson totals,
+  with a linearized 95% interval. The raw recall under-reports by ~4.5 points
+  (0.813 vs **0.856**); it is still printed, explicitly labelled as biased.
+- **Benchmark** `mwi/benchmark_body_links.py` (`make bench-links`): replays the
+  extractor against the gold, offline and read-only, and reports precision,
+  recall, the confusion matrix, population estimates, the volume of kept edges
+  (Goodhart guard), false-kept by `place_code`, misses by `anchor_tag`, and
+  deterministic work counters. Wall clock is isolated in `bench_perf.json`,
+  excluded from the compared outputs.
+- **Offline bench corpus** `scripts/build_bench_cache.py` (`make bench-cache`):
+  extracts once the ~1100 gold source pages and the 20930 closed-network nodes
+  from a land database into a ~60 MB SQLite, hashed per page. The benchmark
+  never opens a multi-GB land database; the source is opened read-only, with
+  `immutable=1` when the WAL is provably empty.
+- **`make bench-determinism`**: two runs under different `PYTHONHASHSEED` must
+  produce byte-identical outputs. Verified on the real corpus.
+- **`link_context.build_url_index` / `add_to_url_index` / `resolve_url_in_index`
+  accept an optional `rules` argument** to freeze URL normalization. Without it
+  the resolution ladder reads the local configuration, which would make the
+  measured metrics machine-dependent. `None` keeps the previous behaviour.
+- **Baseline** (commit `cd850ea`, extractor replayed): precision **0.8812**
+  (+/- 0.0247), weighted recall **0.8557** (+/- 0.0196), TP 536 / FP 72 / FN 123.
+  False positives: TOC 27, RECO 17, NAV 8, META_REFTOOL 7, X_OTHER 6,
+  DATA_LISTING 3, NOMAJ 2, EDIT 2 — **no REF_BIB**, which the gold labels as
+  editorial. Loss attribution of the 123 misses: 26 recovered by Trafilatura's
+  HTML output, 33 more by `favor_recall` on that leg, 64 reachable only from the
+  raw HTML. No migration, no model change.
+
 ### Added — Unified Platform Heuristics & HTML-aware Domain Resolution (sprint-heuristique)
 
 - **Unified platform heuristics table** (`mwi/platform_heuristics.py`, 144
