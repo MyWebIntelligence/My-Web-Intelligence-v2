@@ -5,6 +5,41 @@ The format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.
 
 ## [Unreleased]
 
+### Added — Body links from Trafilatura's HTML output (sprint body-links, T2)
+
+- **New leaf module `mwi/body_links.py`.** `extract_body_links(md_content,
+  readable_html, base_url, soup=None)` returns the ordered, deduplicated union
+  of Trafilatura's markdown links and the anchors of its HTML output, each
+  carrying its origin (`md` / `html` / `both` / `raw`) and its literal markdown
+  token. It never runs Trafilatura itself and reuses the caller's parse, so the
+  page stays within its HTML-parse budget. Imports neither `core` nor `model`.
+- **The HTML output is finally read for links.** It was already computed for
+  media extraction and thrown away. Wired into `core._extract_content_and_links`
+  and into `core.consolidate_land` (which recomputes it from the stored
+  `expression.html` under `--fullhtml`).
+- **`favor_recall` on the HTML leg only**, behind `settings.link_favor_recall`
+  (default `True`). Never on the markdown leg: that one feeds
+  `expression.readable`, hence relevance, the LLM gate, embeddings and the
+  corpus export, and widening it would inject boilerplate into every corpus.
+- **`url=` is now passed to both Trafilatura calls**, improving relative-href
+  resolution at the source.
+- **One parse instead of two.** `readable_html` was parsed twice in a row
+  (`media_lines`, then `extract_medias`); the single parse is shared with the
+  new link leg, so the HTML leg costs nothing.
+- **`consolidate_land` no longer iterates a `set`.** Link order was
+  `PYTHONHASHSEED`-dependent, which made the winning edge — and therefore its
+  `context`/`dom` — non-deterministic. The legacy BS4-on-readable fallback is
+  kept for lands without stored HTML, so no link is lost.
+- **`link_context._resolve_href`** factors the single definition of what counts
+  as an outgoing hyperlink, now shared by `extract_link_dom_map`,
+  `extract_all_links` and `body_links`.
+- **Measured** (`make bench-links`, gold v1): weighted recall **0.8557 ->
+  0.9249**, precision 0.8812 -> 0.8792 (-0.002). The recall target of the sprint
+  is met by this ticket alone. Remaining false positives, 82: TOC 27, RECO 21,
+  X_OTHER 9, NAV 8, META_REFTOOL 7, NOMAJ 4, DATA_LISTING 3, EDIT 2,
+  META_BOILER 1. Work counters confirm 2 Trafilatura calls and 1 parse per page.
+  No migration, no model change.
+
 ### Added — Body-links benchmark and stratified gold set (sprint body-links, T0)
 
 - **Ground truth** `benchmarks/body_links/gold_v1.csv` (1543 coded links of the

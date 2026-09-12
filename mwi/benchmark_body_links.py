@@ -47,7 +47,9 @@ from urllib.parse import urljoin
 import trafilatura
 from bs4 import BeautifulSoup
 
-from . import link_context
+import settings
+
+from . import body_links, link_context
 
 SCHEMA_VERSION = 1
 
@@ -228,28 +230,6 @@ def _trafilatura(raw_html: str, output_format: str, counters: Counters,
     return trafilatura.extract(raw_html, **kwargs)
 
 
-def _html_leg(readable_html: str, base_url: str, counters: Counters) -> List[str]:
-    """Anchors of Trafilatura's HTML output, same filtering as link_context."""
-    counters.soup_parses += 1
-    soup = BeautifulSoup(readable_html, 'html.parser')
-    base_norm = link_context.normalize_url(base_url, BENCH_URL_RULES)
-    out = []
-    for tag in soup.find_all('a', href=True):
-        href = (tag.get('href') or '').strip()
-        if not href:
-            continue
-        if href.lower().startswith(link_context.SKIP_HREF_PREFIXES):
-            continue
-        absolute = href if href.lower().startswith(('http://', 'https://')) \
-            else urljoin(base_url, href)
-        if not absolute.lower().startswith(('http://', 'https://')):
-            continue
-        if link_context._is_same_page(absolute, base_norm):
-            continue
-        out.append(absolute)
-    return out
-
-
 def _bs4_fallback(raw_html: str, base_url: str, counters: Counters) -> List[str]:
     """Rare path (1 page in 1109): Trafilatura yielded nothing usable.
 
@@ -270,27 +250,37 @@ def _bs4_fallback(raw_html: str, base_url: str, counters: Counters) -> List[str]
 
 def extract_links(raw_html: str, base_url: str, *, variant: str,
                   counters: Counters, favor_recall: bool = False) -> List[str]:
-    """Reproduce the extractor's outgoing-link set for one page."""
+    """The extractor's outgoing-link set for one page.
+
+    ``current`` is the production path: it calls the very same
+    ``body_links.extract_body_links`` the crawl calls, so the bench cannot
+    drift away from what it is supposed to measure. The other variants are
+    diagnostics that isolate one leg at a time.
+    """
     if variant == 'raw':
         counters.soup_parses += 1
         return link_context.extract_all_links(raw_html, base_url)
 
-    markdown = None
-    readable_html = None
-    if variant in ('current', 'md', 'md+html'):
-        markdown = _trafilatura(raw_html, 'markdown', counters)
-    if variant in ('html', 'md+html'):
-        readable_html = _trafilatura(raw_html, 'html', counters,
-                                     favor_recall=favor_recall)
+    if variant == 'current':
+        favor_recall = getattr(settings, 'link_favor_recall', True)
+        wants_md, wants_html = True, True
+    else:
+        wants_md = variant in ('md', 'md+html')
+        wants_html = variant in ('html', 'md+html')
 
-    links: List[str] = []
-    if markdown and len(markdown) > 100:
-        links.extend(link_context.extract_markdown_links(markdown, base_url))
-    elif variant in ('current', 'md') and not readable_html:
+    markdown = _trafilatura(raw_html, 'markdown', counters) if wants_md else None
+    readable_html = (_trafilatura(raw_html, 'html', counters,
+                                  favor_recall=favor_recall)
+                     if wants_html else None)
+
+    if markdown is not None and len(markdown or '') <= 100 and not readable_html:
         return _bs4_fallback(raw_html, base_url, counters)
+
+    body = markdown if markdown and len(markdown) > 100 else None
     if readable_html:
-        links.extend(_html_leg(readable_html, base_url, counters))
-    return links
+        counters.soup_parses += 1
+    return [link.url for link in body_links.extract_body_links(
+        body, readable_html, base_url)]
 
 
 def predict(conn: sqlite3.Connection, idx: tuple, rows: Sequence[GoldRow], *,
