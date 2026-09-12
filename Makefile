@@ -1,4 +1,4 @@
-.PHONY: help test test-basic test-all test-cov test-quick test-apis test-integration clean install install-ml lock
+.PHONY: help test test-basic test-all test-cov test-quick test-apis test-integration clean install install-ml lock bench-cache bench-links bench-determinism
 
 # Default target
 .DEFAULT_GOAL := help
@@ -62,6 +62,38 @@ test-apis: ## Run API tests (requires API keys)
 test-integration: ## Run integration tests (slow, requires APIs)
 	@echo "Running integration tests..."
 	PYTHONPATH=. uv run pytest tests/ -v -m "integration"
+
+# Body-links benchmark (sprint body-links, T0)
+MWI_BENCH_DB   ?= benchmarks/body_links/cache/bench_corpus_v1.sqlite
+MWI_BENCH_GOLD ?= benchmarks/body_links/gold_v1.csv
+MWI_BENCH_OUT  ?= benchmarks/body_links/out
+
+bench-cache: ## Build the offline bench corpus once (needs MWI_BENCH_SOURCE_DB)
+	@if [ -z "$$MWI_BENCH_SOURCE_DB" ]; then \
+		echo "Set MWI_BENCH_SOURCE_DB=/path/to/the/land/mwi.db"; exit 1; fi
+	PYTHONPATH=. uv run python scripts/build_bench_cache.py \
+		--source-db="$$MWI_BENCH_SOURCE_DB" --gold="$(MWI_BENCH_GOLD)" \
+		--out="$(MWI_BENCH_DB)"
+
+bench-links: ## Run the body-links benchmark (offline, deterministic)
+	@test -f "$(MWI_BENCH_DB)" || { \
+		echo "Missing bench corpus: $(MWI_BENCH_DB)"; \
+		echo "Build it once: make bench-cache MWI_BENCH_SOURCE_DB=/path/to/mwi.db"; \
+		exit 1; }
+	PYTHONPATH=. uv run python -m mwi.benchmark_body_links \
+		--corpus="$(MWI_BENCH_DB)" --gold="$(MWI_BENCH_GOLD)" \
+		--out-dir="$(MWI_BENCH_OUT)"
+
+bench-determinism: ## Two runs, different hash seeds, byte-identical outputs
+	PYTHONHASHSEED=0 PYTHONPATH=. uv run python -m mwi.benchmark_body_links \
+		--corpus="$(MWI_BENCH_DB)" --gold="$(MWI_BENCH_GOLD)" \
+		--out-dir="$(MWI_BENCH_OUT)/a"
+	PYTHONHASHSEED=1 PYTHONPATH=. uv run python -m mwi.benchmark_body_links \
+		--corpus="$(MWI_BENCH_DB)" --gold="$(MWI_BENCH_GOLD)" \
+		--out-dir="$(MWI_BENCH_OUT)/b"
+	cmp "$(MWI_BENCH_OUT)/a/bench_edges.csv"   "$(MWI_BENCH_OUT)/b/bench_edges.csv"
+	cmp "$(MWI_BENCH_OUT)/a/bench_summary.txt" "$(MWI_BENCH_OUT)/b/bench_summary.txt"
+	@echo "Deterministic: OK"
 
 test-01: ## Run test_01_installation.py
 	PYTHONPATH=. uv run pytest tests/test_01_installation.py -v
