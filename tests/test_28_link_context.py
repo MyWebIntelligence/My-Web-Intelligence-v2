@@ -16,7 +16,7 @@ import peewee
 import pytest
 from bs4 import BeautifulSoup
 
-from mwi import link_context
+from mwi import link_context, url_normalizer
 
 
 def run(coro):
@@ -415,3 +415,71 @@ class TestReadablePipelineLinkContext:
         urls = [link['url'] for link in new_links]
         assert ("https://ai-act-service-desk.ec.europa.eu/en/ai-act/article-57"
                 in urls)
+
+
+class TestUrlIndexFrozenRules:
+    """The 3-key ladder must accept explicit normalization rules.
+
+    The benchmark replays the extractor against a frozen corpus and must give
+    the same answer on every machine. ``normalize_url`` reads
+    ``settings.url_normalization`` when no rules are passed, so without an
+    explicit ``rules`` parameter the index — and therefore the measured
+    metrics — depend on the local ``settings.py`` (sprint body-links, T0).
+    """
+
+    # Rules the bench freezes; deliberately different from the disabled
+    # settings below so the test fails if `rules` is ignored.
+    FROZEN = {'strip_trackers': ['utm_*'], 'normalize_query_order': True}
+
+    @staticmethod
+    def _disable_normalization(monkeypatch):
+        monkeypatch.setattr(url_normalizer.settings, 'url_normalization',
+                            {'strip_trackers': [],
+                             'normalize_query_order': False},
+                            raising=False)
+
+    def test_resolve_honours_explicit_rules(self, monkeypatch):
+        self._disable_normalization(monkeypatch)
+        idx = link_context.build_url_index([(7, 'https://a.test/p')],
+                                           rules=self.FROZEN)
+
+        # The tracker param is stripped by the frozen rules only; the relaxed
+        # and host+path rungs both keep the query, so they cannot rescue it.
+        assert link_context.resolve_url_in_index(
+            idx, 'https://a.test/p?utm_source=x', rules=self.FROZEN) == 7
+
+    def test_index_honours_explicit_rules(self, monkeypatch):
+        self._disable_normalization(monkeypatch)
+        idx = link_context.build_url_index(
+            [(9, 'https://a.test/p?utm_campaign=z')], rules=self.FROZEN)
+
+        assert link_context.resolve_url_in_index(
+            idx, 'https://a.test/p', rules=self.FROZEN) == 9
+
+    def test_explicit_rules_beat_hostile_settings(self, monkeypatch):
+        """Query order: settings say don't sort, frozen rules say sort."""
+        self._disable_normalization(monkeypatch)
+        idx = link_context.build_url_index([(3, 'https://a.test/p?a=1&b=2')],
+                                           rules=self.FROZEN)
+
+        assert link_context.resolve_url_in_index(
+            idx, 'https://a.test/p?b=2&a=1', rules=self.FROZEN) == 3
+
+    def test_without_rules_behaviour_is_unchanged(self, monkeypatch):
+        """Retro-compatibility: no `rules` means read settings, as before."""
+        self._disable_normalization(monkeypatch)
+        idx = link_context.build_url_index([(5, 'https://a.test/p')])
+
+        # settings disabled tracker stripping -> the query survives -> miss.
+        assert link_context.resolve_url_in_index(
+            idx, 'https://a.test/p?utm_source=x') is None
+        assert link_context.resolve_url_in_index(idx, 'https://a.test/p') == 5
+
+    def test_add_to_url_index_honours_explicit_rules(self, monkeypatch):
+        self._disable_normalization(monkeypatch)
+        idx = link_context.build_url_index([], rules=self.FROZEN)
+        link_context.add_to_url_index(idx, 11, 'https://a.test/q?utm_term=k',
+                                      rules=self.FROZEN)
+
+        assert link_context.resolve_url_in_index(
+            idx, 'https://a.test/q', rules=self.FROZEN) == 11

@@ -438,15 +438,21 @@ def host_path_key(url: str) -> Optional[str]:
         return None
 
 
-def add_to_url_index(index: tuple, eid: int, url: str) -> None:
+def add_to_url_index(index: tuple, eid: int, url: str,
+                     rules: Optional[Dict] = None) -> None:
     """Index one expression URL under the 3 keys.
 
     A key already mapped to a DIFFERENT id becomes None (ambiguous ->
     unusable for lookup, never a wrong match).
+
+    ``rules`` freezes the normalization instead of reading the local
+    configuration. The benchmark needs it: without it the index -- and
+    therefore the measured metrics -- depend on the machine the bench runs
+    on (sprint body-links, T0). None keeps the historical behaviour.
     """
     exact, relaxed, by_host_path = index
     try:
-        norm = normalize_url(url) if url else url
+        norm = normalize_url(url, rules) if url else url
     except Exception:
         norm = url
     if not norm:
@@ -463,19 +469,27 @@ def add_to_url_index(index: tuple, eid: int, url: str) -> None:
             table[key] = eid
 
 
-def build_url_index(pairs) -> tuple:
-    """Build the 3-key URL index from (expression_id, url) pairs."""
+def build_url_index(pairs, rules: Optional[Dict] = None) -> tuple:
+    """Build the 3-key URL index from (expression_id, url) pairs.
+
+    ``rules`` freezes the normalization; see :func:`add_to_url_index`.
+    """
     index = ({}, {}, {})
     for eid, url in pairs:
-        add_to_url_index(index, eid, url)
+        add_to_url_index(index, eid, url, rules)
     return index
 
 
-def resolve_url_in_index(index: tuple, href: str) -> Optional[int]:
-    """Resolve a href to an indexed expression id. None on miss/ambiguous."""
+def resolve_url_in_index(index: tuple, href: str,
+                         rules: Optional[Dict] = None) -> Optional[int]:
+    """Resolve a href to an indexed expression id. None on miss/ambiguous.
+
+    ``rules`` must match the rules the index was built with; see
+    :func:`add_to_url_index`.
+    """
     exact, relaxed, by_host_path = index
     try:
-        norm = normalize_url(href)
+        norm = normalize_url(href, rules)
     except Exception:
         norm = href
     if not norm:
