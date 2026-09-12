@@ -89,6 +89,17 @@ fullhtml_max_size_kb = 5120
 link_context_max_chars = 1000  # troncature de expressionlink.context
 link_dom_html_max_chars = 4000  # troncature de expressionlink.dom_html
 
+# Body-links (sprint body-links T2) : les liens du corps sont l'union de la
+# sortie markdown de Trafilatura et de sa sortie HTML — cette derniere etait
+# deja calculee pour les medias et n'etait jamais lue pour les liens.
+# favor_recall elargit la frontiere du corps sur la SEULE jambe HTML : mesure
+# sur le jeu de verite airegulation, +33 citations recuperees pour -0,002 de
+# precision. Jamais applique a la jambe markdown, qui alimente
+# expression.readable (pertinence, gate LLM, embeddings, export corpus) :
+# l'y appliquer injecterait du boilerplate dans tous les corpus existants.
+# Mettre a False pour retrouver le comportement d'avant le sprint.
+link_favor_recall = True
+
 # Cut Domains
 
 

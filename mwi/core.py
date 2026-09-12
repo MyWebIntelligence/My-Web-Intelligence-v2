@@ -32,7 +32,7 @@ except ImportError:
     print("Warning: Playwright not available. Dynamic media extraction will be skipped.")
 
 import settings
-from . import link_context
+from . import body_links, link_context
 from . import model
 from .export import Export
 from .platform_heuristics import PLATFORM_HEURISTICS as _PLATFORM_HEURISTICS
@@ -1632,18 +1632,29 @@ def _extract_content_and_links(raw_html, expression, source_method: str = "aioht
 
     # 2a. Trafilatura
     try:
+        page_url = str(expression.url)
+        # markdown leg: NEVER favor_recall -- it feeds expression.readable,
+        # hence relevance, the LLM gate, embeddings and the corpus export.
         extracted_content = trafilatura.extract(
             raw_html, include_links=True, include_comments=False,
-            include_images=True, output_format='markdown',
+            include_images=True, output_format='markdown', url=page_url,
         )
+        # html leg: already computed for medias, now also read for links
+        # (sprint body-links T2). favor_recall widens the body frontier here
+        # only: +33 recovered citations on the gold set, -0.002 precision.
         readable_html = trafilatura.extract(
             raw_html, include_links=True, include_comments=False,
-            include_images=True, output_format='html',
+            include_images=True, output_format='html', url=page_url,
+            favor_recall=getattr(settings, 'link_favor_recall', True),
         )
         if extracted_content and len(extracted_content) > 100:
             media_lines = []
-            if readable_html:
-                soup_readable = BeautifulSoup(readable_html, 'html.parser')
+            # One parse of readable_html, shared by the media pass and the
+            # link pass: the duplicate parse that used to sit below is what
+            # funds the HTML leg, so the budget stays at two parses per page.
+            soup_readable = (BeautifulSoup(readable_html, 'html.parser')
+                             if readable_html else None)
+            if soup_readable is not None:
                 for tag, label in [('img', 'IMAGE'), ('video', 'VIDEO'), ('audio', 'AUDIO')]:
                     for element in soup_readable.find_all(tag):
                         src = element.get('src')
@@ -1655,8 +1666,7 @@ def _extract_content_and_links(raw_html, expression, source_method: str = "aioht
             content = extracted_content
             if media_lines:
                 content += "\n\n" + "\n".join(media_lines)
-            if readable_html:
-                soup_readable = BeautifulSoup(readable_html, 'html.parser')
+            if soup_readable is not None:
                 extract_medias(soup_readable, expression)
             img_md_links = re.findall(r'!\[.*?\]\((.*?)\)', content)
             for img_url in img_md_links:
@@ -1666,7 +1676,10 @@ def _extract_content_and_links(raw_html, expression, source_method: str = "aioht
                     (model.Media.url == resolved_img_url)
                 ).exists():
                     model.Media.create(expression=expression, url=resolved_img_url, type='img')
-            links = extract_md_links(content, str(expression.url))
+            # extracted_content, not content: the media_lines appended
+            # above are images and bracketed markers, never hyperlinks.
+            links = body_links.extract_body_links(
+                extracted_content, readable_html, page_url, soup=soup_readable)
             expression.readable = content # type: ignore
             if source_method == "archive_org":
                 print(f"Archive.org + Trafilatura succeeded for {expression.url}")
@@ -1688,7 +1701,8 @@ def _extract_content_and_links(raw_html, expression, source_method: str = "aioht
                 hrefs = [a.get('href') for a in soup.find_all('a')]
                 urls = [urljoin(str(expression.url), h)
                         for h in hrefs if isinstance(h, str) and h]
-                links = [u for u in urls if is_crawlable(u)]
+                links = body_links.from_urls(
+                    [u for u in urls if is_crawlable(u)])
                 expression.readable = content # type: ignore
                 print(f"BeautifulSoup fallback succeeded for {expression.url}")
         except Exception as e:
@@ -1799,11 +1813,12 @@ async def crawl_expression_with_media_analysis(expression: model.Expression, dic
             dom_map = link_context.extract_link_dom_map(
                 raw_html, str(expression.url), soup=soup) if raw_html else {}
             for link in links:
-                info = link_context.lookup_link_info(dom_map, link)
-                ctx = link_context.extract_md_paragraph(content, link)
+                info = link_context.lookup_link_info(dom_map, link.url)
+                ctx = link_context.extract_md_paragraph(
+                    content, link.raw or link.url)
                 if ctx is None and info is not None:
                     ctx = info.block_text
-                link_expression(expression.land, expression, link, # type: ignore
+                link_expression(expression.land, expression, link.url, # type: ignore
                                 context=ctx,
                                 dom=info.dom if info else None,
                                 dom_html=info.dom_html if info else None)
@@ -1926,26 +1941,47 @@ async def consolidate_land(
                 expr.save()
 
                 # 3. Extraire les liens sortants du contenu lisible
-                links = []
-                if expr.readable:
-                    # Extraction des liens markdown (relatifs résolus via urljoin)
-                    links = extract_md_links(expr.readable, str(expr.url))
-                    # Extraction des liens HTML (fallback) — résoudre les hrefs
-                    # relatifs avant is_crawlable, sinon perte sèche.
+                # sprint body-links T2: quand le HTML brut est stocké
+                # (--fullhtml), on rejoue Trafilatura en sortie HTML pour
+                # récupérer les citations que la sérialisation markdown perd.
+                stored_html = getattr(expr, 'html', None)
+                readable_html = None
+                if stored_html:
+                    try:
+                        readable_html = trafilatura.extract(
+                            stored_html, include_links=True,
+                            include_comments=False, include_images=True,
+                            output_format='html', url=str(expr.url),
+                            favor_recall=getattr(settings,
+                                                 'link_favor_recall', True))
+                    except Exception as e:
+                        print(f"Trafilatura (html) a échoué sur #{expr.id}: {e}")
+                links = body_links.extract_body_links(
+                    expr.readable, readable_html, str(expr.url))
+                if readable_html is None and expr.readable:
+                    # Repli hérité: certains readables portent encore des
+                    # ancres HTML brutes. Conservé tel quel (is_crawlable
+                    # compris) pour ne rien perdre sur un land sans --fullhtml.
                     soup = BeautifulSoup(expr.readable, 'html.parser')
                     hrefs = [a.get('href') for a in soup.find_all('a')]
                     urls = [urljoin(str(expr.url), h)
                             for h in hrefs if isinstance(h, str) and h]
-                    links += [u for u in urls if is_crawlable(u) and u not in links]
-                nb_links = len(set(links))
+                    known = {link.key for link in links}
+                    for extra in body_links.from_urls(
+                            [u for u in urls if is_crawlable(u)]):
+                        if extra.key not in known:
+                            extra.order = len(links)
+                            links.append(extra)
+                            known.add(extra.key)
+                nb_links = len(links)
 
                 # 4. Ajouter les documents manquants et recréer les liens
                 # sprint link-context: backfill context/dom/dom_html depuis le
                 # HTML stocké (--fullhtml) quand il est disponible
-                stored_html = getattr(expr, 'html', None)
                 dom_map = link_context.extract_link_dom_map(
                     stored_html, str(expr.url)) if stored_html else {}
-                for url in set(links):
+                for link in links:
+                    url = link.url
                     # variant-proof: resolve onto an existing corpus fiche
                     # (http/https, www, trailing slash absorbed) before
                     # falling back to creation.
@@ -1962,7 +1998,8 @@ async def consolidate_land(
                     if target_id == expr.id:
                         continue  # self-citation (permalink/variant) -> no self-loop
                     info = link_context.lookup_link_info(dom_map, url)
-                    ctx = link_context.extract_md_paragraph(expr.readable, url)
+                    ctx = link_context.extract_md_paragraph(
+                        expr.readable, link.raw or url)
                     if ctx is None and info is not None:
                         ctx = info.block_text
                     try:
@@ -2085,11 +2122,12 @@ async def crawl_expression(expression: model.Expression, dictionary, session: ai
             dom_map = link_context.extract_link_dom_map(
                 raw_html, str(expression.url), soup=soup) if raw_html else {}
             for link in links:
-                info = link_context.lookup_link_info(dom_map, link)
-                ctx = link_context.extract_md_paragraph(content, link)
+                info = link_context.lookup_link_info(dom_map, link.url)
+                ctx = link_context.extract_md_paragraph(
+                    content, link.raw or link.url)
                 if ctx is None and info is not None:
                     ctx = info.block_text
-                link_expression(expression.land, expression, link, # type: ignore
+                link_expression(expression.land, expression, link.url, # type: ignore
                                 context=ctx,
                                 dom=info.dom if info else None,
                                 dom_html=info.dom_html if info else None)

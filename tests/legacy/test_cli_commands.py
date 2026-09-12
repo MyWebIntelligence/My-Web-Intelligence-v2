@@ -1167,7 +1167,11 @@ async def test_core_crawl_expression_with_media_analysis(monkeypatch, fresh_db):
     dummy_response = DummyAiohttpResponse(status=200, text=html)
     session = DummySession(dummy_response)
 
-    def fake_extract(html_text, include_links=True, include_comments=False, include_images=True, output_format='markdown'):
+    # **kwargs: production also passes url= and favor_recall= since the
+    # body-links sprint; a rigid fake signature would raise TypeError,
+    # be swallowed by the extraction try/except, and silently turn this
+    # test into a no-content assertion.
+    def fake_extract(html_text, output_format='markdown', **kwargs):
         if output_format == 'markdown':
             return "Science article " * 10 + "\n![IMAGE](https://example.com/pic.jpg)"
         return "<html><body><img src=\"https://example.com/pic.jpg\" /></body></html>"
