@@ -87,6 +87,30 @@ calculer les poids.
 | Rappel pondéré | **0,8463** |
 | Population estimée | ~6 549 citations captées · ~1 189 manquées · ~893 faux retenus |
 
+## Résultats mesurés
+
+| version | précision | rappel (pondéré) | TP / FP / FN |
+|---|---|---|---|
+| `cd850ea` (avant le sprint) | 0,8812 | 0,8557 | 536 / 72 / 123 |
+| `feat/body-links-2026-09` | **0,9162** ± 0,024 | **0,9210** ± 0,016 | 592 / 55 / 67 |
+
+Faux positifs restants (55) : RECO 21, X_OTHER 9, NAV 8, META_REFTOOL 7,
+DATA_LISTING 3, TOC 2, NOMAJ 2, EDIT 2, META_BOILER 1. Les sommaires passent de
+27 à 2. Volume d'arêtes estimé : 7 779 contre 7 442 pour l'export gelé (×1,045).
+
+Plafonds mesurés, à classification **parfaite** : exclure la recommandation
+donnerait 0,9462, y ajouter outils de référence et listings 0,9610. Aucune règle
+structurelle trouvée ne sépare la recommandation des citations à un coût
+acceptable — le détail est dans `docs/recette-body-links-2026-09.md` § 4.
+
+Reproduire :
+
+```bash
+make bench-cache MWI_BENCH_SOURCE_DB=/chemin/vers/le/land/mwi.db
+make bench-links
+make bench-determinism
+```
+
 ## Schéma — 13 colonnes
 
 | colonne | contenu |

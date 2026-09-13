@@ -5,6 +5,65 @@ The format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.
 
 ## [Unreleased]
 
+### Changed — Node identity, id mapping, one resolution ladder (sprint body-links, T1)
+
+Neutral on the benchmark by design, and it closes by PROVING that neutrality:
+`make bench-links` returns precision 0.9162 and recall 0.9210 before and after,
+with byte-identical nominative lists. Node duplicates never caused a lookup
+failure — the relaxed rung of the resolution ladder already absorbed them — so
+this is graph quality and a migration deliverable, not a metric.
+
+- **Root path converges under `strip`.** `_apply_trailing_slash` kept `'/'` as
+  `'/'` while `''` stayed `''`, so the two root forms never met under the one
+  policy whose purpose is to make them meet. **Only `strip` changes**:
+  `preserve` is the default on every existing land and touching it would
+  rename nodes everywhere at the next `land normalize`. A test pins that.
+- **Percent-escapes are uppercased** (RFC 3986 §2.1), on path and query, never
+  decoded. Unconditional: it is the only transformation here that cannot merge
+  two distinct resources. Gain on the test land is 1 node and 3 edges — it
+  ships for conformance, not for yield, and it is the one change that renames
+  URLs under every policy.
+- **`path_casefold`** (opt-in, default off) uses `lower()`, not `casefold()`:
+  the project uses one case operation everywhere, and `casefold()` changes
+  length (`ß` → `ss`), which would turn a normalized URL into a 404 when it is
+  re-fetched. Applied before the escape step, otherwise it would lowercase the
+  hex digits back.
+- **`strip_trackers_by_host`** matches on a host suffix BOUNDARY — `h == key`
+  or `h.endswith('.' + key)`, never a bare `endswith`, which would make
+  `notlinkedin.com` match `linkedin.com`. Case-sensitive, like the global
+  list. `?s=` and `?ref=` stay untouched off the listed hosts: `?s=` is the
+  WordPress search query and stripping it collapses every result page onto the
+  site root, a silent and irreversible node merge.
+- **`MWI_URL_TRAILING_SLASH`** added: `trailing_slash` was the only URL rule
+  with no environment variable, which made the `strip` policy unreachable
+  without editing a gitignored file.
+- **`land normalize --mapping-out=PATH`** writes `old_id,new_id,old_url,
+  canonical_url`. `old_id == new_id` marks a renaming rather than a merge. The
+  pipeline takes a `mapping_sink` callable instead of a path, so it stays free
+  of file I/O; the return type is unchanged. **Produced in `--dry-run` too**,
+  which is its highest-value use: deciding whether to apply at all. An
+  unwritable path fails in a second, before any merge — merges are not
+  reversible.
+- **Deterministic plan order.** `_collect_pairs` walked dicts built from a
+  SELECT with no ORDER BY: the mapping, the execution order and the `--limit`
+  slice all depended on SQLite's query plan. Now sorted by id.
+- **`--limit` caps collision GROUPS, not elementary operations.** The previous
+  formula spent the budget on renames first, so on a land with more pending
+  renames than `limit` no merge ever ran — and merges are the risky half
+  (edge remapping, backfill, cascading delete), precisely the one an operator
+  slices in order to rehearse. Note: the arithmetic of the old formula was
+  correct, contrary to what the sprint card claimed; the defect was its
+  semantics.
+- **One resolution ladder.** `Export._host_path_key` and
+  `Export._index_url_key` are gone and `_fullhtml_lookup` delegates to
+  `link_context`. Characterisation tests on 30 witness hrefs — malformed
+  hosts, archive wrappers, an ambiguous key — were run GREEN against the old
+  copy before deleting it, so the refactor cannot be hiding a pre-existing
+  divergence. **The PERIMETER stays separate**: the export indexes only
+  expressions at `relevance >= minrel` because its file is a closed network,
+  while `consolidate` indexes the whole land because it resolves in order to
+  avoid creating a duplicate. A test pins that too.
+
 ### Added — Link profiles at export (sprint body-links, T4)
 
 - **`kind` column appended at the END** of `*_pageslinks.csv` and

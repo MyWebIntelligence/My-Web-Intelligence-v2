@@ -866,7 +866,7 @@ python mywi.py land export --name="MyResearchTopic" --type=EXPORT_TYPE [--minrel
 - `pseudolinksdomain`: CSV of domain‑level aggregated pseudolinks (domain↔domain). Columns: Source_DomainID, Source_Domain, Target_DomainID, Target_Domain, PairCount, EntailCount, NeutralCount, ContradictCount, AvgRelationScore, AvgConfidence. Intra-domain pairs (self-loops in the domain graph) are excluded.
 - `nodelinkcsv`: Generates 4 CSV files for complete network analysis:
   - `*_pagesnodes.csv`: Expression nodes with all fields (id, url, domain_id, domain_name, title, description, keywords, lang, relevance, depth, http_status, created_at, published_at, fetched_at, approved_at, readable_at, validllm, validmodel) + dynamic SEO rank columns (sr_rank, sr_traffic, fb_shares, etc.)
-  - `*_pageslinks.csv`: All expression links (source_id, source_url, source_domain_id, target_id, target_url, target_domain_id). Self-loops (source = target) are never exported.
+  - `*_pageslinks.csv`: All expression links (source_id, source_url, source_domain_id, target_id, target_url, target_domain_id, context, dom, **kind**). Self-loops (source = target) are never exported. `kind` is the structural zone of the link (`body`, `nav`, `toc`, `reco`, `ref`) — see **Link profiles** below; rows written before migration 014 have no kind and are exported as `body`.
   - `*_domainnodes.csv`: Domain nodes with aggregations (id, name, title, description, http_status, nbexpressions, average_relevance, first_expression_date, last_expression_date)
   - `*_domainlinks.csv`: Aggregated inter-domain links (source_domain_id, source_domain_name, target_domain_id, target_domain_name, link_count)
   - With `--fullhtml=TRUE` (requires a land crawled with `--fullhtml`), emits the 4 `*fullhtml.csv` files **instead of** the base 4 — the flag *switches* which network is exported (not additive), so run a separate export without it to also get the MyWI network. These are the **raw link network** rebuilt from *every* `<a href>` in `expression.html` (closed network — targets restricted to corpus pages qualified by `--minrel`). `*_pageslinksfullhtml.csv` uses Gephi columns `Source,Target,Weight` (Weight left empty) plus `weightbody` (`1` if the edge exists in `ExpressionLink`), `weighthtml` (raw anchor multiplicity for edges found only in the stored HTML) and `citation` (`1` if the link appears in the source page's `readable` markdown — an editorial citation written in the text; `0` for nav/footer/raw-only links or when the readable is missing); `*_domainlinksfullhtml.csv` uses `in_mwi` + `out_mwi`. This lets you compare MyWI's *editorial* link network (`ExpressionLink`, from the readable content) to a classic crawler's *whole-page* network. The export prints a 3-way coverage report (raw∩mywi / raw\mywi / mywi\raw). Without stored HTML the files are emitted empty (header only) with a warning.
@@ -888,6 +888,35 @@ python mywi.py land export --name="AsthmaResearch" --type=pseudolinkspage
 python mywi.py land export --name="AsthmaResearch" --type=pseudolinksdomain
 python mywi.py land export --name="AsthmaResearch" --type=nodelinkcsv --minrel=1
 python mywi.py land export --name="AsthmaResearch" --type=nodelinkcsv --fullhtml=TRUE --minrel=1  # raw network only (omit flag for base 4)
+python mywi.py land export --name="AsthmaResearch" --type=nodelinkcsv --link-profile=all  # keep every link kind
+```
+
+#### Link profiles (`--link-profile`)
+
+Every link carries a **structural kind** telling where it sits in the source
+page: `body` (the editorial flow), `nav` (menus, headers, footers), `toc`
+(tables of contents and anchor grids), `reco` (recommendation blocks), `ref`
+(reference blocks). The kind is decided by deterministic **structural** rules
+only — DOM position, sectioning ancestors, anchor density, prose share — never
+by the words on the page, so they transfer to any language.
+
+| profile | kinds exported |
+|---|---|
+| `editorial` (default) | `body`, `ref` |
+| `editorial+reco` | `body`, `ref`, `reco` |
+| `all` | every kind |
+
+Reference blocks are **kept** by default: they are citations, and excluding
+them costs far more in lost citations than it gains in noise removed.
+
+Two things never change with the profile: rows with no kind (written before
+migration 014) are always treated as `body`, and the **whole-page network**
+(`*pageslinksfullhtml.csv`) is **never filtered** — it is the comparator you
+use to judge the body network, so filtering it would remove the measurement.
+
+Override the profiles in `settings.py` via `link_profiles`.
+
+```bash
 python mywi.py land export --name="AsthmaResearch" --type=nodesjson --minrel=1  # domain force-graph JSON
 python mywi.py land export --name="AsthmaResearch" --type=pagesjson --minrel=1  # page force-graph JSON
 python mywi.py land export --name="AsthmaArchive"  --type=htmldump --minrel=1
@@ -1048,6 +1077,9 @@ python mywi.py land normalize --name=LAND_NAME
 
 # Apply + clear http_status so renamed URLs get re-crawled next time
 python mywi.py land normalize --name=LAND_NAME --reset-status
+
+# Export the old_id -> new_id mapping (also produced in --dry-run)
+python mywi.py land normalize --name=LAND_NAME --dry-run --mapping-out=plan.csv
 ```
 
 **What `land normalize` does** — Expressions are planned by canonical-URL
