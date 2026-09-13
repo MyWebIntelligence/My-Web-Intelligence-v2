@@ -412,7 +412,22 @@ url_normalization = {
         "spm",
     ],
     "normalize_query_order": True,
-    "trailing_slash": "preserve",  # 'preserve' | 'strip' | 'add'
+    # sprint body-links T1 : seule regle d URL sans variable d env, ce
+    # qui rendait la policy strip inatteignable sans editer ce fichier.
+    "trailing_slash": os.getenv("MWI_URL_TRAILING_SLASH", "preserve"),
+    # Trackers par hote (suffixe, frontiere de label). Scopes parce que
+    # le meme nom de parametre n a pas la meme nature partout : ?s= est
+    # la requete de recherche WordPress, la depouiller collapse toutes
+    # les pages de resultats sur la racine du site.
+    "strip_trackers_by_host": {
+        "linkedin.com": ["trk", "originalSubdomain", "trackingId",
+                         "lipi", "licu"],
+    },
+    # Minuscule le CHEMIN. OFF par defaut : fusionne des ressources
+    # qu un serveur sensible a la casse sert separement, et l URL
+    # normalisee est celle qui sera stockee puis re-crawlee.
+    "path_casefold": os.getenv("MWI_URL_PATH_CASEFOLD", "false").lower()
+    == "true",
 }
 
 

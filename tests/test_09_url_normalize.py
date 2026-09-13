@@ -882,3 +882,173 @@ class TestMigration008:
             "SELECT original_url FROM expression WHERE url='https://x.com'").fetchone()
         assert row[0] is None
         db.close()
+
+
+class TestRootPathAndPercentEncoding:
+    """Root-path convergence, RFC 3986 escapes, opt-in path case, host trackers.
+
+    Sprint body-links, T1'. These are node-identity rules: they decide whether
+    two URLs designate one resource or two. They are deliberately conservative
+    -- only the `strip` policy changes, because `preserve` is the default on
+    every existing land and touching it would rename nodes everywhere at the
+    next `land normalize`.
+    """
+
+    # ---- root path ------------------------------------------------------ #
+
+    def test_root_unified_under_strip(self):
+        """The defect: '/' kept its slash while '' stayed empty."""
+        strip = {'trailing_slash': 'strip'}
+
+        assert normalize_url('https://a.eu/', strip) == \
+            normalize_url('https://a.eu', strip)
+
+    def test_root_converges_to_the_slashless_form(self):
+        """Aligns the exact key on the two relaxed rungs, which both rstrip."""
+        assert normalize_url('https://a.eu/', {'trailing_slash': 'strip'}) == \
+            'https://a.eu'
+
+    def test_root_unified_under_add(self):
+        add = {'trailing_slash': 'add'}
+
+        assert normalize_url('https://a.eu/', add) == \
+            normalize_url('https://a.eu', add) == 'https://a.eu/'
+
+    def test_root_preserved_under_preserve(self):
+        """The test that protects every existing land: the default must not move."""
+        preserve = {'trailing_slash': 'preserve'}
+
+        assert normalize_url('https://a.eu/', preserve) != \
+            normalize_url('https://a.eu', preserve)
+
+    def test_root_with_query_under_strip(self):
+        strip = {'trailing_slash': 'strip'}
+        out = normalize_url('https://a.eu/?a=1', strip)
+
+        assert out == 'https://a.eu?a=1'
+        assert normalize_url(out, strip) == out
+
+    def test_double_slash_root_under_strip(self):
+        assert normalize_url('https://a.eu//', {'trailing_slash': 'strip'}) == \
+            'https://a.eu'
+
+    @pytest.mark.parametrize('policy', ['preserve', 'strip', 'add'])
+    @pytest.mark.parametrize('url', [
+        'https://a.eu', 'https://a.eu/', 'https://a.eu//',
+        'https://a.eu/p', 'https://a.eu/p/', 'https://a.eu/p.html',
+        'https://a.eu/?x=1', 'https://a.eu/p/?x=1',
+    ])
+    def test_trailing_slash_idempotent(self, policy, url):
+        rules = {'trailing_slash': policy}
+        once = normalize_url(url, rules)
+
+        assert normalize_url(once, rules) == once
+
+    # ---- percent-encoding ----------------------------------------------- #
+
+    def test_percent_escapes_uppercased_in_path(self):
+        out = normalize_url('https://a.eu/%c3%a9t%c3%a9')
+
+        assert out == 'https://a.eu/%C3%A9t%C3%A9'
+        assert 'é' not in out          # uppercased, never decoded
+
+    def test_percent_escapes_uppercased_in_query_when_untouched_otherwise(self):
+        """The only path where a lowercase escape survives today."""
+        rules = {'normalize_query_order': False, 'strip_trackers': []}
+
+        assert normalize_url('https://a.eu/p?x=%2f', rules) == \
+            'https://a.eu/p?x=%2F'
+
+    def test_percent_escapes_are_never_decoded(self):
+        assert normalize_url('https://a.eu/%2Fnot-a-separator') == \
+            'https://a.eu/%2Fnot-a-separator'
+
+    @pytest.mark.parametrize('url', [
+        'https://a.eu/100%-sure', 'https://a.eu/x%', 'https://a.eu/x%zz',
+    ])
+    def test_a_lone_percent_is_left_alone(self, url):
+        assert normalize_url(url) == url
+
+    def test_percent_uppercase_is_idempotent(self):
+        once = normalize_url('https://a.eu/%c3%a9')
+
+        assert normalize_url(once) == once
+
+    # ---- path_casefold (opt-in) ----------------------------------------- #
+
+    def test_path_case_is_preserved_by_default(self):
+        assert normalize_url('https://a.eu/IP_23') != normalize_url('https://a.eu/ip_23')
+
+    def test_path_casefold_opt_in(self):
+        rules = {'path_casefold': True}
+
+        assert normalize_url('https://a.eu/IP_23_6473', rules) == \
+            normalize_url('https://a.eu/ip_23_6473', rules)
+
+    def test_path_casefold_leaves_the_query_case_alone(self):
+        """?S=Foo and ?s=foo are different searches on most engines."""
+        rules = {'path_casefold': True, 'normalize_query_order': False,
+                 'strip_trackers': []}
+
+        assert normalize_url('https://a.eu/P?S=Foo', rules) == \
+            'https://a.eu/p?S=Foo'
+
+    def test_path_casefold_does_not_lowercase_percent_escapes(self):
+        """Order matters: casefold first, escapes uppercased after."""
+        rules = {'path_casefold': True}
+
+        assert normalize_url('https://a.eu/%C3%A9', rules) == 'https://a.eu/%C3%A9'
+
+    def test_path_casefold_is_idempotent(self):
+        rules = {'path_casefold': True}
+        once = normalize_url('https://a.eu/MiXeD/Case', rules)
+
+        assert normalize_url(once, rules) == once
+
+    # ---- host-scoped trackers ------------------------------------------- #
+
+    HOST_RULES = {'strip_trackers_by_host': {
+        'linkedin.com': ['trk', 'originalSubdomain', 'trackingId'],
+    }}
+
+    def test_host_scoped_trackers_are_stripped_on_the_listed_host(self):
+        out = normalize_url(
+            'https://linkedin.com/in/someone?trk=abc&keep=1', self.HOST_RULES)
+
+        assert 'trk=' not in out and 'keep=1' in out
+
+    def test_host_scoped_trackers_apply_to_subdomains(self):
+        out = normalize_url(
+            'https://fr.linkedin.com/in/x?originalSubdomain=fr', self.HOST_RULES)
+
+        assert 'originalSubdomain' not in out
+
+    def test_host_scoped_trackers_do_not_leak_to_other_hosts(self):
+        """?s= is the WordPress search query: stripping it collapses pages."""
+        out = normalize_url('https://blog.example.com/?s=climat&ref=home',
+                            self.HOST_RULES)
+
+        assert 's=climat' in out and 'ref=home' in out
+
+    def test_host_suffix_match_is_boundary_safe(self):
+        """notlinkedin.com ends with linkedin.com; it is a different site."""
+        out = normalize_url('https://notlinkedin.com/p?trk=abc', self.HOST_RULES)
+
+        assert 'trk=abc' in out
+
+    def test_host_scoped_trackers_are_case_sensitive(self):
+        """LinkedIn emits originalSubdomain in exactly that case."""
+        out = normalize_url('https://linkedin.com/p?originalsubdomain=fr',
+                            self.HOST_RULES)
+
+        assert 'originalsubdomain=fr' in out
+
+    def test_host_scoped_trackers_ignore_port_and_userinfo(self):
+        out = normalize_url('https://user@linkedin.com:443/p?trk=abc',
+                            self.HOST_RULES)
+
+        assert 'trk=abc' not in out
+
+    def test_absent_key_keeps_the_previous_behaviour(self):
+        assert normalize_url('https://linkedin.com/p?trk=abc') == \
+            'https://linkedin.com/p?trk=abc'
