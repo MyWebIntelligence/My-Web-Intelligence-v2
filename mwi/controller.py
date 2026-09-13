@@ -2,6 +2,7 @@
 Application controller
 """
 import asyncio
+import csv
 import os
 import sys
 
@@ -778,9 +779,42 @@ class LandController:
         verbose = bool(verbose_raw and str(verbose_raw).upper() == 'TRUE')
         limit = core.get_arg_option('limit', args, set_type=int, default=0)
 
+        mapping_out = core.get_arg_option('mapping_out', args,
+                                          set_type=str, default=None)
+        mapping_rows = []
+        if mapping_out:
+            # Fail on a mistyped path in a second, not after forty minutes of
+            # merges. The merges are not reversible.
+            try:
+                with open(mapping_out, 'w', encoding='utf-8'):
+                    pass
+            except OSError as exc:
+                print(f'Cannot write mapping to {mapping_out}: {exc}')
+                return 0
+
         totals = normalize_pipeline.normalize_land(
             land, dry_run=dry_run, limit=limit,
-            reset_status=reset_status, verbose=verbose)
+            reset_status=reset_status, verbose=verbose,
+            mapping_sink=mapping_rows.append if mapping_out else None)
+
+        if mapping_out:
+            try:
+                with open(mapping_out, 'w', encoding='utf-8',
+                          newline='') as handle:
+                    writer = csv.writer(handle, quoting=csv.QUOTE_ALL,
+                                        lineterminator='\n')
+                    writer.writerow(('old_id', 'new_id', 'old_url',
+                                     'canonical_url'))
+                    writer.writerows(mapping_rows)
+                print(f'Mapping written: {mapping_out} '
+                      f'({len(mapping_rows)} rows)')
+                if dry_run:
+                    print('DRY-RUN: mapping describes the plan, '
+                          'not applied state.')
+            except OSError as exc:
+                # The database work is done; reporting a failure here would
+                # invite a rerun of a non-idempotent-looking operation.
+                print(f'Mapping could not be written: {exc}')
 
         verb = 'Would' if dry_run else 'Done.'
         print(f'\n{verb} renamed: {totals["renamed"]}, merged: {totals["merged"]}')

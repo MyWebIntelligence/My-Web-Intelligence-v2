@@ -160,6 +160,13 @@ def command_input():
                         nargs='?',
                         const='TRUE',
                         default=None)
+    parser.add_argument('--mapping-out',
+                        type=str,
+                        dest='mapping_out',
+                        help='For land normalize: write the old_id->new_id '
+                             'mapping to PATH (CSV). Produced in --dry-run '
+                             'too, where it describes the plan.',
+                        default=None)
     parser.add_argument('--link-profile',
                         type=str,
                         dest='link_profile',
