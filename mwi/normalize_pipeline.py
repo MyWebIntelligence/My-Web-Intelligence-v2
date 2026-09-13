@@ -227,6 +227,46 @@ def _backfill_if_empty(canonical: model.Expression,
     return filled
 
 
+_LINK_BACKFILL_FIELDS = ('context', 'dom', 'dom_html', 'kind_rule', 'origin')
+
+
+def _absorb_link(survivor, doomed) -> None:
+    """Fold a losing edge's metadata into the surviving one before deletion.
+
+    When two expressions merge, an edge of the duplicate can collide with an
+    edge of the canonical on the composite primary key. The loser is deleted —
+    silently taking its ``context``/``dom`` with it since migration 012, and
+    its ``kind`` since 014. Keeping a ``nav`` edge while destroying the
+    ``body`` one would turn a URL canonicalisation into a precision
+    regression, so the best kind wins and empty fields are filled in.
+
+    Never raises: a merge must not fail over metadata.
+    """
+    try:
+        from . import body_links
+        changed = {}
+        best = body_links.KIND_RANK.get(
+            survivor.kind or body_links.KIND_DEFAULT, 0)
+        challenger = body_links.KIND_RANK.get(
+            doomed.kind or body_links.KIND_DEFAULT, 0)
+        if challenger < best:
+            changed['kind'] = doomed.kind
+            changed['kind_rule'] = doomed.kind_rule
+        for field in _LINK_BACKFILL_FIELDS:
+            if field in changed:
+                continue
+            if _is_empty(getattr(survivor, field, None)) and \
+                    not _is_empty(getattr(doomed, field, None)):
+                changed[field] = getattr(doomed, field)
+        if changed:
+            link_model = model.ExpressionLink
+            link_model.update(**changed).where(
+                (link_model.source == survivor.source_id)
+                & (link_model.target == survivor.target_id)).execute()
+    except Exception as exc:
+        print(f"  link metadata absorption skipped: {exc}")
+
+
 def _merge_one(duplicate: model.Expression,
                canonical: model.Expression,
                reset_status: bool = False) -> Dict[str, int]:
@@ -244,8 +284,10 @@ def _merge_one(duplicate: model.Expression,
                                 & (Link.target == duplicate)).execute()
             dropped_in += 1
             continue
-        if Link.select().where((Link.source == src_id)
-                               & (Link.target == canonical)).exists():
+        survivor = Link.get_or_none((Link.source == src_id)
+                                    & (Link.target == canonical))
+        if survivor is not None:
+            _absorb_link(survivor, link)
             Link.delete().where((Link.source == src_id)
                                 & (Link.target == duplicate)).execute()
             dropped_in += 1
@@ -264,8 +306,10 @@ def _merge_one(duplicate: model.Expression,
                                 & (Link.target == tgt_id)).execute()
             dropped_out += 1
             continue
-        if Link.select().where((Link.source == canonical)
-                               & (Link.target == tgt_id)).exists():
+        survivor = Link.get_or_none((Link.source == canonical)
+                                    & (Link.target == tgt_id))
+        if survivor is not None:
+            _absorb_link(survivor, link)
             Link.delete().where((Link.source == duplicate)
                                 & (Link.target == tgt_id)).execute()
             dropped_out += 1

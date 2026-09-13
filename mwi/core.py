@@ -1810,8 +1810,12 @@ async def crawl_expression_with_media_analysis(expression: model.Expression, dic
         if expression.relevance is not None and expression.relevance > 0 and expression.depth is not None and expression.depth < 3 and links: # type: ignore
             print(f"Linking {len(links)} expressions to #{expression.id}") # type: ignore
             # sprint link-context: locate each link in the raw DOM (soup reused, no re-parse)
+            # rank=dom_rank: when a URL appears both in the menu and in the
+            # body, keep the body occurrence (sprint body-links T3).
             dom_map = link_context.extract_link_dom_map(
-                raw_html, str(expression.url), soup=soup) if raw_html else {}
+                raw_html, str(expression.url), soup=soup,
+                rank=body_links.dom_rank) if raw_html else {}
+            body_links.resolve(links, dom_map)
             for link in links:
                 info = link_context.lookup_link_info(dom_map, link.url)
                 ctx = link_context.extract_md_paragraph(
@@ -1821,7 +1825,9 @@ async def crawl_expression_with_media_analysis(expression: model.Expression, dic
                 link_expression(expression.land, expression, link.url, # type: ignore
                                 context=ctx,
                                 dom=info.dom if info else None,
-                                dom_html=info.dom_html if info else None)
+                                dom_html=info.dom_html if info else None,
+                                kind=link.kind, kind_rule=link.kind_rule,
+                                origin=link.origin)
         expression.save()
         return 1
     else:
@@ -1979,7 +1985,9 @@ async def consolidate_land(
                 # sprint link-context: backfill context/dom/dom_html depuis le
                 # HTML stocké (--fullhtml) quand il est disponible
                 dom_map = link_context.extract_link_dom_map(
-                    stored_html, str(expr.url)) if stored_html else {}
+                    stored_html, str(expr.url),
+                    rank=body_links.dom_rank) if stored_html else {}
+                body_links.resolve(links, dom_map)
                 for link in links:
                     url = link.url
                     # variant-proof: resolve onto an existing corpus fiche
@@ -2008,7 +2016,10 @@ async def consolidate_land(
                             target_id=target_id,
                             context=ctx,
                             dom=info.dom if info else None,
-                            dom_html=info.dom_html if info else None)
+                            dom_html=info.dom_html if info else None,
+                            kind=link.kind,
+                            kind_rule=link.kind_rule,
+                            origin=link.origin)
                     except IntegrityError:
                         pass
 
@@ -2119,8 +2130,12 @@ async def crawl_expression(expression: model.Expression, dictionary, session: ai
         if expression.relevance is not None and expression.relevance > 0 and expression.depth is not None and expression.depth < 3 and links: # type: ignore
             print(f"Linking {len(links)} expressions to #{expression.id}") # type: ignore
             # sprint link-context: locate each link in the raw DOM (soup reused, no re-parse)
+            # rank=dom_rank: when a URL appears both in the menu and in the
+            # body, keep the body occurrence (sprint body-links T3).
             dom_map = link_context.extract_link_dom_map(
-                raw_html, str(expression.url), soup=soup) if raw_html else {}
+                raw_html, str(expression.url), soup=soup,
+                rank=body_links.dom_rank) if raw_html else {}
+            body_links.resolve(links, dom_map)
             for link in links:
                 info = link_context.lookup_link_info(dom_map, link.url)
                 ctx = link_context.extract_md_paragraph(
@@ -2130,7 +2145,9 @@ async def crawl_expression(expression: model.Expression, dictionary, session: ai
                 link_expression(expression.land, expression, link.url, # type: ignore
                                 context=ctx,
                                 dom=info.dom if info else None,
-                                dom_html=info.dom_html if info else None)
+                                dom_html=info.dom_html if info else None,
+                                kind=link.kind, kind_rule=link.kind_rule,
+                                origin=link.origin)
         expression.save()
         return 1
     else:
@@ -2635,7 +2652,9 @@ def remove_anchor(url: str) -> str:
 
 def link_expression(land: model.Land, source_expression: model.Expression, url: str, *,
                     context: Optional[str] = None, dom: Optional[str] = None,
-                    dom_html: Optional[str] = None) -> bool:
+                    dom_html: Optional[str] = None, kind: Optional[str] = None,
+                    kind_rule: Optional[str] = None,
+                    origin: Optional[str] = None) -> bool:
     """Create a link from a source expression to a target expression.
 
     This function adds a new expression for the target URL and creates a directed
@@ -2651,6 +2670,9 @@ def link_expression(land: model.Land, source_expression: model.Expression, url: 
             Optional, keyword-only.
         dom_html: outerHTML of the closest block ancestor of the <a> tag,
             truncated. Optional, keyword-only.
+        kind: structural zone of the link (body/nav/toc/reco/ref), kind_rule
+            the rule that decided, origin the extraction leg that saw it
+            (sprint body-links). All optional, keyword-only; NULL means body.
 
     Returns:
         bool: True if the link was successfully created, False otherwise.
@@ -2664,13 +2686,18 @@ def link_expression(land: model.Land, source_expression: model.Expression, url: 
     """
     target_expression = add_expression(land, url, source_expression.depth + 1) # type: ignore
     if target_expression:
+        if target_expression.id == source_expression.id: # type: ignore
+            return False  # self-citation (permalink/variant) -> no self-loop
         try:
             model.ExpressionLink.create(
                 source_id=source_expression.id, # type: ignore
                 target_id=target_expression.id, # type: ignore
                 context=context,
                 dom=dom,
-                dom_html=dom_html)
+                dom_html=dom_html,
+                kind=kind,
+                kind_rule=kind_rule,
+                origin=origin)
             return True
         except IntegrityError:
             pass
