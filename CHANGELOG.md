@@ -5,6 +5,51 @@ The format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.
 
 ## [Unreleased]
 
+### Added — Structural link classification, ExpressionLink.kind (sprint body-links, T3)
+
+- **Migration 014** adds `expressionlink.kind`, `.kind_rule` and `.origin`
+  (idempotent, template of 012, no backfill). `kind` is the structural zone
+  (`body`/`nav`/`toc`/`reco`/`ref`), `kind_rule` the rule that decided, and
+  `origin` the extraction leg. Zone and provenance are kept in separate
+  columns on purpose: merging them would make the invariant "retained <=>
+  kind == body" unfalsifiable. **NULL means `body`** everywhere it is read, so
+  no pre-014 edge is ever excluded retroactively.
+- **`body_links.classify`** returns `(kind, kind_rule)` from structural
+  evidence only -- counts, lengths, ratios and booleans, never text. It reads
+  the RAW DOM: Trafilatura's HTML output carries no class, no id and no
+  sectioning element, so a rule written against it would be silently inert.
+- **`LinkDomInfo` carries the structural features**, filled inside the single
+  `find_all('a')` loop, with per-ancestor anchor counts computed in one
+  ASCENDING pass -- a descending `find_all` per link is quadratic on a table
+  of contents (median 180 anchors per block). The anchor's LENGTH is stored,
+  never its text: storing the text is what makes a lexical rule easy to write.
+- **Best occurrence wins.** `extract_link_dom_map` takes an optional `rank`
+  callable; with it, a URL present both in the menu and in the body keeps its
+  body occurrence. First-occurrence-wins was structurally biased toward
+  navigation, which sits at the top of the document (median anchor position
+  0.16 against 0.49 for an editorial link), and it dragged `context`/`dom`
+  along with it.
+- **Two rules, both qualified by measurement.** A sectioning element that is
+  mostly prose is NOT an annex -- templates routinely wrap a whole article in
+  `<header>`, and the unqualified rule exiled 4 genuine citations. An anchor
+  grid is measured on the CONTAINER, not on the block ancestor -- a table of
+  contents wraps each entry in its own `<p>`, which hides the grid entirely.
+  Both failures are frozen as tests.
+- **No lexical rule**, enforced two ways: an allowlist of tokens read off the
+  module's AST and declared **in the test**, not in the module; and the same
+  fixture replayed in Japanese, which must yield identical verdicts.
+- **Two adjacent fixes.** `readable_pipeline` refused no self-loop, unlike the
+  other two write sites. And a node merge that collided on the composite key
+  deleted the losing edge outright, silently dropping its `context`/`dom`
+  since 012 and its `kind` since 014: `normalize_pipeline._absorb_link` now
+  folds the better kind and the non-empty fields into the survivor first.
+- **Measured** (`make bench-links`, profile `editorial`): precision **0.8792
+  -> 0.9162**, recall 0.9249 -> 0.9210. False positives 82 -> 55, of which
+  table-of-contents links fall from 27 to **2**. One editorial citation out of
+  659 is lost to the classification (coded `EDIT_LIST`). Remaining false
+  positives: RECO 21, X_OTHER 9, NAV 8, META_REFTOOL 7, DATA_LISTING 3,
+  NOMAJ 2, TOC 2, EDIT 2, META_BOILER 1.
+
 ### Added — Body links from Trafilatura's HTML output (sprint body-links, T2)
 
 - **New leaf module `mwi/body_links.py`.** `extract_body_links(md_content,

@@ -74,6 +74,15 @@ BENCH_URL_RULES = {
 }
 
 VARIANTS = ('current', 'md', 'html', 'md+html', 'raw')
+
+# Link profiles. `editorial` is the default network: body plus reference
+# blocks. Reference blocks stay IN -- the ground truth labels them
+# EDITORIAL, and excluding them would convert 64 true positives into losses.
+PROFILES = {
+    'editorial': ('body', 'ref'),
+    'editorial+reco': ('body', 'ref', 'reco'),
+    'all': None,
+}
 Z95 = 1.959964
 
 
@@ -209,13 +218,14 @@ class Counters:
     links_unresolved: int = 0
     pages_bs4_fallback: int = 0
     pages_no_html: int = 0
+    links_filtered: int = 0
 
     def as_lines(self) -> List[str]:
         return ['  {:<20} {}'.format(name, getattr(self, name))
                 for name in ('pages', 'html_bytes', 'trafilatura_calls',
                              'soup_parses', 'links_seen', 'links_resolved',
                              'links_unresolved', 'pages_bs4_fallback',
-                             'pages_no_html')]
+                             'pages_no_html', 'links_filtered')]
 
 
 def _trafilatura(raw_html: str, output_format: str, counters: Counters,
@@ -249,7 +259,7 @@ def _bs4_fallback(raw_html: str, base_url: str, counters: Counters) -> List[str]
 
 
 def extract_links(raw_html: str, base_url: str, *, variant: str,
-                  counters: Counters, favor_recall: bool = False) -> List[str]:
+                  counters: Counters, favor_recall: bool = False):
     """The extractor's outgoing-link set for one page.
 
     ``current`` is the production path: it calls the very same
@@ -259,7 +269,8 @@ def extract_links(raw_html: str, base_url: str, *, variant: str,
     """
     if variant == 'raw':
         counters.soup_parses += 1
-        return link_context.extract_all_links(raw_html, base_url)
+        return [(url, '') for url in
+                link_context.extract_all_links(raw_html, base_url)]
 
     if variant == 'current':
         favor_recall = getattr(settings, 'link_favor_recall', True)
@@ -274,18 +285,27 @@ def extract_links(raw_html: str, base_url: str, *, variant: str,
                      if wants_html else None)
 
     if markdown is not None and len(markdown or '') <= 100 and not readable_html:
-        return _bs4_fallback(raw_html, base_url, counters)
+        links = body_links.from_urls(
+            _bs4_fallback(raw_html, base_url, counters))
+    else:
+        body = markdown if markdown and len(markdown) > 100 else None
+        if readable_html:
+            counters.soup_parses += 1
+        links = body_links.extract_body_links(body, readable_html, base_url)
 
-    body = markdown if markdown and len(markdown) > 100 else None
-    if readable_html:
-        counters.soup_parses += 1
-    return [link.url for link in body_links.extract_body_links(
-        body, readable_html, base_url)]
+    # The classification reads the RAW DOM: Trafilatura's HTML output carries
+    # no class, no id and no sectioning element (sprint body-links T3).
+    counters.soup_parses += 1
+    dom_map = link_context.extract_link_dom_map(raw_html, base_url,
+                                                rank=body_links.dom_rank)
+    body_links.resolve(links, dom_map)
+    return [(link.url, link.kind or body_links.KIND_DEFAULT)
+            for link in links]
 
 
 def predict(conn: sqlite3.Connection, idx: tuple, rows: Sequence[GoldRow], *,
-            variant: str, counters: Counters,
-            favor_recall: bool = False) -> Set[Tuple[str, str]]:
+            variant: str, counters: Counters, favor_recall: bool = False,
+            profile: str = 'editorial'):
     """Return the gold keys the extractor would keep.
 
     A gold pair is kept when the source page yields a link resolving to the
@@ -297,6 +317,7 @@ def predict(conn: sqlite3.Connection, idx: tuple, rows: Sequence[GoldRow], *,
         by_source.setdefault(row.source_url, []).append(row)
 
     kept: Set[Tuple[str, str]] = set()
+    kinds: Dict[Tuple[str, str], str] = {}
     for source_url in sorted(by_source):
         raw_html = read_page(conn, source_url)
         if not raw_html:
@@ -306,10 +327,11 @@ def predict(conn: sqlite3.Connection, idx: tuple, rows: Sequence[GoldRow], *,
         counters.html_bytes += len(raw_html)
         source_id = link_context.resolve_url_in_index(idx, source_url,
                                                       rules=BENCH_URL_RULES)
-        found = set()
-        for url in extract_links(raw_html, source_url, variant=variant,
-                                 counters=counters,
-                                 favor_recall=favor_recall):
+        found = {}
+        kinds_allowed = PROFILES.get(profile, PROFILES['editorial'])
+        for url, kind in extract_links(raw_html, source_url, variant=variant,
+                                       counters=counters,
+                                       favor_recall=favor_recall):
             counters.links_seen += 1
             target_id = link_context.resolve_url_in_index(idx, url,
                                                           rules=BENCH_URL_RULES)
@@ -319,13 +341,17 @@ def predict(conn: sqlite3.Connection, idx: tuple, rows: Sequence[GoldRow], *,
             counters.links_resolved += 1
             if target_id == source_id:
                 continue          # self-citation: production never emits it
-            found.add(target_id)
+            if kinds_allowed is not None and kind and kind not in kinds_allowed:
+                counters.links_filtered += 1
+                continue
+            found.setdefault(target_id, kind)
         for row in by_source[source_url]:
             gold_target = link_context.resolve_url_in_index(
                 idx, row.target_url, rules=BENCH_URL_RULES)
             if gold_target is not None and gold_target in found:
                 kept.add(row.key)
-    return kept
+                kinds[row.key] = found[gold_target]
+    return kept, kinds
 
 
 # --------------------------------------------------------------------------- #
@@ -369,6 +395,7 @@ def ht_ratio(rows: Sequence[GoldRow], numerator, denominator) -> Tuple[float, fl
 class BenchResult:
     rows: List[GoldRow] = field(default_factory=list)
     kept: Set[Tuple[str, str]] = field(default_factory=set)
+    kinds: Dict[Tuple[str, str], str] = field(default_factory=dict)
     tp: int = 0
     fp: int = 0
     fn: int = 0
@@ -393,9 +420,10 @@ class BenchResult:
         return 'FN' if row.gold else 'TN'
 
 
-def score(rows: Sequence[GoldRow], kept: Set[Tuple[str, str]]) -> BenchResult:
+def score(rows: Sequence[GoldRow], kept: Set[Tuple[str, str]],
+          kinds: Optional[Dict[Tuple[str, str], str]] = None) -> BenchResult:
     """Confusion matrix and both estimators."""
-    result = BenchResult(rows=list(rows), kept=set(kept))
+    result = BenchResult(rows=list(rows), kept=set(kept), kinds=dict(kinds or {}))
     for row in rows:
         setattr(result, result.outcome(row).lower(),
                 getattr(result, result.outcome(row).lower()) + 1)
@@ -440,7 +468,8 @@ def _write_rows(path: str, rows) -> None:
 def _edge_row(result: BenchResult, row: GoldRow) -> list:
     return [row.source_url, row.target_url, row.stratum, row.place_group,
             row.place_code, row.cites, row.gold,
-            1 if row.key in result.kept else 0, '', result.outcome(row)]
+            1 if row.key in result.kept else 0,
+            result.kinds.get(row.key, ''), result.outcome(row)]
 
 
 def write_edges(out_dir: str, result: BenchResult) -> None:
@@ -463,7 +492,8 @@ def _fmt(value: float, digits: int = 4) -> str:
 
 def write_summary(out_dir: str, result: BenchResult, *, gold_sha256: str,
                   gold_name: str, corpus_name: str, variant: str,
-                  counters: Counters, favor_recall: bool = False) -> None:
+                  counters: Counters, favor_recall: bool = False,
+                  profile: str = 'editorial') -> None:
     """Deterministic report: no clock, no host, no absolute path."""
     rows = result.rows
     strata = {}
@@ -480,6 +510,8 @@ def write_summary(out_dir: str, result: BenchResult, *, gold_sha256: str,
     add('schema_version  {}'.format(SCHEMA_VERSION))
     add('extractor       {}{}'.format(
         variant, ' +favor_recall' if favor_recall else ''))
+    add('link_profile    {} = {}'.format(
+        profile, PROFILES.get(profile) or 'all kinds'))
     add('url_rules       {}'.format(
         json.dumps(BENCH_URL_RULES, sort_keys=True)))
     add('')
@@ -523,6 +555,13 @@ def write_summary(out_dir: str, result: BenchResult, *, gold_sha256: str,
             if result.outcome(r) == 'FP').items(), key=lambda kv: (-kv[1], kv[0])):
         add('  {:<16} {}'.format(code or '(empty)', count))
     add('')
+    add('kept by kind')
+    for kind, count in sorted(Counter(
+            result.kinds.get(r.key, '')
+            for r in rows if r.key in result.kept).items(),
+            key=lambda kv: (-kv[1], kv[0])):
+        add('  {:<16} {}'.format(kind or '(none)', count))
+    add('')
     add('missed by anchor_tag')
     for tag, count in sorted(Counter(
             r.anchor_tag for r in rows
@@ -564,6 +603,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                             'benchmarks/body_links/gold_v1.csv'))
     parser.add_argument('--out-dir', default='benchmarks/body_links/out')
     parser.add_argument('--extractor', choices=VARIANTS, default='current')
+    parser.add_argument('--link-profile', choices=sorted(PROFILES),
+                        default='editorial')
     parser.add_argument('--favor-recall', action='store_true',
                         help='Diagnostic: widen Trafilatura on the HTML leg.')
     args = parser.parse_args(argv)
@@ -576,19 +617,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     conn = open_corpus(args.corpus)
     try:
         idx = load_node_index(conn)
-        kept = predict(conn, idx, rows, variant=args.extractor,
-                       counters=counters, favor_recall=args.favor_recall)
+        kept, kinds = predict(conn, idx, rows, variant=args.extractor,
+                              counters=counters,
+                              favor_recall=args.favor_recall,
+                              profile=args.link_profile)
     finally:
         conn.close()
     elapsed = time.time() - started
 
-    result = score(rows, kept)
+    result = score(rows, kept, kinds)
     write_edges(args.out_dir, result)
     write_summary(args.out_dir, result, gold_sha256=gold_sha256,
                   gold_name=os.path.basename(args.gold),
                   corpus_name=os.path.basename(args.corpus),
                   variant=args.extractor, counters=counters,
-                  favor_recall=args.favor_recall)
+                  favor_recall=args.favor_recall, profile=args.link_profile)
     write_perf(args.out_dir, counters, elapsed)
 
     print('precision {}  recall {}  (TP {} FP {} FN {})'.format(
