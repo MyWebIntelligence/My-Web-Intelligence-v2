@@ -490,7 +490,9 @@ class TestLandWithoutStoredHtml:
         assert exp._fullhtml_stats["pages_with_html"] == 0
         with open(out, encoding="utf-8") as f:
             rows = list(csv.reader(f))
+        # `kind` was appended at the END of the header by the body-links
+        # sprint, so consumers selecting columns by name are unaffected.
         assert rows == [['Source', 'Target', 'Weight', 'weightbody',
                          'weighthtml', 'citation',
                          'source_url', 'source_domain_id',
-                         'target_url', 'target_domain_id']]
+                         'target_url', 'target_domain_id', 'kind']]

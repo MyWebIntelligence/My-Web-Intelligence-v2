@@ -1620,7 +1620,10 @@ class LandController:
             print('Land "%s" not found' % args.name)
         else:
             if args.type in valid_types:
-                core.export_land(land, args.type, minimum_relevance, fullhtml=store_html)
+                link_profile = core.get_arg_option('link_profile', args,
+                                                   set_type=str, default=None)
+                core.export_land(land, args.type, minimum_relevance,
+                                 fullhtml=store_html, link_profile=link_profile)
                 return 1
             print('Invalid export type "%s" [%s]' % (args.type, ', '.join(valid_types)))
         return 0

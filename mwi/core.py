@@ -34,7 +34,7 @@ except ImportError:
 import settings
 from . import body_links, link_context
 from . import model
-from .export import Export
+from .export import DEFAULT_LINK_PROFILE, Export
 from .platform_heuristics import PLATFORM_HEURISTICS as _PLATFORM_HEURISTICS
 
 
@@ -3004,7 +3004,7 @@ def expression_relevance(dictionary, expression: model.Expression) -> int:
 
 
 def export_land(land: model.Land, export_type: str, minimum_relevance: int,
-                fullhtml: bool = False):
+                fullhtml: bool = False, link_profile: Optional[str] = None):
     """Export land data to a file in the specified format.
 
     This function creates an export file containing land data filtered by
@@ -3030,7 +3030,8 @@ def export_land(land: model.Land, export_type: str, minimum_relevance: int,
     date_tag = model.datetime.datetime.now().strftime("%Y%m%d%H%M%S")
     filename = path.join(settings.data_location, 'export_land_%s_%s_%s') \
                % (land.name, export_type, date_tag)
-    export = Export(export_type, land, minimum_relevance, fullhtml=fullhtml)
+    export = Export(export_type, land, minimum_relevance, fullhtml=fullhtml,
+                    link_profile=link_profile or DEFAULT_LINK_PROFILE)
     count = export.write(export_type, filename)
     if count > 0:
         print("Successfully exported %s records to %s" % (count, filename))

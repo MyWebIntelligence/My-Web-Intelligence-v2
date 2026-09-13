@@ -104,7 +104,9 @@ def test_land_addterm_addurl_and_crawl_readable_export(fresh_db, tmp_path, monke
 
     calls = {"count": 0}
 
-    def fake_export_land(land_obj, export_type, minrel, fullhtml=False):
+    # **kwargs: production gained link_profile= with the body-links
+    # sprint; a rigid double signature would raise TypeError here.
+    def fake_export_land(land_obj, export_type, minrel, **kwargs):
         calls["count"] += 1
         return None
 
@@ -968,7 +970,7 @@ def test_core_export_land_and_tags(monkeypatch, fresh_db):
     captured = {"land": None, "type": None, "minrel": None, "tags": 0}
 
     class DummyExport:
-        def __init__(self, export_type, land_obj, minimum, fullhtml=False):
+        def __init__(self, export_type, land_obj, minimum, fullhtml=False, **kwargs):
             captured["land"] = land_obj
             captured["type"] = export_type
             captured["minrel"] = minimum

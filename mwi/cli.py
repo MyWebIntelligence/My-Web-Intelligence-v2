@@ -160,6 +160,15 @@ def command_input():
                         nargs='?',
                         const='TRUE',
                         default=None)
+    parser.add_argument('--link-profile',
+                        type=str,
+                        dest='link_profile',
+                        help='For land export: which structural link kinds '
+                             'belong to the exported network '
+                             '(editorial, editorial+reco, all). '
+                             'Never applies to the *fullhtml.csv files, which '
+                             'are the whole-page comparator.',
+                        default=None)
     parser.add_argument('--lang',
                         type=str,
                         help='Language(s) of the project, comma-separated '

@@ -21,13 +21,34 @@ import datetime
 import json
 import re
 from textwrap import dedent
+from typing import Optional
 import unicodedata
 from lxml import etree
 from urllib.parse import urlparse
 from zipfile import ZipFile
+
+import settings
+
 from . import model
 from .link_context import extract_all_links, extract_markdown_links
 from .url_normalizer import normalize_url
+
+
+DEFAULT_LINK_PROFILE = 'editorial'
+
+# Which structural kinds belong to an exported network. `editorial` is the
+# default: body plus reference blocks. Reference blocks stay IN — the ground
+# truth labels them editorial, and excluding them converts genuine citations
+# into losses. Overridable via settings.link_profiles.
+DEFAULT_LINK_PROFILES = {
+    'editorial': ('body', 'ref'),
+    'editorial+reco': ('body', 'ref', 'reco'),
+    'all': None,
+}
+
+
+def _link_profiles() -> dict:
+    return getattr(settings, 'link_profiles', None) or DEFAULT_LINK_PROFILES
 
 
 class Export:
@@ -50,7 +71,7 @@ class Export:
     relevance = 1
 
     def __init__(self, export_type: str, land: model.Land, minimum_relevance: int,
-                 fullhtml: bool = False):
+                 fullhtml: bool = False, link_profile: str = DEFAULT_LINK_PROFILE):
         """Initialize an Export instance with specified parameters.
 
         Args:
@@ -59,6 +80,9 @@ class Export:
             minimum_relevance: Minimum relevance score threshold for including expressions.
             fullhtml: When True (and export_type == 'nodelinkcsv'), also emit the
                 raw-HTML link network files (*fullhtml.csv). Ignored otherwise.
+            link_profile: which structural link kinds belong to the exported
+                network (sprint body-links). Unknown names fall back to the
+                default rather than raising mid-export.
 
         Notes:
             The export_type determines which write method will be called.
@@ -68,6 +92,27 @@ class Export:
         self.land = land
         self.relevance = minimum_relevance
         self.fullhtml = fullhtml
+        profiles = _link_profiles()
+        if link_profile not in profiles:
+            print(f"Unknown link profile '{link_profile}', "
+                  f"falling back to '{DEFAULT_LINK_PROFILE}'")
+            link_profile = DEFAULT_LINK_PROFILE
+        self.link_profile = link_profile
+
+    def _kind_clause(self) -> Optional[str]:
+        """SQL predicate for the active link profile, or None when unfiltered.
+
+        NULL is always accepted: every edge written before migration 014 has
+        no kind, and an export must not exclude them retroactively.
+
+        The kind names are module constants, never user input — the profile
+        NAME is user input, but it is only ever used as a dict key.
+        """
+        kinds = _link_profiles().get(self.link_profile)
+        if kinds is None:
+            return None
+        quoted = ', '.join("'{}'".format(k) for k in kinds)
+        return "(link.kind IS NULL OR link.kind IN ({}))".format(quoted)
 
     def write(self, export_type: str, filename):
         """Proxy method that dispatches to appropriate format-specific writer.
@@ -111,6 +156,15 @@ class Export:
             Formats column_map as "sql_expression AS output_name" clauses.
         """
         cols = ",\n".join(["{1} AS {0}".format(*i) for i in column_map.items()])
+        clause = self._kind_clause()
+        if clause is not None and 'FROM expressionlink AS link' in sql:
+            # One substitution, one place: the six link queries all route
+            # through here. The whole-page network (*fullhtml.csv) executes
+            # its SQL directly and is therefore never filtered by a profile.
+            sql = sql.replace(
+                'FROM expressionlink AS link',
+                'FROM (SELECT * FROM expressionlink AS link '
+                'WHERE {}) AS link'.format(clause))
         return model.DB.execute_sql(sql.format(cols), (self.land.get_id(), self.relevance))
 
     def write_pagecsv(self, filename) -> int:
@@ -568,7 +622,9 @@ class Export:
             'target_domain_id': 'e2.domain_id',
             # sprint link-context (migration 012) — dom_html exclu (trop lourd)
             'context': 'link.context',
-            'dom': 'link.dom'
+            'dom': 'link.dom',
+            # sprint body-links (migration 014) — NULL vaut body
+            'kind': "COALESCE(link.kind, 'body')"
         }
         sql = """
             WITH idx(x) AS (
@@ -789,10 +845,12 @@ class Export:
         cur = model.DB.execute_sql(
             "WITH idx(x) AS (SELECT id FROM expression "
             "WHERE land_id = ? AND relevance >= ?) "
-            "SELECT source_id, target_id FROM expressionlink "
+            "SELECT source_id, target_id, kind FROM expressionlink "
             "WHERE source_id IN idx AND target_id IN idx", (land_id, minrel))
-        for s, t in cur.fetchall():
+        kind_of = {}
+        for s, t, k in cur.fetchall():
             mywi_page_edges.add((s, t))
+            kind_of[(s, t)] = k or 'body'
 
         # 0) citation lookup: (sid, tid) edges whose link appears in the
         #    source's readable markdown, resolved through the SAME 3-key
@@ -823,7 +881,7 @@ class Export:
         # weightbody/weighthtml.
         header = ['Source', 'Target', 'Weight', 'weightbody', 'weighthtml',
                   'citation', 'source_url', 'source_domain_id',
-                  'target_url', 'target_domain_id']
+                  'target_url', 'target_domain_id', 'kind']
         domain_acc = {}   # (sd, td) -> [in_mwi (Σweightbody), out_mwi (Σweighthtml)]
         body_edges = rawonly_edges = citation_edges = count = 0
         pages_total = pages_with_html = 0
@@ -841,7 +899,8 @@ class Export:
                 citation = 1 if (sid, tid) in readable_edges else 0
                 citation_edges += citation
                 writer.writerow([sid, tid, '', 1, 0, citation,
-                                 url_of.get(sid), sdom, url_of.get(tid), td])
+                                 url_of.get(sid), sdom, url_of.get(tid), td,
+                                 kind_of.get((sid, tid), 'body')])
                 count += 1
                 body_edges += 1
                 if td is not None and sdom != td:
@@ -868,8 +927,11 @@ class Export:
                     td = domain_of.get(tid)
                     citation = 1 if (sid, tid) in readable_edges else 0
                     citation_edges += citation
+                    # raw-only edge: no ExpressionLink row, hence no zone.
+                    # Empty, never 'body' — a link absent from the body has
+                    # no structural kind to report.
                     writer.writerow([sid, tid, '', 0, weighthtml, citation,
-                                     surl, sdom, url_of.get(tid), td])
+                                     surl, sdom, url_of.get(tid), td, ''])
                     count += 1
                     rawonly_edges += 1
                     if td is not None and sdom != td:
