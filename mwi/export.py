@@ -24,14 +24,13 @@ from textwrap import dedent
 from typing import Optional
 import unicodedata
 from lxml import etree
-from urllib.parse import urlparse
 from zipfile import ZipFile
 
 import settings
 
 from . import model
+from . import link_context
 from .link_context import extract_all_links, extract_markdown_links
-from .url_normalizer import normalize_url
 
 
 DEFAULT_LINK_PROFILE = 'editorial'
@@ -727,63 +726,21 @@ class Export:
     # Raw-HTML link network (sprint fullhtml-linknetwork)                 #
     # ------------------------------------------------------------------ #
 
-    @staticmethod
-    def _host_path_key(url):
-        """Scheme-and-www-insensitive key: host(no www) + path + query.
-
-        Absorbs http<->https / www<->bare / redirect divergences when
-        force_https/strip_www are OFF. Returns None on failure / no host.
-        """
-        try:
-            p = urlparse(url)
-            host = (p.netloc or '').lower()
-            if host.startswith('www.'):
-                host = host[4:]
-            if not host:
-                return None
-            key = host + (p.path or '').rstrip('/')
-            if p.query:
-                key += '?' + p.query
-            return key
-        except Exception:
-            return None
-
-    @staticmethod
-    def _index_url_key(index, key, eid):
-        """Insert key->eid; mark None (ambiguous) on conflicting ids."""
-        if not key:
-            return
-        if key in index:
-            if index[key] != eid:
-                index[key] = None  # ambiguous -> unusable for lookup
-        else:
-            index[key] = eid
-
     def _fullhtml_lookup(self, idx, href):
         """Resolve a raw href to an in-land expression id (closed network).
 
-        Tries three keys in priority order: exact normalize_url, relaxed
-        (lower + no trailing slash), host+path. None on miss/ambiguous.
+        Delegates to the shared 3-key ladder. The export used to carry its own
+        line-for-line copy of it (sprint body-links T1); there is now exactly
+        one implementation, in `link_context`.
+
+        Note what is deliberately NOT shared: the PERIMETER of the index. The
+        export indexes only expressions at `relevance >= minrel`, because this
+        file is a closed network whose edges must land on nodes present in its
+        own node file; `consolidate` indexes the whole land instead, because it
+        resolves in order to avoid creating a duplicate. Unify the ladder,
+        never the perimeter.
         """
-        exact, relaxed, host_path = idx
-        try:
-            norm = normalize_url(href)
-        except Exception:
-            norm = href
-        if not norm:
-            return None
-        eid = exact.get(norm)
-        if eid is not None:
-            return eid
-        eid = relaxed.get(norm.lower().rstrip('/'))
-        if eid is not None:
-            return eid
-        hp = self._host_path_key(norm)
-        if hp is not None:
-            eid = host_path.get(hp)
-            if eid is not None:
-                return eid
-        return None
+        return link_context.resolve_url_in_index(idx, href)
 
     def _write_pageslinksfullhtml(self, filename) -> int:
         """Union of the editorial (ExpressionLink) and raw-HTML link graphs.
@@ -817,7 +774,7 @@ class Export:
         minrel = self.relevance
 
         # --- preload lookups (drained BEFORE the streaming cursor opens) ---
-        exact, relaxed, host_path = {}, {}, {}
+        idx = ({}, {}, {})
         url_of, domain_of = {}, {}
         cur = model.DB.execute_sql(
             "SELECT id, url, domain_id FROM expression "
@@ -825,16 +782,7 @@ class Export:
         for eid, url, domain_id in cur.fetchall():
             url_of[eid] = url
             domain_of[eid] = domain_id
-            try:
-                norm = normalize_url(url) if url else url
-            except Exception:
-                norm = url
-            if not norm:
-                continue
-            self._index_url_key(exact, norm, eid)
-            self._index_url_key(relaxed, norm.lower().rstrip('/'), eid)
-            self._index_url_key(host_path, self._host_path_key(norm), eid)
-        idx = (exact, relaxed, host_path)
+            link_context.add_to_url_index(idx, eid, url)
 
         domain_name = {}
         for did, name in model.DB.execute_sql(

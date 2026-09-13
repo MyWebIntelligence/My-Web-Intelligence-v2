@@ -496,3 +496,115 @@ class TestLandWithoutStoredHtml:
                          'weighthtml', 'citation',
                          'source_url', 'source_domain_id',
                          'target_url', 'target_domain_id', 'kind']]
+
+
+class TestHrefResolutionLadder:
+    """Characterisation of the export's href resolution (sprint body-links T1).
+
+    The export used to carry its own copy of the 3-key ladder that
+    `link_context` already implements. These tests were written and run GREEN
+    against that copy, BEFORE it was replaced by a delegation: their value is
+    not to prove the two agree afterwards -- after the refactor that would be a
+    tautology -- but to attest they agreed before, so the refactor cannot be
+    hiding a pre-existing divergence.
+    """
+
+    WITNESSES = [
+        'https://witness.test/page',
+        'http://witness.test/page',
+        'https://www.witness.test/page',
+        'http://www.witness.test/page',
+        'https://witness.test/page/',
+        'https://witness.test/',
+        'https://witness.test',
+        'https://witness.test/Page',
+        'https://witness.test/p%c3%a9ge',
+        'https://witness.test/p%C3%A9ge',
+        'https://witness.test/page?b=2&a=1',
+        'https://witness.test/page?a=1&b=2',
+        'https://witness.test/page?utm_source=x',
+        'https://witness.test/page#section',
+        'https://web.archive.org/web/2020/https://witness.test/page',
+        'https://witness.test/autre',
+        'https://ailleurs.test/page',
+        '',
+        '   ',
+        'mailto:x@y.test',
+        'javascript:void(0)',
+        '#ancre',
+        'https://[domain]/x',
+        'https://[',
+        'not-a-url',
+        '/relatif',
+        'ftp://witness.test/f',
+        'https://witness.test/page?a=1#frag',
+        'https://WITNESS.test/page',
+        'https://witness.test//page',
+    ]
+
+    def test_export_resolves_exactly_like_the_shared_ladder(self, fullhtml_land):
+        """30 hrefs, including an ambiguous key and malformed hosts.
+
+        Ran green against the export's own copy of the ladder before that copy
+        was deleted. It now guards against a copy being reintroduced.
+        """
+        from mwi import export as export_module, link_context
+
+        pairs = [(1, 'https://witness.test/page'),
+                 (2, 'https://witness.test/autre')]
+        idx = link_context.build_url_index(pairs)
+        exporter = export_module.Export('nodelinkcsv', fullhtml_land['land'], 1)
+
+        for href in self.WITNESSES:
+            assert exporter._fullhtml_lookup(idx, href) == \
+                link_context.resolve_url_in_index(idx, href), href
+
+    def test_an_ambiguous_key_never_produces_a_wrong_match(self, fullhtml_land):
+        """Two ids colliding on the relaxed key: exact still wins, variants don't.
+
+        `/page` and `/page/` keep distinct exact keys but collapse onto the
+        same relaxed one. A href that matches exactly must still resolve; one
+        that can only match through the collided key must resolve to nothing
+        rather than pick an arbitrary side.
+        """
+        from mwi import export as export_module, link_context
+
+        idx = link_context.build_url_index([(1, 'https://witness.test/page'),
+                                            (2, 'https://witness.test/page/')])
+        exporter = export_module.Export('nodelinkcsv', fullhtml_land['land'], 1)
+
+        assert exporter._fullhtml_lookup(idx, 'https://witness.test/page') == 1
+        assert exporter._fullhtml_lookup(idx, 'https://witness.test/PAGE') is None
+
+
+class TestFullhtmlIndexPerimeter:
+    """The ladder is shared; the PERIMETER is not, and must not become so.
+
+    The export indexes only expressions at `relevance >= minrel` because
+    *pageslinksfullhtml.csv* is a closed network: its edges must land on nodes
+    that are in its own node file. `consolidate` indexes the whole land instead,
+    because it resolves in order to avoid CREATING a duplicate. Unifying the
+    ladder must never unify the perimeter.
+    """
+
+    def test_sub_minrel_expressions_are_absent_from_the_export_index(
+            self, fullhtml_land, tmp_path):
+        m = fullhtml_land["model"]
+        land = fullhtml_land["land"]
+        domain = m.Domain.get(m.Domain.name == "site-a.test")
+        buried = m.Expression.create(land=land, domain=domain, depth=0,
+                                     relevance=0,
+                                     url="https://site-a.test/buried")
+        source = fullhtml_land["e"]["e1"]
+        source.html = ('<html><body><p>'
+                       '<a href="https://site-a.test/buried">x</a>'
+                       '</p></body></html>')
+        source.save()
+
+        from mwi import export as export_module
+        exporter = export_module.Export('nodelinkcsv', land, 1, fullhtml=True)
+        out = str(tmp_path / "perim")
+        exporter.write('nodelinkcsv', out)
+
+        rows = _edge_map(out + "_pageslinksfullhtml.csv")
+        assert all(str(buried.id) not in key for key in rows)
