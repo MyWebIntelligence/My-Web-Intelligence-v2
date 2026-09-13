@@ -5,6 +5,46 @@ The format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.
 
 ## [Unreleased]
 
+### Added — Link profiles at export (sprint body-links, T4)
+
+- **`kind` column appended at the END** of `*_pageslinks.csv` and
+  `*_pageslinksfullhtml.csv`, so consumers selecting columns by name are
+  unaffected. `NULL` is exported as `body`. Raw-only edges of the whole-page
+  network carry an EMPTY kind, never `body`: a link absent from the body has
+  no structural zone to report.
+- **`--link-profile`** on `land export` (`editorial` by default,
+  `editorial+reco`, `all`), overridable through `settings.link_profiles`. An
+  unknown name falls back to the default with a warning rather than raising
+  mid-export.
+- **One point of control.** The filter is applied inside
+  `Export.get_sql_cursor`, which every link query routes through. The
+  whole-page network executes its SQL directly and is therefore **structurally
+  exempt**: it is the comparator that validates the sprint, and filtering it
+  would destroy the only measurement that says whether the body network is
+  improving. A test asserts both files are byte-identical under every profile.
+- **Bibliographies stay in the default profile.** The ground truth labels every
+  `REF_BIB` link `EDITORIAL`; excluding them would turn 64 genuine citations
+  into losses and drop recall from 0.92 to 0.76.
+
+### Measured — the precision target is not reachable with structural rules
+
+Reported rather than worked around. After T3 the benchmark stands at precision
+**0.9162**, recall **0.9210**, with 55 false positives: RECO 21, X_OTHER 9,
+NAV 8, META_REFTOOL 7, DATA_LISTING 3, TOC 2, NOMAJ 2, EDIT 2, META_BOILER 1.
+
+- A **perfect** recommendation-block rule would yield precision **0.9462** --
+  still short of the 0.95 target. Reaching it requires excluding a second
+  family (reference tools and listings: 0.9621), which is a scoping decision,
+  not a rule-writing one.
+- No structural rule found separates recommendation blocks from editorial
+  citations at a useful rate. The container prose ratio separates them in the
+  median (0.93 against 0.48) but the distributions overlap: every candidate
+  threshold removes roughly as many true citations as false ones. The best
+  combination found (repeated sibling pattern, container prose ratio and
+  anchor count) gains 1.0 point of precision for 0.5 point of recall -- below
+  the admission threshold of 2 F1 points this sprint set for itself, so **no
+  reco rule was shipped**.
+
 ### Added — Structural link classification, ExpressionLink.kind (sprint body-links, T3)
 
 - **Migration 014** adds `expressionlink.kind`, `.kind_rule` and `.origin`
