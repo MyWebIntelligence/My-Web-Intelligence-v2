@@ -81,13 +81,17 @@ Feature requests are welcome! Please open an issue with:
 ### Testing
 
 - Write tests for new functionality
-- Ensure existing tests pass before submitting PR (303 tests passing on main)
+- Ensure existing tests pass before submitting PR (832 tests passing, 3 skipped, on `master`)
 - Target >85% code coverage for new code
 - Use pytest fixtures from `tests/conftest.py`
-- For HTTP-based tests, prefer `aioresponses` (async) or `responses` (sync)
-  over patching internal helpers — see existing tests `17–25` as examples.
+- If you touch link extraction or classification, also run the offline
+  benchmark: `make bench-cache MWI_BENCH_SOURCE_DB=/path/to/mwi.db` once,
+  then `make bench-links` and `make bench-determinism`
+- For HTTP-based tests, prefer `aioresponses` for `aiohttp`,
+  and `unittest.mock.patch` at the call site for the other boundaries
+  (`requests`, `trafilatura`, subprocess) — see existing tests `17–25` as examples.
 - New tests must follow the `tests/test_NN_topic.py` flat layout and
-  numerical ordering (next free slot: `test_26_*.py`)
+  numerical ordering (next free slot: `test_39_*.py`)
 
 ## Development Setup
 
@@ -149,6 +153,8 @@ mwi/
 ├── fetcher.py          # Cascade fetch strategies (sprint-403)
 ├── browser_pool.py     # Shared Playwright pool (sprint-403)
 ├── url_normalizer.py   # URL canonicalization (sprint-normalise)
+├── body_links.py       # Link zone classification, leaf module (sprint body-links)
+├── benchmark_body_links.py  # Offline benchmark, stratified estimator (sprint body-links)
 └── ...                 # Other modules
 
 tests/
@@ -171,7 +177,20 @@ tests/
 ├── test_22_search_provider_tavily.py   # sprint-searchrouter — Tavily adapter
 ├── test_23_search_router.py            # sprint-searchrouter — orchestration
 ├── test_24_search_controller.py        # sprint-searchrouter — CLI integration
-└── test_25_search_integration.py       # sprint-searchrouter — end-to-end
+├── test_25_search_integration.py       # sprint-searchrouter — end-to-end
+├── test_26_multilang.py              # sprint-multilang — per-language lemmatisation
+├── test_27_sprint_fixes.py           # P8-P11 fixes
+├── test_28_link_context.py           # sprint link-context
+├── test_29_fullhtml_linknetwork.py   # sprint fullhtml-linknetwork
+├── test_30_markdown_link_parser.py   # sprint extractlinks — parser
+├── test_31_consolidate_links.py      # sprint extractlinks — integration
+├── test_32_validate_update.py        # sprint validate-update
+├── test_33_domain_heuristics.py      # sprint-heuristique
+├── test_34_benchmark.py              # sprint body-links — offline benchmark
+├── test_35_body_links.py             # sprint body-links — extraction + classification
+├── test_36_link_kind.py              # sprint body-links — `kind` column
+├── test_37_link_profile_export.py    # sprint body-links — `--link-profile`
+└── test_38_normalize_pipeline.py     # sprint body-links — normalize + mapping
 ```
 
 **Mock HTTP for new tests**: prefer `aioresponses` (already used by tests

@@ -1163,7 +1163,7 @@ Alternative without code change: `MYWI_DATA_DIR=/some/dir python mywi.py …`
 
 ## Testing
 
-MyWI ships with a JOSS-grade test suite (≈98 tests across 8 files, ~87% coverage).
+MyWI ships with a JOSS-grade test suite (832 tests across 38 numbered files, 3 expected skips; coverage ~87%, last measured 10 June 2026).
 
 ### Quick start
 
@@ -1192,7 +1192,7 @@ make test-cov
 | `tests/test_07_integration.py`      | 11 | End-to-end workflows |
 | `tests/test_08_expression_html.py`  | 11 | `--fullhtml` storage, `Land.fullhtml` default, migration 007 |
 
-Older smoke tests (`test_cli.py`, `test_core.py`, etc.) live in `tests/legacy/` and are kept for reference; the active suite is `tests/test_0?_*.py`.
+Older smoke tests (`test_cli.py`, `test_core.py`, etc.) live in `tests/legacy/` and are kept for reference; the active suite is `tests/test_NN_*.py` (`test_01` through `test_38`).
 
 ### All Make targets
 

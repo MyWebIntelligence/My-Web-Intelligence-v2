@@ -589,6 +589,7 @@ python mywi.py land export --name="MonProjet" --type=corpus
 python mywi.py land export --name="MonProjet" --type=pseudolinks
 python mywi.py land export --name="MonProjet" --type=nodelinkcsv --minrel=1
 python mywi.py land export --name="MonProjet" --type=nodelinkcsv --fullhtml=TRUE --minrel=1  # réseau brut SEUL (sans le flag = 4 de base)
+python mywi.py land export --name="MonProjet" --type=nodelinkcsv --link-profile=all  # conserve tous les kinds de liens
 python mywi.py land export --name="MonProjet" --type=nodesjson --minrel=1  # graphe de domaines JSON force-graph
 python mywi.py land export --name="MonProjet" --type=pagesjson --minrel=1  # graphe de pages JSON force-graph
 ```
@@ -608,11 +609,43 @@ Types : `pagecsv`, `fullpagecsv`, `nodecsv`, `pagegexf`, `nodegexf`, `mediacsv`,
 > **à la place** des 4 classiques (interrupteur, pas additif : relancer **sans**
 > le flag pour le réseau MyWI) : le réseau de liens reconstruit depuis **tous** les
 > `<a href>` du HTML brut (`expression.html`), réseau fermé (cibles ∈ corpus
-> qualifié par `--minrel`). Colonnes `weight` (multiplicité des ancres) et
-> `in_mywi` (1 si l'arête existe aussi dans `ExpressionLink`). Permet de comparer
+> qualifié par `--minrel`). Colonnes Gephi `Source,Target,Weight` (Weight
+> laissé vide) + `weightbody` (1 si l'arête vient d'`ExpressionLink`),
+> `weighthtml` (multiplicité des ancres brutes pour une arête présente seulement
+> dans le HTML), `citation` (1 si le lien apparaît dans le markdown `readable`)
+> et `kind` (vide pour les arêtes raw-only) ; au niveau domaine `in_mwi` /
+> `out_mwi`. Ce fichier n'est **jamais** filtré par `--link-profile` : c'est le
+> comparateur « toute la page ». Permet de comparer
 > le réseau de liens **éditoriaux** de MyWI au réseau « toute la page » d'un
 > crawler classique. **Prérequis** : Land crawlé avec `--fullhtml`. Un rapport de
 > couverture (raw∩mywi / raw\mywi / mywi\raw) s'affiche en fin d'export.
+
+#### Profils de liens (`--link-profile`)
+
+Chaque lien porte un **kind** structurel qui dit où il se situe dans la page
+source : `body` (le fil éditorial), `nav` (menus, en-têtes, pieds de page),
+`toc` (sommaires et grilles d'ancres), `reco` (blocs de recommandation),
+`ref` (blocs de références). Le kind est décidé par des règles **structurelles**
+déterministes — position DOM, ancêtres de sectionnement, densité d'ancres, part
+de prose — jamais par les mots de la page : elles valent pour toutes les langues.
+
+| profil | kinds exportés |
+|---|---|
+| `editorial` (défaut) | `body`, `ref` |
+| `editorial+reco` | `body`, `ref`, `reco` |
+| `all` | tous les kinds |
+
+Les blocs de références sont **conservés** par défaut : ce sont des citations,
+et les exclure coûte plus en citations perdues qu'il ne rapporte en bruit retiré.
+
+Deux choses ne changent jamais avec le profil : les lignes **sans kind** (écrites
+avant la migration 014) sont toujours traitées comme `body`, et le réseau
+**toute la page** (`*pageslinksfullhtml.csv`) n'est **jamais** filtré — c'est le
+comparateur qui sert à juger le réseau body.
+
+La colonne `kind` est ajoutée en **fin d'en-tête** de `*_pageslinks.csv`
+(`NULL` → `body`). Le profil s'applique à tous les exports qui lisent
+`ExpressionLink`. Profils redéfinissables dans `settings.py` via `link_profiles`.
 
 ### 2. Exporter les tags
 
@@ -715,11 +748,14 @@ casse du host).
 | `force_https` | OFF | `http://X` → `https://X` (à activer manuellement) |
 | `strip_www` | OFF | `www.X.com` → `X.com` (à activer manuellement) |
 | `strip_mobile_subdomain` | OFF | `m.X.com` → `X.com` (à activer manuellement) |
-| `trailing_slash` | `preserve` | `preserve` \| `strip` \| `add` |
+| `trailing_slash` | `preserve` | `preserve` \| `strip` \| `add` (`strip` fait aussi converger la racine `/`) |
+| `path_casefold` | OFF | Chemin en minuscules (opt-in ; les échappements `%XX` sont toujours mis en majuscules, RFC 3986) |
+| `strip_trackers_by_host` | `{}` | Paramètres retirés uniquement sur les hôtes listés (match par suffixe) |
 
 Override par variables d'environnement :
 `MWI_URL_FORCE_HTTPS=true`, `MWI_URL_STRIP_WWW=true`,
-`MWI_URL_STRIP_MOBILE=true`.
+`MWI_URL_STRIP_MOBILE=true`, `MWI_URL_TRAILING_SLASH=strip`,
+`MWI_URL_PATH_CASEFOLD=true`.
 
 **Provenance** — quand la normalisation modifie l'URL, l'original est
 sauvegardé dans `Expression.original_url` (NULL sinon). Permet l'audit
@@ -743,6 +779,11 @@ python mywi.py land normalize --name=MonProjet
 
 # Variante : remet http_status=NULL pour re-crawler les URLs renommées
 python mywi.py land normalize --name=MonProjet --reset-status
+
+# Exporte la correspondance old_id,new_id,old_url,canonical_url
+# (produite aussi en --dry-run : elle décrit alors le plan, pas l'état appliqué)
+# old_id == new_id : renommage de l'URL, pas une fusion
+python mywi.py land normalize --name=MonProjet --dry-run --mapping-out=plan.csv
 ```
 
 **Ce que fait `land normalize`** pour chaque `Expression` du Land :
@@ -778,7 +819,7 @@ doit alors s'appeler `mwi.db` dans ce dossier).
 
 ## Tests
 
-MyWI inclut une suite de tests aux standards JOSS (≈98 tests répartis sur 8 fichiers, ~87% de couverture).
+MyWI inclut une suite de tests aux standards JOSS (832 tests répartis sur 38 fichiers numérotés (3 skippés attendus), ~87% de couverture).
 
 ### Démarrage rapide
 
@@ -807,7 +848,7 @@ make test-cov
 | `tests/test_07_integration.py`      | 11 | Workflows end-to-end |
 | `tests/test_08_expression_html.py`  | 11 | Stockage `--fullhtml`, défaut `Land.fullhtml`, migration 007 |
 
-Les anciens smokes (`test_cli.py`, `test_core.py`, etc.) vivent dans `tests/legacy/` à titre de référence ; la suite active est `tests/test_0?_*.py`.
+Les anciens smokes (`test_cli.py`, `test_core.py`, etc.) vivent dans `tests/legacy/` à titre de référence ; la suite active est `tests/test_NN_*.py` (`test_01` → `test_38`). Le tableau ci-dessus ne couvre que le socle JOSS (`test_01` → `test_08`) ; les fichiers `test_09` → `test_38` ajoutent la normalisation d'URL, la cascade fetch, le routeur de recherche, le multilingue, le contexte et le `kind` des liens, les profils d'export et le banc body-links.
 
 ### Cibles Make
 
