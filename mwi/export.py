@@ -21,13 +21,34 @@ import datetime
 import json
 import re
 from textwrap import dedent
+from typing import Optional
 import unicodedata
 from lxml import etree
-from urllib.parse import urlparse
 from zipfile import ZipFile
+
+import settings
+
 from . import model
+from . import link_context
 from .link_context import extract_all_links, extract_markdown_links
-from .url_normalizer import normalize_url
+
+
+DEFAULT_LINK_PROFILE = 'citation'
+
+# Which structural kinds belong to an exported network. `citation` is the
+# default: body plus reference blocks — the links attributable to the text's
+# author. Reference blocks stay IN: the ground truth counts them as citations
+# (place_group EDITORIAL in gold_v1, an older naming), and excluding them
+# converts genuine citations into losses. Overridable via settings.link_profiles.
+DEFAULT_LINK_PROFILES = {
+    'citation': ('body', 'ref'),
+    'citation+reco': ('body', 'ref', 'reco'),
+    'all': None,
+}
+
+
+def _link_profiles() -> dict:
+    return getattr(settings, 'link_profiles', None) or DEFAULT_LINK_PROFILES
 
 
 class Export:
@@ -50,7 +71,7 @@ class Export:
     relevance = 1
 
     def __init__(self, export_type: str, land: model.Land, minimum_relevance: int,
-                 fullhtml: bool = False):
+                 fullhtml: bool = False, link_profile: str = DEFAULT_LINK_PROFILE):
         """Initialize an Export instance with specified parameters.
 
         Args:
@@ -59,6 +80,9 @@ class Export:
             minimum_relevance: Minimum relevance score threshold for including expressions.
             fullhtml: When True (and export_type == 'nodelinkcsv'), also emit the
                 raw-HTML link network files (*fullhtml.csv). Ignored otherwise.
+            link_profile: which structural link kinds belong to the exported
+                network (sprint body-links). Unknown names fall back to the
+                default rather than raising mid-export.
 
         Notes:
             The export_type determines which write method will be called.
@@ -68,6 +92,27 @@ class Export:
         self.land = land
         self.relevance = minimum_relevance
         self.fullhtml = fullhtml
+        profiles = _link_profiles()
+        if link_profile not in profiles:
+            print(f"Unknown link profile '{link_profile}', "
+                  f"falling back to '{DEFAULT_LINK_PROFILE}'")
+            link_profile = DEFAULT_LINK_PROFILE
+        self.link_profile = link_profile
+
+    def _kind_clause(self) -> Optional[str]:
+        """SQL predicate for the active link profile, or None when unfiltered.
+
+        NULL is always accepted: every edge written before migration 014 has
+        no kind, and an export must not exclude them retroactively.
+
+        The kind names are module constants, never user input — the profile
+        NAME is user input, but it is only ever used as a dict key.
+        """
+        kinds = _link_profiles().get(self.link_profile)
+        if kinds is None:
+            return None
+        quoted = ', '.join("'{}'".format(k) for k in kinds)
+        return "(link.kind IS NULL OR link.kind IN ({}))".format(quoted)
 
     def write(self, export_type: str, filename):
         """Proxy method that dispatches to appropriate format-specific writer.
@@ -111,6 +156,15 @@ class Export:
             Formats column_map as "sql_expression AS output_name" clauses.
         """
         cols = ",\n".join(["{1} AS {0}".format(*i) for i in column_map.items()])
+        clause = self._kind_clause()
+        if clause is not None and 'FROM expressionlink AS link' in sql:
+            # One substitution, one place: the six link queries all route
+            # through here. The whole-page network (*fullhtml.csv) executes
+            # its SQL directly and is therefore never filtered by a profile.
+            sql = sql.replace(
+                'FROM expressionlink AS link',
+                'FROM (SELECT * FROM expressionlink AS link '
+                'WHERE {}) AS link'.format(clause))
         return model.DB.execute_sql(sql.format(cols), (self.land.get_id(), self.relevance))
 
     def write_pagecsv(self, filename) -> int:
@@ -568,7 +622,9 @@ class Export:
             'target_domain_id': 'e2.domain_id',
             # sprint link-context (migration 012) — dom_html exclu (trop lourd)
             'context': 'link.context',
-            'dom': 'link.dom'
+            'dom': 'link.dom',
+            # sprint body-links (migration 014) — NULL vaut body
+            'kind': "COALESCE(link.kind, 'body')"
         }
         sql = """
             WITH idx(x) AS (
@@ -671,66 +727,24 @@ class Export:
     # Raw-HTML link network (sprint fullhtml-linknetwork)                 #
     # ------------------------------------------------------------------ #
 
-    @staticmethod
-    def _host_path_key(url):
-        """Scheme-and-www-insensitive key: host(no www) + path + query.
-
-        Absorbs http<->https / www<->bare / redirect divergences when
-        force_https/strip_www are OFF. Returns None on failure / no host.
-        """
-        try:
-            p = urlparse(url)
-            host = (p.netloc or '').lower()
-            if host.startswith('www.'):
-                host = host[4:]
-            if not host:
-                return None
-            key = host + (p.path or '').rstrip('/')
-            if p.query:
-                key += '?' + p.query
-            return key
-        except Exception:
-            return None
-
-    @staticmethod
-    def _index_url_key(index, key, eid):
-        """Insert key->eid; mark None (ambiguous) on conflicting ids."""
-        if not key:
-            return
-        if key in index:
-            if index[key] != eid:
-                index[key] = None  # ambiguous -> unusable for lookup
-        else:
-            index[key] = eid
-
     def _fullhtml_lookup(self, idx, href):
         """Resolve a raw href to an in-land expression id (closed network).
 
-        Tries three keys in priority order: exact normalize_url, relaxed
-        (lower + no trailing slash), host+path. None on miss/ambiguous.
+        Delegates to the shared 3-key ladder. The export used to carry its own
+        line-for-line copy of it (sprint body-links T1); there is now exactly
+        one implementation, in `link_context`.
+
+        Note what is deliberately NOT shared: the PERIMETER of the index. The
+        export indexes only expressions at `relevance >= minrel`, because this
+        file is a closed network whose edges must land on nodes present in its
+        own node file; `consolidate` indexes the whole land instead, because it
+        resolves in order to avoid creating a duplicate. Unify the ladder,
+        never the perimeter.
         """
-        exact, relaxed, host_path = idx
-        try:
-            norm = normalize_url(href)
-        except Exception:
-            norm = href
-        if not norm:
-            return None
-        eid = exact.get(norm)
-        if eid is not None:
-            return eid
-        eid = relaxed.get(norm.lower().rstrip('/'))
-        if eid is not None:
-            return eid
-        hp = self._host_path_key(norm)
-        if hp is not None:
-            eid = host_path.get(hp)
-            if eid is not None:
-                return eid
-        return None
+        return link_context.resolve_url_in_index(idx, href)
 
     def _write_pageslinksfullhtml(self, filename) -> int:
-        """Union of the editorial (ExpressionLink) and raw-HTML link graphs.
+        """Union of the citation (ExpressionLink) and raw-HTML link graphs.
 
         Closed network: both endpoints are in-land expressions qualifying by
         minrel (same node set as _pageslinks). One row per distinct edge:
@@ -761,7 +775,7 @@ class Export:
         minrel = self.relevance
 
         # --- preload lookups (drained BEFORE the streaming cursor opens) ---
-        exact, relaxed, host_path = {}, {}, {}
+        idx = ({}, {}, {})
         url_of, domain_of = {}, {}
         cur = model.DB.execute_sql(
             "SELECT id, url, domain_id FROM expression "
@@ -769,16 +783,7 @@ class Export:
         for eid, url, domain_id in cur.fetchall():
             url_of[eid] = url
             domain_of[eid] = domain_id
-            try:
-                norm = normalize_url(url) if url else url
-            except Exception:
-                norm = url
-            if not norm:
-                continue
-            self._index_url_key(exact, norm, eid)
-            self._index_url_key(relaxed, norm.lower().rstrip('/'), eid)
-            self._index_url_key(host_path, self._host_path_key(norm), eid)
-        idx = (exact, relaxed, host_path)
+            link_context.add_to_url_index(idx, eid, url)
 
         domain_name = {}
         for did, name in model.DB.execute_sql(
@@ -789,10 +794,12 @@ class Export:
         cur = model.DB.execute_sql(
             "WITH idx(x) AS (SELECT id FROM expression "
             "WHERE land_id = ? AND relevance >= ?) "
-            "SELECT source_id, target_id FROM expressionlink "
+            "SELECT source_id, target_id, kind FROM expressionlink "
             "WHERE source_id IN idx AND target_id IN idx", (land_id, minrel))
-        for s, t in cur.fetchall():
+        kind_of = {}
+        for s, t, k in cur.fetchall():
             mywi_page_edges.add((s, t))
+            kind_of[(s, t)] = k or 'body'
 
         # 0) citation lookup: (sid, tid) edges whose link appears in the
         #    source's readable markdown, resolved through the SAME 3-key
@@ -810,7 +817,7 @@ class Export:
                 if tid is not None and tid != sid:
                     readable_edges.add((sid, tid))
 
-        # --- emission: union of the editorial graph (ExpressionLink = body)
+        # --- emission: union of the citation graph (ExpressionLink = body)
         #     and the raw-only edges found ONLY in the full HTML.
         # weightbody = 1 for an edge present in ExpressionLink (in_mwi=1);
         # weighthtml = raw <a> multiplicity for an edge present ONLY in the
@@ -823,7 +830,7 @@ class Export:
         # weightbody/weighthtml.
         header = ['Source', 'Target', 'Weight', 'weightbody', 'weighthtml',
                   'citation', 'source_url', 'source_domain_id',
-                  'target_url', 'target_domain_id']
+                  'target_url', 'target_domain_id', 'kind']
         domain_acc = {}   # (sd, td) -> [in_mwi (Σweightbody), out_mwi (Σweighthtml)]
         body_edges = rawonly_edges = citation_edges = count = 0
         pages_total = pages_with_html = 0
@@ -832,7 +839,7 @@ class Export:
             writer = csv.writer(file, quoting=csv.QUOTE_ALL)
             writer.writerow(header)
 
-            # 1) editorial edges (ExpressionLink, both endpoints qualified by
+            # 1) citation edges (ExpressionLink, both endpoints qualified by
             #    minrel). No DB cursor here — reads only preloaded sets.
             for sid, tid in mywi_page_edges:
                 if sid == tid:
@@ -841,7 +848,8 @@ class Export:
                 citation = 1 if (sid, tid) in readable_edges else 0
                 citation_edges += citation
                 writer.writerow([sid, tid, '', 1, 0, citation,
-                                 url_of.get(sid), sdom, url_of.get(tid), td])
+                                 url_of.get(sid), sdom, url_of.get(tid), td,
+                                 kind_of.get((sid, tid), 'body')])
                 count += 1
                 body_edges += 1
                 if td is not None and sdom != td:
@@ -868,8 +876,11 @@ class Export:
                     td = domain_of.get(tid)
                     citation = 1 if (sid, tid) in readable_edges else 0
                     citation_edges += citation
+                    # raw-only edge: no ExpressionLink row, hence no zone.
+                    # Empty, never 'body' — a link absent from the body has
+                    # no structural kind to report.
                     writer.writerow([sid, tid, '', 0, weighthtml, citation,
-                                     surl, sdom, url_of.get(tid), td])
+                                     surl, sdom, url_of.get(tid), td, ''])
                     count += 1
                     rawonly_edges += 1
                     if td is not None and sdom != td:

@@ -50,3 +50,7 @@ htmlcov/
 
 # Document de travail Art.1 — ne jamais publier
 docs/Art1_Methods_v1.0.docx
+
+# Banc body-links : corpus extrait et sorties (regenerables, jamais versionnes)
+benchmarks/body_links/cache/
+benchmarks/body_links/out/

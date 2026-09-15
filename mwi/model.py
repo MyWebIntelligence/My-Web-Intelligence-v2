@@ -265,6 +265,19 @@ class ExpressionLink(BaseModel):
     dom = TextField(null=True)
     dom_html = TextField(null=True)
 
+    # sprint body-links (migration 014) — nature structurelle du lien.
+    # kind : zone du lien dans la page source, parmi body/nav/toc/reco/ref.
+    #   Seul `body` appartient au reseau editorial. NULL (toutes les lignes
+    #   anterieures a la migration 014) vaut `body` : on n'exclut jamais
+    #   retroactivement une arete faute d'information.
+    # kind_rule : la regle qui a tranche, pour l'audit scientifique.
+    # origin : la jambe d'extraction qui a vu le lien (md/html/both/raw).
+    #   Distincte de `kind` a dessein : melanger provenance et zone rendrait
+    #   l'invariant « retenu <=> kind == body » infalsifiable.
+    kind = TextField(null=True)
+    kind_rule = TextField(null=True)
+    origin = TextField(null=True)
+
 
 class Word(BaseModel):
     """Normalized vocabulary word with lemmatization.

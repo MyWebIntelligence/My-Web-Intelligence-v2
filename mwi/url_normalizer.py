@@ -70,6 +70,15 @@ DEFAULT_RULES: Dict[str, object] = {
     ],
     'normalize_query_order': True,
     'trailing_slash': 'preserve',  # 'preserve' | 'strip' | 'add'
+    # Per-host tracker globs, applied on top of the global list above. Scoped
+    # because the same parameter name is not the same thing everywhere: `?s=`
+    # is the WordPress search query, and stripping it collapses every search
+    # result page onto the site root.
+    'strip_trackers_by_host': {},
+    # Lowercase the PATH. Off by default and deliberately so: it merges
+    # resources that a case-sensitive server serves separately, and the
+    # normalized URL is what gets stored and re-fetched.
+    'path_casefold': False,
 }
 
 
@@ -219,6 +228,45 @@ def _drop_tracker_params(query: str, patterns) -> str:
     return urlencode(kept, doseq=True)
 
 
+_PCT_RE = re.compile(r'%([0-9a-fA-F]{2})')
+
+
+def _uppercase_percent_escapes(value: str) -> str:
+    """Uppercase the hex digits of percent-escapes, never decoding them.
+
+    RFC 3986 section 2.1: the case of the two hex digits is not significant,
+    so `%c3%a9` and `%C3%A9` denote the same octet and must not produce two
+    nodes. This is the only transformation here that cannot possibly merge two
+    distinct resources, which is why it needs no setting.
+
+    Beware the counter-intuitive case: `/discount%abc` contains the valid
+    triplet `%ab` and becomes `/discount%ABc`. That is the RFC behaviour.
+    """
+    if not value or '%' not in value:
+        return value
+    return _PCT_RE.sub(lambda m: '%' + m.group(1).upper(), value)
+
+
+def _host_tracker_patterns(netloc: str, by_host) -> list:
+    """Tracker globs declared for this host, matched on a suffix BOUNDARY.
+
+    `h == key` or `h.endswith('.' + key)`, never a bare endswith: that would
+    make `notlinkedin.com` match `linkedin.com` and strip a third party's
+    parameters.
+    """
+    if not by_host:
+        return []
+    host = (netloc or '').rsplit('@', 1)[-1].split(':')[0].lower()
+    if not host:
+        return []
+    out = []
+    for key, patterns in by_host.items():
+        key = (key or '').lower()
+        if key and (host == key or host.endswith('.' + key)):
+            out.extend(patterns or [])
+    return out
+
+
 def _sort_query(query: str) -> str:
     if not query:
         return query
@@ -232,7 +280,13 @@ def _apply_trailing_slash(path: str, policy: str) -> str:
         return '/' if policy == 'add' else path
     if policy == 'preserve':
         return path
-    if policy == 'strip' and len(path) > 1 and path.endswith('/'):
+    if policy == 'strip' and path.endswith('/'):
+        # No len(path) > 1 guard: it kept '/' as '/' while '' stayed '',
+        # so the two root forms never converged under a policy whose whole
+        # purpose is to make them converge. Stripping to '' also aligns the
+        # exact key on the two relaxed rungs of the resolution ladder, which
+        # both rstrip('/'). urlunparse then yields 'https://a.eu', which
+        # urlparse reads back identically, so idempotence holds.
         return path.rstrip('/')
     if policy == 'add' and not path.endswith('/') and '.' not in path.rsplit('/', 1)[-1]:
         # Don't add a slash on what looks like a file (has extension)
@@ -311,8 +365,9 @@ def _normalize_url_unsafe(url: str, rules: Optional[Dict] = None) -> str:
     if rules.get('strip_mobile_subdomain') and netloc.lower().startswith('m.'):
         netloc = netloc[2:]
 
-    # Stage 7: tracker params
-    trackers = rules.get('strip_trackers') or []
+    # Stage 7: tracker params (global list + per-host additions)
+    trackers = list(rules.get('strip_trackers') or [])
+    trackers += _host_tracker_patterns(netloc, rules.get('strip_trackers_by_host'))
     if trackers and query:
         query = _drop_tracker_params(query, trackers)
 
@@ -323,6 +378,18 @@ def _normalize_url_unsafe(url: str, rules: Optional[Dict] = None) -> str:
     # Stage 9: trailing slash
     policy = rules.get('trailing_slash', 'preserve')
     path = _apply_trailing_slash(path, policy)
+
+    # Stage 10: path case (opt-in). lower(), NOT casefold(): the project uses
+    # one single case operation everywhere, and casefold() changes length
+    # ('ß' -> 'ss'), which would turn a normalized URL into a 404 when it is
+    # re-fetched. Query untouched on purpose (see strip_trackers_by_host).
+    if rules.get('path_casefold') and path:
+        path = path.lower()
+
+    # Stage 11: percent-escapes. MUST come after stage 10, otherwise the
+    # casefold would lowercase the hex digits again.
+    path = _uppercase_percent_escapes(path)
+    query = _uppercase_percent_escapes(query)
 
     return urlunparse((scheme, netloc, path, parsed.params, query, ''))
 

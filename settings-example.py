@@ -89,6 +89,45 @@ fullhtml_max_size_kb = 5120
 link_context_max_chars = 1000  # troncature de expressionlink.context
 link_dom_html_max_chars = 4000  # troncature de expressionlink.dom_html
 
+# Body-links (sprint body-links T2) : les liens du corps sont l'union de la
+# sortie markdown de Trafilatura et de sa sortie HTML — cette derniere etait
+# deja calculee pour les medias et n'etait jamais lue pour les liens.
+# favor_recall elargit la frontiere du corps sur la SEULE jambe HTML : mesure
+# sur le jeu de verite airegulation, +33 citations recuperees pour -0,002 de
+# precision. Jamais applique a la jambe markdown, qui alimente
+# expression.readable (pertinence, gate LLM, embeddings, export corpus) :
+# l'y appliquer injecterait du boilerplate dans tous les corpus existants.
+# Mettre a False pour retrouver le comportement d'avant le sprint.
+link_favor_recall = True
+
+# Classification structurelle des liens (sprint body-links T3). Deux seuils,
+# tous deux SANS DIMENSION : un seuil sur une longueur absolue encoderait la
+# longueur moyenne d'une phrase dans une langue donnee, un ratio non.
+# - link_kind_grid_anchors : nombre d'ancres a partir duquel un conteneur est
+#   une grille (sommaire, menu). Mediane mesuree : 180 ancres pour un
+#   sommaire, 1 pour un lien du corps.
+# - link_kind_cout_min : part minimale de texte HORS ancres pour qu'un bloc
+#   compte comme de la prose. Mesure sur le corpus code : 0,95 pour un
+#   paragraphe du corps, 0,36 pour un bloc de recommandation, 0,29 pour un
+#   sommaire, 0,04 pour un menu. La precision est plate sur [0,50 ; 0,85] et
+#   le rappel s'y effondre : on prend le bord bas du plateau.
+link_kind_grid_anchors = 8
+link_kind_cout_min = 0.50
+
+# Profils de liens a l export (sprint body-links T4). Quelles natures
+# structurelles appartiennent au reseau exporte. `citation` est le defaut :
+# corps + blocs de references, soit les liens attribuables a l auteur du texte.
+# Les references restent DEDANS : le jeu de verite les compte comme des
+# citations, et les exclure convertirait des citations authentiques en pertes
+# (rappel 0,92 -> 0,76 mesure).
+# `None` = aucun filtre. Le fichier page entiere (*pageslinksfullhtml.csv)
+# n est JAMAIS filtre : c est le comparateur qui valide le sprint.
+link_profiles = {
+    "citation": ("body", "ref"),
+    "citation+reco": ("body", "ref", "reco"),
+    "all": None,
+}
+
 # Cut Domains
 
 
@@ -374,7 +413,22 @@ url_normalization = {
         "spm",
     ],
     "normalize_query_order": True,
-    "trailing_slash": "preserve",  # 'preserve' | 'strip' | 'add'
+    # sprint body-links T1 : seule regle d URL sans variable d env, ce
+    # qui rendait la policy strip inatteignable sans editer ce fichier.
+    "trailing_slash": os.getenv("MWI_URL_TRAILING_SLASH", "preserve"),
+    # Trackers par hote (suffixe, frontiere de label). Scopes parce que
+    # le meme nom de parametre n a pas la meme nature partout : ?s= est
+    # la requete de recherche WordPress, la depouiller collapse toutes
+    # les pages de resultats sur la racine du site.
+    "strip_trackers_by_host": {
+        "linkedin.com": ["trk", "originalSubdomain", "trackingId",
+                         "lipi", "licu"],
+    },
+    # Minuscule le CHEMIN. OFF par defaut : fusionne des ressources
+    # qu un serveur sensible a la casse sert separement, et l URL
+    # normalisee est celle qui sera stockee puis re-crawlee.
+    "path_casefold": os.getenv("MWI_URL_PATH_CASEFOLD", "false").lower()
+    == "true",
 }
 
 

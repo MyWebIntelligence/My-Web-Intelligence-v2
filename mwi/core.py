@@ -32,9 +32,9 @@ except ImportError:
     print("Warning: Playwright not available. Dynamic media extraction will be skipped.")
 
 import settings
-from . import link_context
+from . import body_links, link_context
 from . import model
-from .export import Export
+from .export import DEFAULT_LINK_PROFILE, Export
 from .platform_heuristics import PLATFORM_HEURISTICS as _PLATFORM_HEURISTICS
 
 
@@ -1632,18 +1632,29 @@ def _extract_content_and_links(raw_html, expression, source_method: str = "aioht
 
     # 2a. Trafilatura
     try:
+        page_url = str(expression.url)
+        # markdown leg: NEVER favor_recall -- it feeds expression.readable,
+        # hence relevance, the LLM gate, embeddings and the corpus export.
         extracted_content = trafilatura.extract(
             raw_html, include_links=True, include_comments=False,
-            include_images=True, output_format='markdown',
+            include_images=True, output_format='markdown', url=page_url,
         )
+        # html leg: already computed for medias, now also read for links
+        # (sprint body-links T2). favor_recall widens the body frontier here
+        # only: +33 recovered citations on the gold set, -0.002 precision.
         readable_html = trafilatura.extract(
             raw_html, include_links=True, include_comments=False,
-            include_images=True, output_format='html',
+            include_images=True, output_format='html', url=page_url,
+            favor_recall=getattr(settings, 'link_favor_recall', True),
         )
         if extracted_content and len(extracted_content) > 100:
             media_lines = []
-            if readable_html:
-                soup_readable = BeautifulSoup(readable_html, 'html.parser')
+            # One parse of readable_html, shared by the media pass and the
+            # link pass: the duplicate parse that used to sit below is what
+            # funds the HTML leg, so the budget stays at two parses per page.
+            soup_readable = (BeautifulSoup(readable_html, 'html.parser')
+                             if readable_html else None)
+            if soup_readable is not None:
                 for tag, label in [('img', 'IMAGE'), ('video', 'VIDEO'), ('audio', 'AUDIO')]:
                     for element in soup_readable.find_all(tag):
                         src = element.get('src')
@@ -1655,8 +1666,7 @@ def _extract_content_and_links(raw_html, expression, source_method: str = "aioht
             content = extracted_content
             if media_lines:
                 content += "\n\n" + "\n".join(media_lines)
-            if readable_html:
-                soup_readable = BeautifulSoup(readable_html, 'html.parser')
+            if soup_readable is not None:
                 extract_medias(soup_readable, expression)
             img_md_links = re.findall(r'!\[.*?\]\((.*?)\)', content)
             for img_url in img_md_links:
@@ -1666,7 +1676,10 @@ def _extract_content_and_links(raw_html, expression, source_method: str = "aioht
                     (model.Media.url == resolved_img_url)
                 ).exists():
                     model.Media.create(expression=expression, url=resolved_img_url, type='img')
-            links = extract_md_links(content, str(expression.url))
+            # extracted_content, not content: the media_lines appended
+            # above are images and bracketed markers, never hyperlinks.
+            links = body_links.extract_body_links(
+                extracted_content, readable_html, page_url, soup=soup_readable)
             expression.readable = content # type: ignore
             if source_method == "archive_org":
                 print(f"Archive.org + Trafilatura succeeded for {expression.url}")
@@ -1688,7 +1701,8 @@ def _extract_content_and_links(raw_html, expression, source_method: str = "aioht
                 hrefs = [a.get('href') for a in soup.find_all('a')]
                 urls = [urljoin(str(expression.url), h)
                         for h in hrefs if isinstance(h, str) and h]
-                links = [u for u in urls if is_crawlable(u)]
+                links = body_links.from_urls(
+                    [u for u in urls if is_crawlable(u)])
                 expression.readable = content # type: ignore
                 print(f"BeautifulSoup fallback succeeded for {expression.url}")
         except Exception as e:
@@ -1796,17 +1810,24 @@ async def crawl_expression_with_media_analysis(expression: model.Expression, dic
         if expression.relevance is not None and expression.relevance > 0 and expression.depth is not None and expression.depth < 3 and links: # type: ignore
             print(f"Linking {len(links)} expressions to #{expression.id}") # type: ignore
             # sprint link-context: locate each link in the raw DOM (soup reused, no re-parse)
+            # rank=dom_rank: when a URL appears both in the menu and in the
+            # body, keep the body occurrence (sprint body-links T3).
             dom_map = link_context.extract_link_dom_map(
-                raw_html, str(expression.url), soup=soup) if raw_html else {}
+                raw_html, str(expression.url), soup=soup,
+                rank=body_links.dom_rank) if raw_html else {}
+            body_links.resolve(links, dom_map)
             for link in links:
-                info = link_context.lookup_link_info(dom_map, link)
-                ctx = link_context.extract_md_paragraph(content, link)
+                info = link_context.lookup_link_info(dom_map, link.url)
+                ctx = link_context.extract_md_paragraph(
+                    content, link.raw or link.url)
                 if ctx is None and info is not None:
                     ctx = info.block_text
-                link_expression(expression.land, expression, link, # type: ignore
+                link_expression(expression.land, expression, link.url, # type: ignore
                                 context=ctx,
                                 dom=info.dom if info else None,
-                                dom_html=info.dom_html if info else None)
+                                dom_html=info.dom_html if info else None,
+                                kind=link.kind, kind_rule=link.kind_rule,
+                                origin=link.origin)
         expression.save()
         return 1
     else:
@@ -1926,26 +1947,49 @@ async def consolidate_land(
                 expr.save()
 
                 # 3. Extraire les liens sortants du contenu lisible
-                links = []
-                if expr.readable:
-                    # Extraction des liens markdown (relatifs résolus via urljoin)
-                    links = extract_md_links(expr.readable, str(expr.url))
-                    # Extraction des liens HTML (fallback) — résoudre les hrefs
-                    # relatifs avant is_crawlable, sinon perte sèche.
+                # sprint body-links T2: quand le HTML brut est stocké
+                # (--fullhtml), on rejoue Trafilatura en sortie HTML pour
+                # récupérer les citations que la sérialisation markdown perd.
+                stored_html = getattr(expr, 'html', None)
+                readable_html = None
+                if stored_html:
+                    try:
+                        readable_html = trafilatura.extract(
+                            stored_html, include_links=True,
+                            include_comments=False, include_images=True,
+                            output_format='html', url=str(expr.url),
+                            favor_recall=getattr(settings,
+                                                 'link_favor_recall', True))
+                    except Exception as e:
+                        print(f"Trafilatura (html) a échoué sur #{expr.id}: {e}")
+                links = body_links.extract_body_links(
+                    expr.readable, readable_html, str(expr.url))
+                if readable_html is None and expr.readable:
+                    # Repli hérité: certains readables portent encore des
+                    # ancres HTML brutes. Conservé tel quel (is_crawlable
+                    # compris) pour ne rien perdre sur un land sans --fullhtml.
                     soup = BeautifulSoup(expr.readable, 'html.parser')
                     hrefs = [a.get('href') for a in soup.find_all('a')]
                     urls = [urljoin(str(expr.url), h)
                             for h in hrefs if isinstance(h, str) and h]
-                    links += [u for u in urls if is_crawlable(u) and u not in links]
-                nb_links = len(set(links))
+                    known = {link.key for link in links}
+                    for extra in body_links.from_urls(
+                            [u for u in urls if is_crawlable(u)]):
+                        if extra.key not in known:
+                            extra.order = len(links)
+                            links.append(extra)
+                            known.add(extra.key)
+                nb_links = len(links)
 
                 # 4. Ajouter les documents manquants et recréer les liens
                 # sprint link-context: backfill context/dom/dom_html depuis le
                 # HTML stocké (--fullhtml) quand il est disponible
-                stored_html = getattr(expr, 'html', None)
                 dom_map = link_context.extract_link_dom_map(
-                    stored_html, str(expr.url)) if stored_html else {}
-                for url in set(links):
+                    stored_html, str(expr.url),
+                    rank=body_links.dom_rank) if stored_html else {}
+                body_links.resolve(links, dom_map)
+                for link in links:
+                    url = link.url
                     # variant-proof: resolve onto an existing corpus fiche
                     # (http/https, www, trailing slash absorbed) before
                     # falling back to creation.
@@ -1962,7 +2006,8 @@ async def consolidate_land(
                     if target_id == expr.id:
                         continue  # self-citation (permalink/variant) -> no self-loop
                     info = link_context.lookup_link_info(dom_map, url)
-                    ctx = link_context.extract_md_paragraph(expr.readable, url)
+                    ctx = link_context.extract_md_paragraph(
+                        expr.readable, link.raw or url)
                     if ctx is None and info is not None:
                         ctx = info.block_text
                     try:
@@ -1971,7 +2016,10 @@ async def consolidate_land(
                             target_id=target_id,
                             context=ctx,
                             dom=info.dom if info else None,
-                            dom_html=info.dom_html if info else None)
+                            dom_html=info.dom_html if info else None,
+                            kind=link.kind,
+                            kind_rule=link.kind_rule,
+                            origin=link.origin)
                     except IntegrityError:
                         pass
 
@@ -2082,17 +2130,24 @@ async def crawl_expression(expression: model.Expression, dictionary, session: ai
         if expression.relevance is not None and expression.relevance > 0 and expression.depth is not None and expression.depth < 3 and links: # type: ignore
             print(f"Linking {len(links)} expressions to #{expression.id}") # type: ignore
             # sprint link-context: locate each link in the raw DOM (soup reused, no re-parse)
+            # rank=dom_rank: when a URL appears both in the menu and in the
+            # body, keep the body occurrence (sprint body-links T3).
             dom_map = link_context.extract_link_dom_map(
-                raw_html, str(expression.url), soup=soup) if raw_html else {}
+                raw_html, str(expression.url), soup=soup,
+                rank=body_links.dom_rank) if raw_html else {}
+            body_links.resolve(links, dom_map)
             for link in links:
-                info = link_context.lookup_link_info(dom_map, link)
-                ctx = link_context.extract_md_paragraph(content, link)
+                info = link_context.lookup_link_info(dom_map, link.url)
+                ctx = link_context.extract_md_paragraph(
+                    content, link.raw or link.url)
                 if ctx is None and info is not None:
                     ctx = info.block_text
-                link_expression(expression.land, expression, link, # type: ignore
+                link_expression(expression.land, expression, link.url, # type: ignore
                                 context=ctx,
                                 dom=info.dom if info else None,
-                                dom_html=info.dom_html if info else None)
+                                dom_html=info.dom_html if info else None,
+                                kind=link.kind, kind_rule=link.kind_rule,
+                                origin=link.origin)
         expression.save()
         return 1
     else:
@@ -2597,7 +2652,9 @@ def remove_anchor(url: str) -> str:
 
 def link_expression(land: model.Land, source_expression: model.Expression, url: str, *,
                     context: Optional[str] = None, dom: Optional[str] = None,
-                    dom_html: Optional[str] = None) -> bool:
+                    dom_html: Optional[str] = None, kind: Optional[str] = None,
+                    kind_rule: Optional[str] = None,
+                    origin: Optional[str] = None) -> bool:
     """Create a link from a source expression to a target expression.
 
     This function adds a new expression for the target URL and creates a directed
@@ -2613,6 +2670,9 @@ def link_expression(land: model.Land, source_expression: model.Expression, url: 
             Optional, keyword-only.
         dom_html: outerHTML of the closest block ancestor of the <a> tag,
             truncated. Optional, keyword-only.
+        kind: structural zone of the link (body/nav/toc/reco/ref), kind_rule
+            the rule that decided, origin the extraction leg that saw it
+            (sprint body-links). All optional, keyword-only; NULL means body.
 
     Returns:
         bool: True if the link was successfully created, False otherwise.
@@ -2626,13 +2686,18 @@ def link_expression(land: model.Land, source_expression: model.Expression, url: 
     """
     target_expression = add_expression(land, url, source_expression.depth + 1) # type: ignore
     if target_expression:
+        if target_expression.id == source_expression.id: # type: ignore
+            return False  # self-citation (permalink/variant) -> no self-loop
         try:
             model.ExpressionLink.create(
                 source_id=source_expression.id, # type: ignore
                 target_id=target_expression.id, # type: ignore
                 context=context,
                 dom=dom,
-                dom_html=dom_html)
+                dom_html=dom_html,
+                kind=kind,
+                kind_rule=kind_rule,
+                origin=origin)
             return True
         except IntegrityError:
             pass
@@ -2939,7 +3004,7 @@ def expression_relevance(dictionary, expression: model.Expression) -> int:
 
 
 def export_land(land: model.Land, export_type: str, minimum_relevance: int,
-                fullhtml: bool = False):
+                fullhtml: bool = False, link_profile: Optional[str] = None):
     """Export land data to a file in the specified format.
 
     This function creates an export file containing land data filtered by
@@ -2965,7 +3030,8 @@ def export_land(land: model.Land, export_type: str, minimum_relevance: int,
     date_tag = model.datetime.datetime.now().strftime("%Y%m%d%H%M%S")
     filename = path.join(settings.data_location, 'export_land_%s_%s_%s') \
                % (land.name, export_type, date_tag)
-    export = Export(export_type, land, minimum_relevance, fullhtml=fullhtml)
+    export = Export(export_type, land, minimum_relevance, fullhtml=fullhtml,
+                    link_profile=link_profile or DEFAULT_LINK_PROFILE)
     count = export.write(export_type, filename)
     if count > 0:
         print("Successfully exported %s records to %s" % (count, filename))

@@ -958,16 +958,19 @@ class MercuryReadablePipeline:
             - Silently ignores link creation failures (duplicate constraints)
             - Uses the expression's land for creating target expressions
         """
-        from . import link_context
+        from . import body_links, link_context
 
         model.ExpressionLink.delete().where(
             model.ExpressionLink.source == expression
         ).execute()
 
         # sprint link-context: map href -> dom info depuis le HTML stocké
+        # sprint body-links T3: rank=dom_rank -> quand une URL figure a la fois
+        # dans le menu et dans le corps, on garde l'occurrence du corps.
         stored_html = getattr(expression, 'html', None)
         dom_map = link_context.extract_link_dom_map(
-            stored_html, str(expression.url)) if stored_html else {}
+            stored_html, str(expression.url),
+            rank=body_links.dom_rank) if stored_html else {}
         readable_md = getattr(expression, 'readable', None)
 
         for link_data in new_links:
@@ -978,18 +981,27 @@ class MercuryReadablePipeline:
             )
 
             if target_expression:
+                if target_expression.id == expression.id:
+                    # self-citation (permalink/variant): the other two write
+                    # sites already refuse it, this one used to let it through
+                    # and every graph export had to filter it back out.
+                    continue
                 info = link_context.lookup_link_info(dom_map, link_data['url'])
                 ctx = link_context.extract_md_paragraph(
                     readable_md, link_data.get('raw_url') or link_data['url'])
                 if ctx is None and info is not None:
                     ctx = info.block_text
+                kind, kind_rule = body_links.classify(info)
                 try:
                     model.ExpressionLink.create(
                         source=expression,
                         target=target_expression,
                         context=ctx,
                         dom=info.dom if info else None,
-                        dom_html=info.dom_html if info else None
+                        dom_html=info.dom_html if info else None,
+                        kind=kind,
+                        kind_rule=kind_rule,
+                        origin=body_links.ORIGIN_MD
                     )
                 except:
                     pass

@@ -160,6 +160,22 @@ def command_input():
                         nargs='?',
                         const='TRUE',
                         default=None)
+    parser.add_argument('--mapping-out',
+                        type=str,
+                        dest='mapping_out',
+                        help='For land normalize: write the old_id->new_id '
+                             'mapping to PATH (CSV). Produced in --dry-run '
+                             'too, where it describes the plan.',
+                        default=None)
+    parser.add_argument('--link-profile',
+                        type=str,
+                        dest='link_profile',
+                        help='For land export: which structural link kinds '
+                             'belong to the exported network '
+                             '(citation, citation+reco, all). '
+                             'Never applies to the *fullhtml.csv files, which '
+                             'are the whole-page comparator.',
+                        default=None)
     parser.add_argument('--lang',
                         type=str,
                         help='Language(s) of the project, comma-separated '

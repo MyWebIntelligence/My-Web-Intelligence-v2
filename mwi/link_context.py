@@ -43,15 +43,56 @@ FALLBACK_BLOCK_TAGS = ('div', 'section', 'article')
 SKIP_HREF_PREFIXES = ('mailto:', 'javascript:', 'tel:', 'data:', '#')
 MAX_CLASSES_PER_SEGMENT = 3
 
+# HTML5 sectioning/annex elements and ARIA landmark roles. This is markup
+# vocabulary from two specifications, not content vocabulary: it says where a
+# link sits in the page, never what it talks about.
+SEMANTIC_ASIDE_TAGS = ('nav', 'header', 'footer', 'aside')
+ARIA_LANDMARK_ROLES = frozenset((
+    'navigation', 'banner', 'contentinfo', 'complementary',
+    'menu', 'menubar', 'search', 'tablist',
+))
+LIST_TAGS = ('ul', 'ol')
+MAX_LIST_DEPTH = 4
+MAX_ANCESTOR_TOKENS = 32
+
 _VALID_TOKEN = re.compile(r'^[A-Za-z0-9_-]+$')
 
 
 @dataclass
 class LinkDomInfo:
-    """DOM-level metadata for one ``<a href>`` occurrence in a page."""
+    """DOM-level metadata for one ``<a href>`` occurrence in a page.
+
+    The structural fields below (sprint body-links, T3) are what the link
+    classifier reads. They are counts, lengths and booleans -- never text.
+    ``anchor_chars`` deliberately holds the LENGTH of the anchor text and not
+    the text itself: storing the text is what makes a lexical rule easy to
+    write, and the ground truth excludes it for that very reason.
+
+    They are filled inside the single ``find_all('a')`` loop of
+    :func:`extract_link_dom_map`, and the per-ancestor anchor counts come from
+    one ascending pass, so the marginal cost in HTML parses is nil.
+    """
     dom: str                      # CSS path root -> parent of the <a>
     dom_html: Optional[str]       # outerHTML of the block ancestor, truncated
     block_text: Optional[str]     # text of the block ancestor, truncated
+    # --- structural features (sprint body-links T3) ---
+    anchor_chars: int = 0         # LENGTH of the anchor text, never the text
+    anchor_index: int = 0         # rank among the anchors of the page
+    anchor_total: int = 0
+    block_tag: Optional[str] = None
+    block_anchor_count: int = 0
+    block_anchor_chars: int = 0
+    block_text_len: int = 0       # untruncated, unlike block_text
+    cont_anchor_count: int = 0    # container = closest ancestor with >= 2 <a>
+    cont_anchor_chars: int = 0
+    cont_text_len: int = 0
+    in_semantic_aside: bool = False
+    aside_anchor_chars: int = 0   # of the CLOSEST sectioning/annex ancestor
+    aside_text_len: int = 0
+    in_list: bool = False
+    ancestor_tokens: tuple = ()   # class/id tokens of the ancestors, lowercased
+    same_domain: bool = False
+    has_fragment: bool = False
 
 
 def _context_cap() -> int:
@@ -75,22 +116,22 @@ def _segment(element) -> str:
     return part
 
 
-def build_dom_path(a_tag) -> str:
+def build_dom_path(a_tag, ancestors=None) -> str:
     """CSS-like path from the document root to the direct parent of `a_tag`.
 
     The ``<a>`` itself is not included. ``[document]`` (the BeautifulSoup
-    root) is skipped.
+    root) is skipped. ``ancestors`` lets the caller hand over the chain it has
+    already walked, instead of walking it a second time.
     """
-    segments = []
-    for parent in a_tag.parents:
-        if parent.name is None or parent.name == '[document]':
-            continue
-        segments.append(_segment(parent))
+    if ancestors is None:
+        ancestors = [p for p in a_tag.parents
+                     if p.name is not None and p.name != '[document]']
+    segments = [_segment(parent) for parent in ancestors]
     segments.reverse()
     return ' > '.join(segments)
 
 
-def find_block_ancestor(a_tag):
+def find_block_ancestor(a_tag, ancestors=None):
     """Closest block-level ancestor of `a_tag`.
 
     Strict blocks (``BLOCK_TAGS``) win; the first ``div``/``section``/
@@ -98,7 +139,7 @@ def find_block_ancestor(a_tag):
     neither exists (e.g. ``<a>`` directly under ``<body>``).
     """
     fallback = None
-    for parent in a_tag.parents:
+    for parent in (ancestors if ancestors is not None else a_tag.parents):
         if parent.name in BLOCK_TAGS:
             return parent
         if fallback is None and parent.name in FALLBACK_BLOCK_TAGS:
@@ -139,6 +180,100 @@ def _is_same_page(absolute: str, base_norm: Optional[str]) -> bool:
         return False
 
 
+def _anchor_stats(anchors):
+    """Anchors and anchor-text length per ancestor, in ONE ascending pass.
+
+    A descending ``block.find_all('a')`` per link is quadratic: on a table of
+    contents the block holds 180 anchors in the median and several thousand in
+    the tail. Walking up from each anchor instead is O(anchors x depth).
+
+    ``alive`` keeps a live reference to every counted node: ``id()`` is only
+    unique among *living* objects, and BeautifulSoup is free to release a node
+    whose id we would then read back as somebody else's.
+    """
+    counts, chars, alive = {}, {}, {}
+    for a_tag in anchors:
+        length = len(a_tag.get_text(' ', strip=True))
+        for parent in a_tag.parents:
+            if parent.name is None:
+                break
+            key = id(parent)
+            alive[key] = parent
+            counts[key] = counts.get(key, 0) + 1
+            chars[key] = chars.get(key, 0) + length
+    return counts, chars, alive
+
+
+def _ancestor_features(ancestors, counts):
+    """Structural facts read off one anchor's ancestor chain.
+
+    Returns (aside, in_list, tokens, container) where `aside` is the CLOSEST
+    sectioning/annex ancestor (or None). The caller measures how much prose
+    that element holds: a <header> or <footer> that wraps the whole article --
+    a very common template shape -- is a page wrapper, not an annex, and
+    treating it as one would exile the entire body of the page.
+    """
+    aside = None
+    in_list = False
+    tokens = []
+    container = None
+    for depth, parent in enumerate(ancestors):
+        if aside is None:
+            role = parent.get('role')
+            if parent.name in SEMANTIC_ASIDE_TAGS or (
+                    isinstance(role, str)
+                    and role.strip().lower() in ARIA_LANDMARK_ROLES):
+                aside = parent
+        if parent.name in LIST_TAGS and depth < MAX_LIST_DEPTH:
+            in_list = True
+        if len(tokens) < MAX_ANCESTOR_TOKENS:
+            raw = list(parent.get('class') or [])
+            el_id = parent.get('id')
+            if isinstance(el_id, str):
+                raw.append(el_id)
+            for value in raw:
+                if isinstance(value, str) and _VALID_TOKEN.match(value):
+                    lowered = value.lower()
+                    if lowered not in tokens:
+                        tokens.append(lowered)
+        if container is None and counts.get(id(parent), 0) >= 2:
+            container = parent
+    return aside, in_list, tuple(tokens[:MAX_ANCESTOR_TOKENS]), container
+
+
+def _host_of(url: str) -> str:
+    try:
+        host = (urlparse(url).netloc or '').lower()
+        return host[4:] if host.startswith('www.') else host
+    except Exception:
+        return ''
+
+
+def _resolve_href(href: Optional[str], base_url: str,
+                  base_norm: Optional[str]) -> Optional[str]:
+    """Absolute http(s) URL for one ``<a href>``, or None when it is not a link.
+
+    Single definition of what counts as an outgoing hyperlink, shared by
+    :func:`extract_link_dom_map`, :func:`extract_all_links` and
+    ``body_links.extract_body_links`` so the three can never drift apart
+    (sprint body-links, T2). Drops ``mailto:``/``javascript:``/``tel:``/
+    ``data:``/``#``, anything that does not resolve to http(s), and same-page
+    navigation written as an absolute URL plus a fragment.
+    """
+    href = (href or '').strip()
+    if not href or href.lower().startswith(SKIP_HREF_PREFIXES):
+        return None
+    if href.startswith(('http://', 'https://')):
+        absolute = href
+    else:
+        absolute = urljoin(base_url, href)
+        if not absolute.startswith(('http://', 'https://')):
+            return None
+    if _is_same_page(absolute, base_norm):
+        return None
+    return absolute
+
+
 def _quiet_soup(raw_html: str, parser: str):
     """BeautifulSoup parse with the noisy XMLParsedAsHTMLWarning silenced.
 
@@ -157,14 +292,22 @@ def _quiet_soup(raw_html: str, parser: str):
 
 
 def extract_link_dom_map(raw_html: Optional[str], base_url: str,
-                         soup=None) -> Dict[str, LinkDomInfo]:
+                         soup=None, rank=None) -> Dict[str, LinkDomInfo]:
     """Map each crawlable ``<a href>`` of `raw_html` to its LinkDomInfo.
 
     Keys are the normalized absolute URL plus a relaxed variant
-    (lowercase, no trailing slash). First occurrence wins (consistent with
-    the composite primary key on expressionlink: first link wins too).
+    (lowercase, no trailing slash).
 
-    Never raises — returns ``{}`` on any failure. Reuses `soup` when the
+    Which occurrence wins, when the same URL appears twice:
+
+    * ``rank`` is None (default, historical behaviour): the FIRST one.
+    * ``rank`` is a callable ``LinkDomInfo -> int``: the one with the LOWEST
+      rank. Menus sit at the top of the document -- a link that is both in the
+      menu and cited in the body would otherwise always be recorded as
+      navigation, and with it the wrong ``context``/``dom``. The callable is
+      injected rather than imported so this module stays a leaf.
+
+    Never raises -- returns ``{}`` on any failure. Reuses `soup` when the
     caller already parsed the page (crawl path).
     """
     try:
@@ -177,34 +320,68 @@ def extract_link_dom_map(raw_html: Optional[str], base_url: str,
         context_cap = _context_cap()
         mapping: Dict[str, LinkDomInfo] = {}
         base_norm = _same_page_norm(base_url)
+        base_host = _host_of(base_url)
 
-        for a_tag in soup.find_all('a', href=True):
-            href = (a_tag.get('href') or '').strip()
-            if not href or href.lower().startswith(SKIP_HREF_PREFIXES):
-                continue
-            if href.startswith(('http://', 'https://')):
-                absolute = href
-            else:
-                absolute = urljoin(base_url, href)
-                if not absolute.startswith(('http://', 'https://')):
-                    continue
+        anchors = soup.find_all('a', href=True)
+        counts, chars, _alive = _anchor_stats(anchors)
+        text_len_cache: Dict[int, int] = {}
 
-            if _is_same_page(absolute, base_norm):
+        def _text_len(node) -> int:
+            if node is None:
+                return 0
+            key_ = id(node)
+            if key_ not in text_len_cache:
+                text_len_cache[key_] = len(node.get_text(' ', strip=True))
+            return text_len_cache[key_]
+
+        total = len(anchors)
+        for index, a_tag in enumerate(anchors):
+            absolute = _resolve_href(a_tag.get('href'), base_url, base_norm)
+            if absolute is None:
                 continue
             try:
                 key = normalize_url(absolute)
             except Exception:
                 continue
 
-            block = find_block_ancestor(a_tag)
+            ancestors = [p for p in a_tag.parents
+                         if p.name is not None and p.name != '[document]']
+            block = find_block_ancestor(a_tag, ancestors=ancestors)
+            aside, in_list, tokens, container = _ancestor_features(
+                ancestors, counts)
+
             info = LinkDomInfo(
-                dom=build_dom_path(a_tag),
+                dom=build_dom_path(a_tag, ancestors=ancestors),
                 dom_html=str(block)[:dom_html_cap] if block is not None else None,
                 block_text=(block.get_text(' ', strip=True)[:context_cap]
                             if block is not None else None),
+                anchor_chars=len(a_tag.get_text(' ', strip=True)),
+                anchor_index=index,
+                anchor_total=total,
+                block_tag=block.name if block is not None else None,
+                block_anchor_count=counts.get(id(block), 0) if block is not None else 0,
+                block_anchor_chars=chars.get(id(block), 0) if block is not None else 0,
+                block_text_len=_text_len(block),
+                cont_anchor_count=(counts.get(id(container), 0)
+                                   if container is not None else 0),
+                cont_anchor_chars=(chars.get(id(container), 0)
+                                   if container is not None else 0),
+                cont_text_len=_text_len(container),
+                in_semantic_aside=aside is not None,
+                aside_anchor_chars=(chars.get(id(aside), 0)
+                                    if aside is not None else 0),
+                aside_text_len=_text_len(aside),
+                in_list=in_list,
+                ancestor_tokens=tokens,
+                same_domain=bool(base_host) and _host_of(absolute) == base_host,
+                has_fragment='#' in (a_tag.get('href') or ''),
             )
-            mapping.setdefault(key, info)
-            mapping.setdefault(_relaxed_key(key), info)
+            for candidate in (key, _relaxed_key(key)):
+                previous = mapping.get(candidate)
+                if previous is None:
+                    mapping[candidate] = info
+                elif rank is not None and rank(info) < rank(previous):
+                    mapping[candidate] = info
         return mapping
     except Exception:
         return {}
@@ -238,16 +415,8 @@ def extract_all_links(raw_html: Optional[str], base_url: str,
 
         base_norm = _same_page_norm(base_url)
         for a_tag in soup.find_all('a', href=True):
-            href = (a_tag.get('href') or '').strip()
-            if not href or href.lower().startswith(SKIP_HREF_PREFIXES):
-                continue
-            if href.startswith(('http://', 'https://')):
-                absolute = href
-            else:
-                absolute = urljoin(base_url, href)
-                if not absolute.startswith(('http://', 'https://')):
-                    continue
-            if _is_same_page(absolute, base_norm):
+            absolute = _resolve_href(a_tag.get('href'), base_url, base_norm)
+            if absolute is None:
                 continue
             links.append(absolute)
         return links
@@ -438,15 +607,21 @@ def host_path_key(url: str) -> Optional[str]:
         return None
 
 
-def add_to_url_index(index: tuple, eid: int, url: str) -> None:
+def add_to_url_index(index: tuple, eid: int, url: str,
+                     rules: Optional[Dict] = None) -> None:
     """Index one expression URL under the 3 keys.
 
     A key already mapped to a DIFFERENT id becomes None (ambiguous ->
     unusable for lookup, never a wrong match).
+
+    ``rules`` freezes the normalization instead of reading the local
+    configuration. The benchmark needs it: without it the index -- and
+    therefore the measured metrics -- depend on the machine the bench runs
+    on (sprint body-links, T0). None keeps the historical behaviour.
     """
     exact, relaxed, by_host_path = index
     try:
-        norm = normalize_url(url) if url else url
+        norm = normalize_url(url, rules) if url else url
     except Exception:
         norm = url
     if not norm:
@@ -463,19 +638,27 @@ def add_to_url_index(index: tuple, eid: int, url: str) -> None:
             table[key] = eid
 
 
-def build_url_index(pairs) -> tuple:
-    """Build the 3-key URL index from (expression_id, url) pairs."""
+def build_url_index(pairs, rules: Optional[Dict] = None) -> tuple:
+    """Build the 3-key URL index from (expression_id, url) pairs.
+
+    ``rules`` freezes the normalization; see :func:`add_to_url_index`.
+    """
     index = ({}, {}, {})
     for eid, url in pairs:
-        add_to_url_index(index, eid, url)
+        add_to_url_index(index, eid, url, rules)
     return index
 
 
-def resolve_url_in_index(index: tuple, href: str) -> Optional[int]:
-    """Resolve a href to an indexed expression id. None on miss/ambiguous."""
+def resolve_url_in_index(index: tuple, href: str,
+                         rules: Optional[Dict] = None) -> Optional[int]:
+    """Resolve a href to an indexed expression id. None on miss/ambiguous.
+
+    ``rules`` must match the rules the index was built with; see
+    :func:`add_to_url_index`.
+    """
     exact, relaxed, by_host_path = index
     try:
-        norm = normalize_url(href)
+        norm = normalize_url(href, rules)
     except Exception:
         norm = href
     if not norm:

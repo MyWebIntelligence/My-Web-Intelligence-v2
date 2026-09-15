@@ -104,7 +104,9 @@ def test_land_addterm_addurl_and_crawl_readable_export(fresh_db, tmp_path, monke
 
     calls = {"count": 0}
 
-    def fake_export_land(land_obj, export_type, minrel, fullhtml=False):
+    # **kwargs: production gained link_profile= with the body-links
+    # sprint; a rigid double signature would raise TypeError here.
+    def fake_export_land(land_obj, export_type, minrel, **kwargs):
         calls["count"] += 1
         return None
 
@@ -968,7 +970,7 @@ def test_core_export_land_and_tags(monkeypatch, fresh_db):
     captured = {"land": None, "type": None, "minrel": None, "tags": 0}
 
     class DummyExport:
-        def __init__(self, export_type, land_obj, minimum, fullhtml=False):
+        def __init__(self, export_type, land_obj, minimum, fullhtml=False, **kwargs):
             captured["land"] = land_obj
             captured["type"] = export_type
             captured["minrel"] = minimum
@@ -1167,7 +1169,11 @@ async def test_core_crawl_expression_with_media_analysis(monkeypatch, fresh_db):
     dummy_response = DummyAiohttpResponse(status=200, text=html)
     session = DummySession(dummy_response)
 
-    def fake_extract(html_text, include_links=True, include_comments=False, include_images=True, output_format='markdown'):
+    # **kwargs: production also passes url= and favor_recall= since the
+    # body-links sprint; a rigid fake signature would raise TypeError,
+    # be swallowed by the extraction try/except, and silently turn this
+    # test into a no-content assertion.
+    def fake_extract(html_text, output_format='markdown', **kwargs):
         if output_format == 'markdown':
             return "Science article " * 10 + "\n![IMAGE](https://example.com/pic.jpg)"
         return "<html><body><img src=\"https://example.com/pic.jpg\" /></body></html>"

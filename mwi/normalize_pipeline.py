@@ -128,8 +128,14 @@ def _collect_pairs(land: model.Land) -> Tuple[List[Tuple[int, str, str, bool]],
         if len(members) > 1:
             collision_groups += 1
 
-    return (to_rename, _resolve_chains(to_merge),
-            {'collision_groups': collision_groups})
+    # Sorted by id: _collect_pairs walks dicts built from a SELECT with no
+    # ORDER BY, so without this the plan order -- and therefore the mapping,
+    # the execution order and the --limit slice -- would depend on SQLite's
+    # query plan. The key is total: an id belongs to exactly one of the two
+    # lists (a group winner is renamed, a duplicate is merged, never both).
+    to_rename.sort(key=lambda row: row[0])
+    merged = sorted(_resolve_chains(to_merge), key=lambda row: row[0])
+    return to_rename, merged, {'collision_groups': collision_groups}
 
 
 def _resolve_chains(
@@ -227,6 +233,46 @@ def _backfill_if_empty(canonical: model.Expression,
     return filled
 
 
+_LINK_BACKFILL_FIELDS = ('context', 'dom', 'dom_html', 'kind_rule', 'origin')
+
+
+def _absorb_link(survivor, doomed) -> None:
+    """Fold a losing edge's metadata into the surviving one before deletion.
+
+    When two expressions merge, an edge of the duplicate can collide with an
+    edge of the canonical on the composite primary key. The loser is deleted —
+    silently taking its ``context``/``dom`` with it since migration 012, and
+    its ``kind`` since 014. Keeping a ``nav`` edge while destroying the
+    ``body`` one would turn a URL canonicalisation into a precision
+    regression, so the best kind wins and empty fields are filled in.
+
+    Never raises: a merge must not fail over metadata.
+    """
+    try:
+        from . import body_links
+        changed = {}
+        best = body_links.KIND_RANK.get(
+            survivor.kind or body_links.KIND_DEFAULT, 0)
+        challenger = body_links.KIND_RANK.get(
+            doomed.kind or body_links.KIND_DEFAULT, 0)
+        if challenger < best:
+            changed['kind'] = doomed.kind
+            changed['kind_rule'] = doomed.kind_rule
+        for field in _LINK_BACKFILL_FIELDS:
+            if field in changed:
+                continue
+            if _is_empty(getattr(survivor, field, None)) and \
+                    not _is_empty(getattr(doomed, field, None)):
+                changed[field] = getattr(doomed, field)
+        if changed:
+            link_model = model.ExpressionLink
+            link_model.update(**changed).where(
+                (link_model.source == survivor.source_id)
+                & (link_model.target == survivor.target_id)).execute()
+    except Exception as exc:
+        print(f"  link metadata absorption skipped: {exc}")
+
+
 def _merge_one(duplicate: model.Expression,
                canonical: model.Expression,
                reset_status: bool = False) -> Dict[str, int]:
@@ -244,8 +290,10 @@ def _merge_one(duplicate: model.Expression,
                                 & (Link.target == duplicate)).execute()
             dropped_in += 1
             continue
-        if Link.select().where((Link.source == src_id)
-                               & (Link.target == canonical)).exists():
+        survivor = Link.get_or_none((Link.source == src_id)
+                                    & (Link.target == canonical))
+        if survivor is not None:
+            _absorb_link(survivor, link)
             Link.delete().where((Link.source == src_id)
                                 & (Link.target == duplicate)).execute()
             dropped_in += 1
@@ -264,8 +312,10 @@ def _merge_one(duplicate: model.Expression,
                                 & (Link.target == tgt_id)).execute()
             dropped_out += 1
             continue
-        if Link.select().where((Link.source == canonical)
-                               & (Link.target == tgt_id)).exists():
+        survivor = Link.get_or_none((Link.source == canonical)
+                                    & (Link.target == tgt_id))
+        if survivor is not None:
+            _absorb_link(survivor, link)
             Link.delete().where((Link.source == duplicate)
                                 & (Link.target == tgt_id)).execute()
             dropped_out += 1
@@ -302,7 +352,8 @@ def normalize_land(land: model.Land,
                    dry_run: bool = False,
                    limit: int = 0,
                    reset_status: bool = False,
-                   verbose: bool = False) -> Dict[str, int]:
+                   verbose: bool = False,
+                   mapping_sink=None) -> Dict[str, int]:
     """Apply the URL normalization pipeline retroactively to a Land.
 
     Returns a dict with operation counts. When `dry_run=True`, no DB write
@@ -315,8 +366,17 @@ def normalize_land(land: model.Land,
           flush=True)
 
     if limit:
-        to_rename = to_rename[:limit]
-        to_merge = to_merge[:max(0, limit - len(to_rename))]
+        # A cap on GROUPS, not on elementary operations. The previous formula
+        # spent the budget on renames first, so on a land with more pending
+        # renames than `limit` no merge ever ran -- and merges are the risky
+        # half (edge remapping, backfill, cascading delete), precisely the one
+        # an operator slices in order to rehearse. Selecting whole groups also
+        # preserves the invariant that a collision group is never split.
+        keep_canonical = {row[2] for row in to_rename[:limit]}
+        keep_canonical |= {row[3] for row in to_merge[:limit]}
+        chosen = sorted(keep_canonical)[:limit]
+        to_rename = [row for row in to_rename if row[2] in chosen]
+        to_merge = [row for row in to_merge if row[3] in chosen]
 
     totals = {
         'renamed': 0,
@@ -334,8 +394,16 @@ def normalize_land(land: model.Land,
         'skipped': 0,
     }
 
+    def _emit(old_id, new_id, old_url, canonical_url):
+        """Report one id/url change. A sink, not a path: the pipeline stays
+        free of file I/O so a test can pass `list.append`."""
+        if mapping_sink is not None:
+            mapping_sink((old_id, new_id, old_url, canonical_url))
+
     for expr_id, old_url, new_url, promoted in to_rename:
         label = 'PROMOTE' if promoted else 'RENAME'
+        # old_id == new_id marks a renaming: the row survives, its URL moved.
+        _emit(expr_id, expr_id, old_url, new_url)
         if dry_run:
             totals['renamed'] += 1
             totals['promoted'] += 1 if promoted else 0
@@ -358,6 +426,7 @@ def normalize_land(land: model.Land,
             totals['skipped'] += 1
 
     for dup_id, dup_url, canon_id, canon_url in to_merge:
+        _emit(dup_id, canon_id, dup_url, canon_url)
         if dry_run:
             totals['merged'] += 1
             if verbose:
