@@ -71,10 +71,12 @@ this is graph quality and a migration deliverable, not a metric.
   unaffected. `NULL` is exported as `body`. Raw-only edges of the whole-page
   network carry an EMPTY kind, never `body`: a link absent from the body has
   no structural zone to report.
-- **`--link-profile`** on `land export` (`editorial` by default,
-  `editorial+reco`, `all`), overridable through `settings.link_profiles`. An
+- **`--link-profile`** on `land export` (`citation` by default,
+  `citation+reco`, `all`), overridable through `settings.link_profiles`. An
   unknown name falls back to the default with a warning rather than raising
-  mid-export.
+  mid-export. `citation` names what the profile selects: the links attributable
+  to the text's author (body plus reference blocks), as opposed to the links
+  the site's own apparatus contributes (`nav`, `toc`, `reco`).
 - **One point of control.** The filter is applied inside
   `Export.get_sql_cursor`, which every link query routes through. The
   whole-page network executes its SQL directly and is therefore **structurally
@@ -95,7 +97,7 @@ NAV 8, META_REFTOOL 7, DATA_LISTING 3, TOC 2, NOMAJ 2, EDIT 2, META_BOILER 1.
   still short of the 0.95 target. Reaching it requires excluding a second
   family (reference tools and listings: 0.9621), which is a scoping decision,
   not a rule-writing one.
-- No structural rule found separates recommendation blocks from editorial
+- No structural rule found separates recommendation blocks from genuine
   citations at a useful rate. The container prose ratio separates them in the
   median (0.93 against 0.48) but the distributions overlap: every candidate
   threshold removes roughly as many true citations as false ones. The best
@@ -126,7 +128,7 @@ NAV 8, META_REFTOOL 7, DATA_LISTING 3, TOC 2, NOMAJ 2, EDIT 2, META_BOILER 1.
   callable; with it, a URL present both in the menu and in the body keeps its
   body occurrence. First-occurrence-wins was structurally biased toward
   navigation, which sits at the top of the document (median anchor position
-  0.16 against 0.49 for an editorial link), and it dragged `context`/`dom`
+  0.16 against 0.49 for a body link), and it dragged `context`/`dom`
   along with it.
 - **Two rules, both qualified by measurement.** A sectioning element that is
   mostly prose is NOT an annex -- templates routinely wrap a whole article in
@@ -142,9 +144,9 @@ NAV 8, META_REFTOOL 7, DATA_LISTING 3, TOC 2, NOMAJ 2, EDIT 2, META_BOILER 1.
   deleted the losing edge outright, silently dropping its `context`/`dom`
   since 012 and its `kind` since 014: `normalize_pipeline._absorb_link` now
   folds the better kind and the non-empty fields into the survivor first.
-- **Measured** (`make bench-links`, profile `editorial`): precision **0.8792
+- **Measured** (`make bench-links`, profile `citation`): precision **0.8792
   -> 0.9162**, recall 0.9249 -> 0.9210. False positives 82 -> 55, of which
-  table-of-contents links fall from 27 to **2**. One editorial citation out of
+  table-of-contents links fall from 27 to **2**. One citation out of
   659 is lost to the classification (coded `EDIT_LIST`). Remaining false
   positives: RECO 21, X_OTHER 9, NAV 8, META_REFTOOL 7, DATA_LISTING 3,
   NOMAJ 2, TOC 2, EDIT 2, META_BOILER 1.
@@ -216,8 +218,8 @@ NAV 8, META_REFTOOL 7, DATA_LISTING 3, TOC 2, NOMAJ 2, EDIT 2, META_BOILER 1.
 - **Baseline** (commit `cd850ea`, extractor replayed): precision **0.8812**
   (+/- 0.0247), weighted recall **0.8557** (+/- 0.0196), TP 536 / FP 72 / FN 123.
   False positives: TOC 27, RECO 17, NAV 8, META_REFTOOL 7, X_OTHER 6,
-  DATA_LISTING 3, NOMAJ 2, EDIT 2 — **no REF_BIB**, which the gold labels as
-  editorial. Loss attribution of the 123 misses: 26 recovered by Trafilatura's
+  DATA_LISTING 3, NOMAJ 2, EDIT 2 — **no REF_BIB**, which the gold counts as a
+  citation (`place_group` EDITORIAL, an older naming). Loss attribution of the 123 misses: 26 recovered by Trafilatura's
   HTML output, 33 more by `favor_recall` on that leg, 64 reachable only from the
   raw HTML. No migration, no model change.
 

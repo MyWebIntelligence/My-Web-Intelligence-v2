@@ -172,7 +172,7 @@ def command_input():
                         dest='link_profile',
                         help='For land export: which structural link kinds '
                              'belong to the exported network '
-                             '(editorial, editorial+reco, all). '
+                             '(citation, citation+reco, all). '
                              'Never applies to the *fullhtml.csv files, which '
                              'are the whole-page comparator.',
                         default=None)

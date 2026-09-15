@@ -75,12 +75,13 @@ BENCH_URL_RULES = {
 
 VARIANTS = ('current', 'md', 'html', 'md+html', 'raw')
 
-# Link profiles. `editorial` is the default network: body plus reference
-# blocks. Reference blocks stay IN -- the ground truth labels them
-# EDITORIAL, and excluding them would convert 64 true positives into losses.
+# Link profiles. `citation` is the default network: body plus reference
+# blocks -- the links attributable to the text's author. Reference blocks stay
+# IN: the ground truth counts them as citations (place_group EDITORIAL, an
+# older naming), and excluding them would convert 64 true positives into losses.
 PROFILES = {
-    'editorial': ('body', 'ref'),
-    'editorial+reco': ('body', 'ref', 'reco'),
+    'citation': ('body', 'ref'),
+    'citation+reco': ('body', 'ref', 'reco'),
     'all': None,
 }
 Z95 = 1.959964
@@ -305,7 +306,7 @@ def extract_links(raw_html: str, base_url: str, *, variant: str,
 
 def predict(conn: sqlite3.Connection, idx: tuple, rows: Sequence[GoldRow], *,
             variant: str, counters: Counters, favor_recall: bool = False,
-            profile: str = 'editorial'):
+            profile: str = 'citation'):
     """Return the gold keys the extractor would keep.
 
     A gold pair is kept when the source page yields a link resolving to the
@@ -328,7 +329,7 @@ def predict(conn: sqlite3.Connection, idx: tuple, rows: Sequence[GoldRow], *,
         source_id = link_context.resolve_url_in_index(idx, source_url,
                                                       rules=BENCH_URL_RULES)
         found = {}
-        kinds_allowed = PROFILES.get(profile, PROFILES['editorial'])
+        kinds_allowed = PROFILES.get(profile, PROFILES['citation'])
         for url, kind in extract_links(raw_html, source_url, variant=variant,
                                        counters=counters,
                                        favor_recall=favor_recall):
@@ -493,7 +494,7 @@ def _fmt(value: float, digits: int = 4) -> str:
 def write_summary(out_dir: str, result: BenchResult, *, gold_sha256: str,
                   gold_name: str, corpus_name: str, variant: str,
                   counters: Counters, favor_recall: bool = False,
-                  profile: str = 'editorial') -> None:
+                  profile: str = 'citation') -> None:
     """Deterministic report: no clock, no host, no absolute path."""
     rows = result.rows
     strata = {}
@@ -540,7 +541,7 @@ def write_summary(out_dir: str, result: BenchResult, *, gold_sha256: str,
     add('  citations captured    {}'.format(_fmt(result.tp_weighted, 0)))
     add('  citations missed      {}'.format(_fmt(result.fn_weighted, 0)))
     add('  edges kept (volume)   {}'.format(_fmt(result.kept_weighted, 0)))
-    add('  editorial citations   {}'.format(_fmt(result.gold_weighted, 0)))
+    add('  citations total       {}'.format(_fmt(result.gold_weighted, 0)))
     add('')
     add('work counters (deterministic; wall clock lives in bench_perf.json)')
     lines.extend(counters.as_lines())
@@ -604,7 +605,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument('--out-dir', default='benchmarks/body_links/out')
     parser.add_argument('--extractor', choices=VARIANTS, default='current')
     parser.add_argument('--link-profile', choices=sorted(PROFILES),
-                        default='editorial')
+                        default='citation')
     parser.add_argument('--favor-recall', action='store_true',
                         help='Diagnostic: widen Trafilatura on the HTML leg.')
     args = parser.parse_args(argv)

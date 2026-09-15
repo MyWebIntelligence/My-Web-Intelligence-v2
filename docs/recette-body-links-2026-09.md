@@ -51,8 +51,8 @@ est la dérive entre le crawl de juillet et le code d'aujourd'hui, pas un gain.
 
 | profil | précision | rappel |
 |---|---|---|
-| `editorial` (défaut) | 0,9162 | 0,9210 |
-| `editorial+reco` | 0,9162 | 0,9210 |
+| `citation` (défaut) | 0,9162 | 0,9210 |
+| `citation+reco` | 0,9162 | 0,9210 |
 | `all` | 0,8792 | 0,9249 |
 
 `all` retombe exactement sur l'état pré-T3 : la classification est la seule

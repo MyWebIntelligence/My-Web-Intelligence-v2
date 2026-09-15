@@ -869,7 +869,7 @@ python mywi.py land export --name="MyResearchTopic" --type=EXPORT_TYPE [--minrel
   - `*_pageslinks.csv`: All expression links (source_id, source_url, source_domain_id, target_id, target_url, target_domain_id, context, dom, **kind**). Self-loops (source = target) are never exported. `kind` is the structural zone of the link (`body`, `nav`, `toc`, `reco`, `ref`) — see **Link profiles** below; rows written before migration 014 have no kind and are exported as `body`.
   - `*_domainnodes.csv`: Domain nodes with aggregations (id, name, title, description, http_status, nbexpressions, average_relevance, first_expression_date, last_expression_date)
   - `*_domainlinks.csv`: Aggregated inter-domain links (source_domain_id, source_domain_name, target_domain_id, target_domain_name, link_count)
-  - With `--fullhtml=TRUE` (requires a land crawled with `--fullhtml`), emits the 4 `*fullhtml.csv` files **instead of** the base 4 — the flag *switches* which network is exported (not additive), so run a separate export without it to also get the MyWI network. These are the **raw link network** rebuilt from *every* `<a href>` in `expression.html` (closed network — targets restricted to corpus pages qualified by `--minrel`). `*_pageslinksfullhtml.csv` uses Gephi columns `Source,Target,Weight` (Weight left empty) plus `weightbody` (`1` if the edge exists in `ExpressionLink`), `weighthtml` (raw anchor multiplicity for edges found only in the stored HTML) and `citation` (`1` if the link appears in the source page's `readable` markdown — an editorial citation written in the text; `0` for nav/footer/raw-only links or when the readable is missing); `*_domainlinksfullhtml.csv` uses `in_mwi` + `out_mwi`. This lets you compare MyWI's *editorial* link network (`ExpressionLink`, from the readable content) to a classic crawler's *whole-page* network. The export prints a 3-way coverage report (raw∩mywi / raw\mywi / mywi\raw). Without stored HTML the files are emitted empty (header only) with a warning.
+  - With `--fullhtml=TRUE` (requires a land crawled with `--fullhtml`), emits the 4 `*fullhtml.csv` files **instead of** the base 4 — the flag *switches* which network is exported (not additive), so run a separate export without it to also get the MyWI network. These are the **raw link network** rebuilt from *every* `<a href>` in `expression.html` (closed network — targets restricted to corpus pages qualified by `--minrel`). `*_pageslinksfullhtml.csv` uses Gephi columns `Source,Target,Weight` (Weight left empty) plus `weightbody` (`1` if the edge exists in `ExpressionLink`), `weighthtml` (raw anchor multiplicity for edges found only in the stored HTML) and `citation` (`1` if the link appears in the source page's `readable` markdown — a citation written in the text by the author; `0` for nav/footer/raw-only links or when the readable is missing); `*_domainlinksfullhtml.csv` uses `in_mwi` + `out_mwi`. This lets you compare MyWI's *citation* link network (`ExpressionLink`, from the readable content) to a classic crawler's *whole-page* network. The export prints a 3-way coverage report (raw∩mywi / raw\mywi / mywi\raw). Without stored HTML the files are emitted empty (header only) with a warning.
 - `nodesjson`: **Domain** graph as a force-graph `{nodes, links}` JSON file (for `react-force-graph`, D3, Sigma). One node per domain carrying at least one expression with `relevance >= minrel`, with 9 analytical fields (`id, name, title, description, keywords, nbexpressions, average_relevance, first_expression_date, last_expression_date`) **plus** `corpus` — a sorted array of that domain's expressions, each a nested object `{title, urlarticle, description, published_at}`. Links are directed inter-domain edges with `value` = page-to-page link count. Output is deterministic. Conforms to `docs/graph.schema.json`.
 - `pagesjson`: **Page** graph as a force-graph `{nodes, links}` JSON file. One node per `Expression` with the `pagecsv` fields (minus `depth`/`readable`), `tags` as a sorted array, and `seorank` as a nested object (`{}` when absent). Absent values are JSON `null` (not the CSV `na` sentinel). Links are page-to-page edges of the closed `minrel` network (intra-domain kept, no aggregation, self-loops excluded). Output is deterministic. Conforms to `docs/graph.schema.json`.
 - `htmldump` (sprint-html E): Zip archive of the raw HTML stored via
@@ -894,7 +894,7 @@ python mywi.py land export --name="AsthmaResearch" --type=nodelinkcsv --link-pro
 #### Link profiles (`--link-profile`)
 
 Every link carries a **structural kind** telling where it sits in the source
-page: `body` (the editorial flow), `nav` (menus, headers, footers), `toc`
+page: `body` (the main text flow), `nav` (menus, headers, footers), `toc`
 (tables of contents and anchor grids), `reco` (recommendation blocks), `ref`
 (reference blocks). The kind is decided by deterministic **structural** rules
 only — DOM position, sectioning ancestors, anchor density, prose share — never
@@ -902,8 +902,8 @@ by the words on the page, so they transfer to any language.
 
 | profile | kinds exported |
 |---|---|
-| `editorial` (default) | `body`, `ref` |
-| `editorial+reco` | `body`, `ref`, `reco` |
+| `citation` (default) | `body`, `ref` |
+| `citation+reco` | `body`, `ref`, `reco` |
 | `all` | every kind |
 
 Reference blocks are **kept** by default: they are citations, and excluding

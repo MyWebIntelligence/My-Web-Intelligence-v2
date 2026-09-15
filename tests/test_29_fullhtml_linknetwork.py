@@ -3,7 +3,7 @@
 Covers:
 - mwi.link_context.extract_all_links (append-only, duplicates, filtering).
 - The closed-network page/domain link CSVs added to nodelinkcsv under
-  --fullhtml=TRUE: the union of the editorial (ExpressionLink) graph and the
+  --fullhtml=TRUE: the union of the citation (ExpressionLink) graph and the
   raw-only HTML edges — weightbody/weighthtml, Gephi columns, minrel scoping.
 - Same-page '#' anchor filtering (sprint R2.B): absolute URL + fragment to the
   source page must not create self-loops.
@@ -397,7 +397,7 @@ class TestClosedNetworkDomainLinks:
         # Inter-domain only: (b->a) from body E3->E1 & E3->E2; (a->b) from the
         # raw-only footer E1->E3 (weighthtml=2).
         assert set(rows.keys()) == {(d["d_a"], d["d_b"]), (d["d_b"], d["d_a"])}
-        # site-b -> site-a carries the two editorial edges -> in_mwi=2, out_mwi=0
+        # site-b -> site-a carries the two citation edges -> in_mwi=2, out_mwi=0
         assert rows[(d["d_b"], d["d_a"])]["in_mwi"] == "2"
         assert rows[(d["d_b"], d["d_a"])]["out_mwi"] == "0"
         # site-a -> site-b is the raw-only footer -> in_mwi=0, out_mwi=2

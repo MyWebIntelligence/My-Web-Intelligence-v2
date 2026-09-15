@@ -95,8 +95,8 @@ class TestProfileFiltering:
         kinds = sorted(r[header.index('kind')] for r in rows[1:])
         assert kinds == ['body', 'body', 'nav', 'reco', 'ref', 'toc']
 
-    def test_editorial_plus_reco_adds_reco_only(self, linked_land, tmp_path):
-        _export(linked_land['land'], tmp_path, 'e', profile='editorial+reco')
+    def test_citation_plus_reco_adds_reco_only(self, linked_land, tmp_path):
+        _export(linked_land['land'], tmp_path, 'e', profile='citation+reco')
 
         rows = _rows(str(tmp_path / 'e_pageslinks.csv'))
         header = rows[0]
@@ -135,7 +135,7 @@ class TestWholePageNetworkIsNeverFiltered:
             expression.save()
 
         strict = export_module.Export('nodelinkcsv', land, 1, fullhtml=True,
-                                      link_profile='editorial')
+                                      link_profile='citation')
         strict.write('nodelinkcsv', str(tmp_path / 'strict'))
         wide = export_module.Export('nodelinkcsv', land, 1, fullhtml=True,
                                     link_profile='all')

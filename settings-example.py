@@ -105,25 +105,26 @@ link_favor_recall = True
 # longueur moyenne d'une phrase dans une langue donnee, un ratio non.
 # - link_kind_grid_anchors : nombre d'ancres a partir duquel un conteneur est
 #   une grille (sommaire, menu). Mediane mesuree : 180 ancres pour un
-#   sommaire, 1 pour un lien editorial.
+#   sommaire, 1 pour un lien du corps.
 # - link_kind_cout_min : part minimale de texte HORS ancres pour qu'un bloc
 #   compte comme de la prose. Mesure sur le corpus code : 0,95 pour un
-#   paragraphe editorial, 0,36 pour un bloc de recommandation, 0,29 pour un
+#   paragraphe du corps, 0,36 pour un bloc de recommandation, 0,29 pour un
 #   sommaire, 0,04 pour un menu. La precision est plate sur [0,50 ; 0,85] et
 #   le rappel s'y effondre : on prend le bord bas du plateau.
 link_kind_grid_anchors = 8
 link_kind_cout_min = 0.50
 
 # Profils de liens a l export (sprint body-links T4). Quelles natures
-# structurelles appartiennent au reseau exporte. `editorial` est le defaut :
-# corps + blocs de references. Les references restent DEDANS : le jeu de
-# verite les etiquette comme editoriales, et les exclure convertirait des
-# citations authentiques en pertes (rappel 0,92 -> 0,76 mesure).
+# structurelles appartiennent au reseau exporte. `citation` est le defaut :
+# corps + blocs de references, soit les liens attribuables a l auteur du texte.
+# Les references restent DEDANS : le jeu de verite les compte comme des
+# citations, et les exclure convertirait des citations authentiques en pertes
+# (rappel 0,92 -> 0,76 mesure).
 # `None` = aucun filtre. Le fichier page entiere (*pageslinksfullhtml.csv)
 # n est JAMAIS filtre : c est le comparateur qui valide le sprint.
 link_profiles = {
-    "editorial": ("body", "ref"),
-    "editorial+reco": ("body", "ref", "reco"),
+    "citation": ("body", "ref"),
+    "citation+reco": ("body", "ref", "reco"),
     "all": None,
 }
 

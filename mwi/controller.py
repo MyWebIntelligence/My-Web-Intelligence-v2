@@ -1630,7 +1630,7 @@ class LandController:
             of expression.html (requires a land crawled with --fullhtml).
             pageslinksfullhtml carries weight (anchor multiplicity) and in_mywi
             (1 if the edge also exists in ExpressionLink), enabling a direct
-            comparison with the MyWI editorial-link network.
+            comparison with the MyWI citation-link network.
         """
         minimum_relevance = 1
         core.check_args(args, ('name', 'type'))

@@ -623,7 +623,7 @@ Types : `pagecsv`, `fullpagecsv`, `nodecsv`, `pagegexf`, `nodegexf`, `mediacsv`,
 #### Profils de liens (`--link-profile`)
 
 Chaque lien porte un **kind** structurel qui dit où il se situe dans la page
-source : `body` (le fil éditorial), `nav` (menus, en-têtes, pieds de page),
+source : `body` (le fil du texte), `nav` (menus, en-têtes, pieds de page),
 `toc` (sommaires et grilles d'ancres), `reco` (blocs de recommandation),
 `ref` (blocs de références). Le kind est décidé par des règles **structurelles**
 déterministes — position DOM, ancêtres de sectionnement, densité d'ancres, part
@@ -631,8 +631,8 @@ de prose — jamais par les mots de la page : elles valent pour toutes les langu
 
 | profil | kinds exportés |
 |---|---|
-| `editorial` (défaut) | `body`, `ref` |
-| `editorial+reco` | `body`, `ref`, `reco` |
+| `citation` (défaut) | `body`, `ref` |
+| `citation+reco` | `body`, `ref`, `reco` |
 | `all` | tous les kinds |
 
 Les blocs de références sont **conservés** par défaut : ce sont des citations,

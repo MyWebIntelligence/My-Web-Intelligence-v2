@@ -33,15 +33,16 @@ from . import link_context
 from .link_context import extract_all_links, extract_markdown_links
 
 
-DEFAULT_LINK_PROFILE = 'editorial'
+DEFAULT_LINK_PROFILE = 'citation'
 
-# Which structural kinds belong to an exported network. `editorial` is the
-# default: body plus reference blocks. Reference blocks stay IN — the ground
-# truth labels them editorial, and excluding them converts genuine citations
-# into losses. Overridable via settings.link_profiles.
+# Which structural kinds belong to an exported network. `citation` is the
+# default: body plus reference blocks — the links attributable to the text's
+# author. Reference blocks stay IN: the ground truth counts them as citations
+# (place_group EDITORIAL in gold_v1, an older naming), and excluding them
+# converts genuine citations into losses. Overridable via settings.link_profiles.
 DEFAULT_LINK_PROFILES = {
-    'editorial': ('body', 'ref'),
-    'editorial+reco': ('body', 'ref', 'reco'),
+    'citation': ('body', 'ref'),
+    'citation+reco': ('body', 'ref', 'reco'),
     'all': None,
 }
 
@@ -743,7 +744,7 @@ class Export:
         return link_context.resolve_url_in_index(idx, href)
 
     def _write_pageslinksfullhtml(self, filename) -> int:
-        """Union of the editorial (ExpressionLink) and raw-HTML link graphs.
+        """Union of the citation (ExpressionLink) and raw-HTML link graphs.
 
         Closed network: both endpoints are in-land expressions qualifying by
         minrel (same node set as _pageslinks). One row per distinct edge:
@@ -816,7 +817,7 @@ class Export:
                 if tid is not None and tid != sid:
                     readable_edges.add((sid, tid))
 
-        # --- emission: union of the editorial graph (ExpressionLink = body)
+        # --- emission: union of the citation graph (ExpressionLink = body)
         #     and the raw-only edges found ONLY in the full HTML.
         # weightbody = 1 for an edge present in ExpressionLink (in_mwi=1);
         # weighthtml = raw <a> multiplicity for an edge present ONLY in the
@@ -838,7 +839,7 @@ class Export:
             writer = csv.writer(file, quoting=csv.QUOTE_ALL)
             writer.writerow(header)
 
-            # 1) editorial edges (ExpressionLink, both endpoints qualified by
+            # 1) citation edges (ExpressionLink, both endpoints qualified by
             #    minrel). No DB cursor here — reads only preloaded sets.
             for sid, tid in mywi_page_edges:
                 if sid == tid:
