@@ -16,7 +16,7 @@ description = "Reproducible web-mining toolkit for digital methods in the social
 readme = "README.md"
 license = { file = "LICENSE" }
 # Support floor. Mirror it in mypy `python_version` below and the CI matrix
-# (.github/workflows/tests.yml). The pinned dev/runtime interpreter is 3.11
+# (.github/workflows/ci.yml). The pinned dev/runtime interpreter is 3.11
 # (.python-version, Dockerfile); 3.9 is only the lowest version we still support.
 requires-python = ">=3.9"
 authors = [
@@ -125,5 +125,21 @@ module = [
     "faiss.*",
     "sentence_transformers.*",
     "transformers.*",
+    # Local configuration module: it is NOT versioned (the template is the
+    # example file), so mypy on a fresh checkout reports import-not-found for
+    # every import of it. Listing it here is what makes the reference
+    # measurement reproducible instead of depending on whether the developer
+    # has generated their local copy yet.
+    "settings",
+    # lxml ships no stubs in this project (lxml-stubs is not a dependency).
+    "lxml.*",
 ]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# The local configuration module is NOT versioned: every developer has their
+# own copy, generated from the example. Analysing it makes the error count
+# depend on whose machine runs the check -- the opposite of a reference
+# measurement. Skip it; what it exposes is plain module-level values.
+module = ["settings"]
+follow_imports = "skip"

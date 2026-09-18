@@ -1,6 +1,12 @@
 # Fichiers et répertoires cachés
 # Ignore tous les répertoires commençant par un point.
 .*/
+# EXCEPTION : les workflows d'intégration continue DOIVENT être versionnés.
+# La règle `.*/` ci-dessus les avalait, si bien qu'aucun workflow n'a jamais
+# été livré alors que la documentation affirmait le contraire (A12). Les
+# autres répertoires cachés restent ignorés : `.claude/`, `.vscode/`,
+# `.idea/`, `.venv/`. Vérifier qu'aucun secret ne vit sous `.github/`.
+!.github/
 # Ignore les fichiers de configuration courants commençant par un point.
 .env
 .env.*
