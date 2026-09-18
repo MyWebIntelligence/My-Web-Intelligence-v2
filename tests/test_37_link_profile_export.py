@@ -175,8 +175,11 @@ class TestCliPlumbing:
         controller = linked_land['controller']
         seen = {}
 
+        # **kwargs: production keeps adding optional export arguments
+        # (`method=` landed with A11). A rigid signature would raise TypeError
+        # here and the test would stop asserting anything useful.
         def fake_export(land, export_type, minrel, fullhtml=False,
-                        link_profile=None):
+                        link_profile=None, **kwargs):
             seen['profile'] = link_profile
 
         monkeypatch.setattr(core, 'export_land', fake_export)

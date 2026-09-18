@@ -252,3 +252,108 @@ def test_build_router_reads_search_provider_timeout(fresh_db, monkeypatch):
     searxng = next((p for p in router.providers if p.name == "searxng"), None)
     assert searxng is not None
     assert searxng.timeout == 11
+
+
+# --------------------------------------------------------------------------
+# A08 - two SERP results that canonicalize apart but NORMALIZE together
+# --------------------------------------------------------------------------
+# `canonicalize_url` (router) keeps the query string; `normalize_url`
+# (add_expression) strips trackers, sorts parameters and unwraps Wayback. Two
+# results surviving the router dedup could therefore land on the SAME
+# Expression, and `SearchResultLog` has a UNIQUE (search_query, url) index -
+# the IntegrityError rolled back the whole `_persist_results` transaction,
+# after the provider quotas had already been spent. Nothing was stored at all.
+
+
+@pytest.fixture()
+def normalizing_rules(monkeypatch):
+    """Pin the normalization rules: the local configuration must not decide."""
+    from mwi import url_normalizer
+    monkeypatch.setattr(
+        url_normalizer.settings, 'url_normalization',
+        {'strip_trackers': ['utm_*', 'fbclid'],
+         'normalize_query_order': True, 'unwrap_archive': True,
+         'force_https': False, 'strip_www': False,
+         'trailing_slash': 'preserve'}, raising=False)
+
+
+def _run_with(monkeypatch, controller, core, results, land="LSearch"):
+    router = SearchRouter()
+    router.register(_FakeProvider("searxng", results))
+    monkeypatch.setattr(controller.SearchController, "_build_router",
+                        lambda: router)
+    return controller.SearchController.run(core.Namespace(
+        land=land, query="q", limit=10, strategy="fallback",
+        language="fr", providers=None))
+
+
+def test_search_run_merges_tracker_variants_into_one_log(
+        land_fixture, monkeypatch, normalizing_rules):
+    """Two UTM variants of one page: one Expression, one log, rc == 1."""
+    controller, core, m = (land_fixture["controller"], land_fixture["core"],
+                           land_fixture["model"])
+
+    rc = _run_with(monkeypatch, controller, core, [
+        SearchResult(url="https://example.com/p?utm_source=a", title="T1",
+                     snippet="S1", rank=1, providers="searxng"),
+        SearchResult(url="https://example.com/p?utm_source=b", title="T2",
+                     snippet="S2", rank=2, providers="searxng"),
+    ])
+
+    assert rc == 1
+    sq = m.SearchQuery.get()
+    assert sq.num_collected == 1
+    logs = list(m.SearchResultLog.select())
+    assert len(logs) == 1
+    assert logs[0].providers == "searxng"
+    assert m.Expression.select().where(
+        m.Expression.land == land_fixture["land"]).count() == 1
+
+
+def test_persist_results_merges_providers_and_rank_across_variants(
+        land_fixture, monkeypatch, normalizing_rules):
+    """The merge is a real merge: providers concatenated, best rank, backfill."""
+    controller, m = land_fixture["controller"], land_fixture["model"]
+
+    sq = controller.SearchController._persist_results(
+        land=land_fixture["land"], query="q", strategy="parallel",
+        language="fr", num_requested=10, usage_report={},
+        results=[
+            SearchResult(url="https://example.com/p?utm_source=a", title="",
+                         snippet="", rank=3, providers="searxng"),
+            SearchResult(url="https://example.com/p?fbclid=z", title="Titre",
+                         snippet="Extrait", rank=1, providers="brave"),
+        ])
+
+    log = m.SearchResultLog.get()
+    assert log.providers == "searxng+brave"
+    assert log.rank_min == 1
+    assert log.title == "Titre"
+    assert log.snippet == "Extrait"
+    assert sq.metadata == {'new': 1, 'duplicates': 0}
+
+
+@pytest.mark.parametrize("second", [
+    pytest.param("https://example.com/p?b=2&a=1", id="order"),
+    pytest.param("https://example.com/p?a=1&b=2&fbclid=z", id="fbclid"),
+    pytest.param(
+        "https://web.archive.org/web/2020/https://example.com/p?a=1&b=2",
+        id="wayback"),
+])
+def test_persist_results_folds_normalizer_variants(
+        land_fixture, monkeypatch, normalizing_rules, second):
+    controller, m = land_fixture["controller"], land_fixture["model"]
+
+    controller.SearchController._persist_results(
+        land=land_fixture["land"], query="q", strategy="fallback",
+        language="fr", num_requested=10, usage_report={},
+        results=[
+            SearchResult(url="https://example.com/p?a=1&b=2", title="T",
+                         snippet="S", rank=1, providers="searxng"),
+            SearchResult(url=second, title="T2", snippet="S2", rank=4,
+                         providers="brave"),
+        ])
+
+    assert m.SearchResultLog.select().count() == 1
+    assert m.Expression.select().where(
+        m.Expression.land == land_fixture["land"]).count() == 1

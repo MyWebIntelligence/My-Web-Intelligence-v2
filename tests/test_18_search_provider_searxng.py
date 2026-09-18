@@ -213,3 +213,22 @@ def test_searxng_usage_snapshot():
     assert snap.errors == 1
     assert snap.status == ProviderStatus.ERROR
     assert snap.monthly_quota is None
+
+
+def test_merge_into_concats_providers_keeps_min_rank_and_backfills():
+    """A08 - nominal contract of the extracted merge_into helper."""
+    from mwi.search.models import SearchResult
+    from mwi.search.utils import merge_into
+
+    existing = SearchResult(url="https://x.test/p", title="", snippet="",
+                            rank=5, providers="searxng")
+    incoming = SearchResult(url="https://x.test/p?utm_source=a", title="Titre",
+                            snippet="Extrait", rank=2, providers="brave")
+
+    merge_into(existing, incoming)
+
+    assert existing.providers == "searxng+brave"
+    assert existing.rank == 2
+    assert existing.title == "Titre"
+    assert existing.snippet == "Extrait"
+    assert existing.url == "https://x.test/p"

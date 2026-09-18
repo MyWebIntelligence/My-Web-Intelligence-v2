@@ -8,6 +8,7 @@ Covers:
 - D-5: `core.get_dryrun` accepts both --dryrun and --dry-run spellings
 """
 
+import pytest
 from datetime import datetime
 
 
@@ -254,3 +255,46 @@ class TestUrlistPersistence:
         assert "Added 2 new URLs" in capsys.readouterr().out
         land = m.Land.get(m.Land.name == "urlist_land")
         assert m.Expression.select().where(m.Expression.land == land).count() == 2
+
+
+class TestDomainCrawlDoesNotSwallowBaseExceptions:
+    """D01a-3 - a bare `except:` around the effective-URL probe ate Ctrl-C.
+
+    `crawl_domains` probes `requests.get(https_url)` only to decide whether to
+    record the https or the http form as the effective URL. The probe was
+    wrapped in a bare `except:`, which also catches KeyboardInterrupt and
+    SystemExit — so interrupting a long `domain crawl` did nothing visible,
+    the run simply carried on to the next domain.
+    """
+
+    def test_keyboard_interrupt_propagates(self, fresh_db):
+        from unittest.mock import patch as _patch
+
+        m = fresh_db["model"]
+        core = fresh_db["core"]
+        m.Domain.create(name="probe.example")
+
+        with _patch("mwi.core._fetch_url_with_retry_and_timeout",
+                    return_value="<html><title>t</title></html>"):
+            with _patch("mwi.core.requests.get",
+                        side_effect=KeyboardInterrupt):
+                with pytest.raises(KeyboardInterrupt):
+                    core.crawl_domains(limit=1)
+
+    def test_a_network_error_on_the_probe_is_still_swallowed(self, fresh_db):
+        """Sibling case: a RequestException must NOT escape, it is a probe."""
+        import requests as _requests
+        from unittest.mock import patch as _patch
+
+        m = fresh_db["model"]
+        core = fresh_db["core"]
+        m.Domain.create(name="probe2.example")
+
+        with _patch("mwi.core._fetch_url_with_retry_and_timeout",
+                    return_value="<html><title>t</title></html>"):
+            with _patch("mwi.core.requests.get",
+                        side_effect=_requests.RequestException("boom")):
+                core.crawl_domains(limit=1)
+
+        assert m.Domain.get(m.Domain.name == "probe2.example").http_status \
+            == "200"
