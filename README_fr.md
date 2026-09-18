@@ -67,7 +67,7 @@ MyWebIntelligence (MyWI) est un outil Python destiné aux équipes de recherche 
 - **Lands thématiques** : organisez URLs, lexiques et exports par projet.
 - **Crawl résilient** : parallélisme contrôlé, retries, filtres HTTP, profondeur maîtrisée.
 - **Extraction Mercury** : contenu lisible propre avec fusion configurable, enrichissement des métadonnées, recalcul de la pertinence.
-- **Analyse médias** : dimensions, formats, couleurs dominantes, EXIF, hash perceptuel, score NSFW, erreurs traçables.
+- **Analyse médias** : dimensions, formats, couleurs dominantes, EXIF, empreintes (SHA-256 exact, dHash perceptuel), score NSFW, erreurs traçables.
 - **Routeur de recherche multi-API** : collecte de seeds depuis 5 fournisseurs (SearXNG auto-hébergé, Brave, Serper, SerpAPI, Tavily) avec stratégies `fallback` ou `parallel`, journal complet par requête pour la reproductibilité (JOSS). Voir [`docs/search_router.md`](docs/search_router.md).
 - **Enrichissements** : SerpAPI pour préremplir les lands, SEO Rank pour les métriques, validation LLM (OpenRouter) en option.
 - **Embeddings & pseudolinks** : vecteurs par paragraphe, similarité cosine (exacte ou LSH), pipeline NLI pour qualifier les relations logiques.
@@ -267,6 +267,12 @@ uv run python -m nltk.downloader punkt punkt_tab
 
 ## Notes générales
 
+- **Codes de sortie.** `0` succès ; `1` échec métier (Land introuvable, rien à
+  faire, confirmation refusée, exception non rattrapée) ; `2` erreur d'usage
+  argparse. Jusqu'en 2026-09 toute exécution sortait en `0`, donc un
+  enchaînement `mywi.py land crawl … && mywi.py land export …` continuait après
+  une étape ratée. Si un de vos scripts comptait là-dessus, il s'arrêtera
+  désormais là où il aurait toujours dû s'arrêter.
 - Toutes les commandes passent par `python mywi.py ...`.
 - En Docker :
 
@@ -493,8 +499,7 @@ python mywi.py land crawl --name="MonProjet" [--limit N] [--http CODE] [--retry-
 > `expression.fetch_method` (visible dans `python mywi.py land list`).
 > Utiliser `--retry-status=403,429` pour rejouer la cascade sur les URLs
 > déjà crawlées sans réinitialiser leur `fetched_at`. Config détaillée :
-> `settings-example.py` (bloc `crawl_fallback_*`) et
-> `.claude/rules/Pipelines.md` §3.5.
+> `settings-example.py` (bloc `crawl_fallback_*`).
 
 > **Archivage HTML brut (`--fullhtml`, sprint-html)** — quand l'option est
 > active, le HTML retourné par la cascade est persisté dans
@@ -514,7 +519,6 @@ python mywi.py land crawl --name="MonProjet" [--limit N] [--http CODE] [--retry-
 >   FROM expression WHERE land_id=?
 >   GROUP BY fetch_method;
 > ```
-> Voir `.claude/rules/Pipelines.md` §3.6 pour le détail.
 > Export dédié : `--type=htmldump` (zip + manifest CSV).
 
 ### 2. Extraire un contenu lisible (pipeline Mercury)
@@ -667,13 +671,13 @@ tout autre hôte garde son netloc.
 
 ```bash
 # Règles URL sur les plateformes listées (sûr — jamais de re-baseline global)
-python mywi.py heuristic update --name=LAND
+python mywi.py heuristic update --land=LAND
 
 # Aperçu sans écrire
-python mywi.py heuristic update --name=LAND --dry-run
+python mywi.py heuristic update --land=LAND --dry-run
 
 # Résout les plateformes listées depuis le HTML (signal déclaratif par plateforme)
-python mywi.py heuristic update --name=LAND --html --fetch-missing --limit=500
+python mywi.py heuristic update --land=LAND --html --fetch-missing --limit=500
 ```
 
 Options : `--land`, `--limit`, `--dry-run` ; `--html` résout l'entité via le
@@ -766,7 +770,10 @@ avant ce pipeline :
 
 ```bash
 # Backup obligatoire
-cp data/mwi.db data/mwi.db.bak_$(date +%Y%m%d_%H%M%S)
+# WAL-safe backup. A plain `cp data/mwi.db` is NOT enough: the database
+# runs in WAL mode, so committed transactions live in data/mwi.db-wal
+# until a checkpoint — copying the main file alone can lose them.
+sqlite3 data/mwi.db ".backup data/mwi.db.bak_$(date +%Y%m%d_%H%M%S)"
 
 # Applique la migration 008 (ajoute la colonne original_url)
 python mywi.py db migrate
@@ -819,7 +826,9 @@ doit alors s'appeler `mwi.db` dans ce dossier).
 
 ## Tests
 
-MyWI inclut une suite de tests aux standards JOSS (832 tests répartis sur 38 fichiers numérotés (3 skippés attendus), ~87% de couverture).
+MyWI inclut une suite de tests aux standards JOSS. Lancez `make test` pour les chiffres du
+jour ; le compte de référence, la commande qui le produit et les skips attendus sont tenus
+à un seul endroit, `CLAUDE.md` §4.1. Couverture ~87 % à la dernière mesure (10 juin 2026).
 
 ### Démarrage rapide
 
@@ -1021,7 +1030,10 @@ Paramètres clés : `nli_model_name`, `nli_batch_size`, `similarity_backend`, `s
 
 ```bash
 python mywi.py db migrate
-cp data/mwi.db data/mwi.db.bak_$(date +%Y%m%d_%H%M%S)
+# WAL-safe backup. A plain `cp data/mwi.db` is NOT enough: the database
+# runs in WAL mode, so committed transactions live in data/mwi.db-wal
+# until a checkpoint — copying the main file alone can lose them.
+sqlite3 data/mwi.db ".backup data/mwi.db.bak_$(date +%Y%m%d_%H%M%S)"
 ```
 
 ## Récupération SQLite
@@ -1096,8 +1108,10 @@ mywi.py  →  mwi/cli.py  →  mwi/controller.py  →  mwi/core.py & mwi/export.
 
 ## Tests
 
-- `pytest tests/`
-- `pytest tests/test_cli.py`
+- `make test` — suite rapide, sans clé d'API (marqueurs API, navigateur et
+  intégration exclus).
+- Les anciens smokes vivent sous `tests/legacy/` ; ils sont joués par la suite,
+  pas isolément.
 
 ## Extension
 

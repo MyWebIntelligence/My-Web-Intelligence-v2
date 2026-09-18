@@ -1,3 +1,21 @@
+# ============================================================================
+# PROPOSITION NON ADOPTÉE — NE PAS APPLIQUER TEL QUEL
+# ============================================================================
+# Ce fichier est une proposition d'outillage restée orpheline. Il prescrit
+# **Ruff**, alors que le projet a tranché l'inverse le 2026-06-24 : « Ruff
+# écarté, garde flake8 ». C'est cette contradiction qui a produit le défaut A12
+# (le workflow CI appelait `ruff`, absent de `uv.lock`, donc la CI n'aurait
+# jamais pu être verte).
+#
+# Ce qui fait foi aujourd'hui : `pyproject.toml`, `.flake8`, `Makefile`
+# (`make lint` bloquant, `make lint-all` / `make typecheck` informatifs) et
+# `.github/workflows/ci.yml`.
+#
+# À supprimer du dépôt (décision d'Amar) ou à réécrire sans Ruff si l'outillage
+# décrit redevient d'actualité. Laissé en place pour ne pas effacer un travail
+# sans son accord.
+# ============================================================================
+
 # .pre-commit-config.yaml
 #
 # Verrou d'enforcement côté git : ces hooks s'exécutent avant chaque commit et le

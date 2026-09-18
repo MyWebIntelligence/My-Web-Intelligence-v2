@@ -60,7 +60,7 @@ This README is also available in French: [README_fr.md](README_fr.md)
 **Three installation options:** Docker Compose (recommended), Docker manual, or Local Python.  
 Run every command from the repository root unless stated otherwise. On Windows, use a Bash-capable terminal (Git Bash or WSL) for shell scripts; for Python commands use `python` or `py -3`.
 
-> 📘 **Detailed guide:** See [docs/INSTALL_ZERO_bis.md](docs/INSTALL_ZERO_bis.md) for complete installation instructions with interactive setup scripts.
+> 📘 **Detailed guide:** See [docs/mwi_tutorial_install.md](docs/mwi_tutorial_install.md) for complete installation instructions with interactive setup scripts.
 
 ## Quick Start: Docker Compose (Recommended)
 
@@ -254,6 +254,12 @@ uv run python -m nltk.downloader punkt punkt_tab
 
 ## General Notes
 
+*   **Exit codes.** `0` success; `1` business failure (land not found,
+    nothing to do, a cancelled confirmation, or an unhandled exception);
+    `2` argparse usage error. Until 2026-09 every run exited `0`, so a chain
+    like `mywi.py land crawl ... && mywi.py land export ...` carried on after a
+    step that had failed. If a script of yours relied on that, it will now stop
+    where it should have stopped all along.
 *   Commands are run using `python mywi.py ...`.
 *   If using Docker, first execute `docker exec -it mwi bash` to enter the container. The prompt might be `root@<container_id>:/app#` or similar.
 
@@ -450,13 +456,13 @@ python mywi.py search run --land=DemoSearch \
 | Command | Description |
 |---------|-------------|
 | `python mywi.py search check` | Per-provider configured/unconfigured table |
-| `python mywi.py search run --land=X --query=… [--limit=20] [--strategy=fallback\|parallel] [--language=fr] [--providers=searxng,brave]` | Execute search, dedup URLs, insert Expressions in the Land |
+| `python mywi.py search run --land=X --query=… [--limit=20] [--strategy=fallback\|parallel] [--language=fr] [--providers=searxng,brave]` | **`--limit` caps results PER PROVIDER**, not in total: with `--strategy=parallel` and two providers you can get up to `limit x providers` distinct URLs (the merged list is never truncated — truncating it would throw away the triangulation `parallel` exists for). With `fallback` you get at most `limit`, from the first provider that answers. `SearchQuery.num_requested` therefore stores a per-provider figure. | Execute search, dedup URLs **after URL normalisation** (tracker/parameter-order/Wayback variants of one page are merged into a single result: providers concatenated, best rank kept, title and snippet backfilled), insert Expressions in the Land |
 | `python mywi.py search list --land=X` | List past `SearchQuery` rows for a Land |
 | `python mywi.py search usage --land=X` | Aggregate per-provider usage report (calls, errors, status, quota) |
 
 #### Configuration
 
-Add the keys you have to `settings.py` or `.env` (see `.env.example`):
+Add the keys you have to `settings.py`. The dot-env file is read by **Docker Compose only** — there is no dotenv loader in `mwi/`, so a key placed there is invisible to a local `python mywi.py` run:
 
 ```bash
 SEARXNG_BASE_URL=http://localhost:8888  # default
@@ -489,7 +495,21 @@ Delete an entire land or only expressions below a relevance threshold.
 - Delete expressions with relevance lower than a specific value:
   ```bash
   python mywi.py land delete --name="MyResearchTopic" --maxrel=MAXIMUM_RELEVANCE
-  # e.g., --maxrel=0.5
+  # e.g., --maxrel=1 drops the relevance-0 pages
+  ```
+  `--maxrel` is an **integer** and the comparison is **strict**
+  (`relevance < maxrel`), so the smallest useful value is `1`. A value below 1
+  is **refused**: relevance is either NULL or a non-negative integer, so
+  `relevance < 0` would match nothing, and a bare `--maxrel` (which argparse
+  reads as `0`) used to be taken for "no threshold" and deleted the entire
+  land. Omit the option entirely if that is what you want.
+
+  Before deleting, the command states exactly what it is about to remove and
+  waits for a `Y`:
+
+  ```text
+  the ENTIRE land "MyResearchTopic" and all its data (1843 expression(s)) will be deleted, type 'Y' to proceed :
+  12 crawled expression(s) with relevance < 1 in land "MyResearchTopic" will be deleted, type 'Y' to proceed :
   ```
 - Delete low-relevance pages **and** the uncrawled links they orphaned:
   ```bash
@@ -507,7 +527,7 @@ Delete an entire land or only expressions below a relevance threshold.
 | Option         | Type | Required | Default | Description                                         |
 |----------------|------|----------|---------|-----------------------------------------------------|
 | --name         | str  | Yes      |         | Name of the land to delete                          |
-| --maxrel       | int  | No       |         | Only delete expressions with relevance < maxrel     |
+| --maxrel       | int  | No       |         | Only delete crawled expressions with `relevance < maxrel`. Must be **>= 1**; a lower or bare value is refused. Omit it to delete the whole land. |
 | --prune-orphans| flag | No       | False   | After the --maxrel deletion, also delete uncrawled expressions left with no incoming link (depth>0, fetched_at IS NULL). With --maxrel absent, prunes only currently-orphaned uncrawled URLs (never deletes the whole land). |
 | --dry-run      | flag | No       | False   | Preview only: report how many expressions/orphans would be deleted, without deleting anything |
 | --vacuum       | flag | No       |         | Run VACUUM after deletion to reclaim disk space (slow on large databases) |
@@ -598,6 +618,17 @@ python mywi.py land crawl --name="AsthmaResearch" --issuecrawl     # controversy
 > Use `--retry-status=403,429` to re-run the cascade on previously crawled
 > URLs without resetting their `fetched_at`. Configuration block:
 > `crawl_fallback_*` keys in `settings-example.py`.
+>
+> **TLS certificates are not verified during `land crawl`.** This is a
+> deliberate trade-off, not an oversight: institutional sites with expired or
+> misconfigured certificates are common in historical corpora, and dropping
+> them would silently bias the sample. The consequence is that the origin
+> server is not cryptographically authenticated for this one code path — a
+> stored page could in principle come from an unauthenticated intermediary.
+> Every other network path (`land readable`, `land medianalyse`,
+> `land reanalyze`, `domain crawl`, `heuristic update --fetch-missing`, and
+> the `curl_cffi` fallback) does verify certificates. Re-enable verification
+> if you ever collect from a network you do not control.
 
 > **Full HTML archiving (`--fullhtml`, sprint-html)** — when active,
 > the raw HTML returned by the cascade is persisted in `expression.html`
@@ -623,6 +654,12 @@ python mywi.py land crawl --name="AsthmaResearch" --issuecrawl     # controversy
 > ```bash
 > for i in {1..100}; do python mywi.py land crawl --name="melenchon" --depth=0 --limit=100; done
 > ```
+> The loop is a **throughput** option, not a completeness one. Until
+> 2026-09 it was silently load-bearing: batching used `OFFSET` over a
+> selection the crawler itself shrinks, so a single run reached only about
+> half of the pending URLs and you had to re-run it. That is fixed — one
+> `land crawl` now visits every pending expression. If an older land still
+> reports "remaining to crawl" after a clean run, just crawl it once more.
 
 ---
 
@@ -630,10 +667,30 @@ python mywi.py land crawl --name="AsthmaResearch" --issuecrawl     # controversy
 
 Extract high-quality, readable content using the **Mercury Parser autonomous pipeline**. This modern system provides intelligent content extraction with configurable merge strategies and automatic media/link enrichment.
 
-**Prerequisites:** Requires `mercury-parser` CLI tool installed:
+**Prerequisites:** Requires the `mercury-parser` CLI tool — except for pages whose
+raw HTML is already stored (`--fullhtml`), which are extracted locally and never
+reach Mercury:
 ```bash
 sudo npm install -g @postlight/mercury-parser
 ```
+
+> **Stored HTML path.** When `expression.html` is available, the pipeline extracts
+> from it with the exact same Trafilatura call as the crawl, so the two paths cannot
+> drift apart and re-running `land readable` on a `--fullhtml` land does not
+> needlessly rewrite every page (which would also replay the LLM gate). Until 2026-09
+> this path filled an internal field the pipeline never read: pages came out dated as
+> "read" with an empty body. A non-empty `readable` is also never replaced by a
+> **shorter** one — stored HTML is capped by `settings.fullhtml_max_size_kb`, so
+> re-extracting from a truncated archive could only lose text.
+>
+> If a land was affected, reset the marker on the empty ones and re-run (back up
+> first, see *Backups* below):
+> ```sql
+> UPDATE expression SET readable_at = NULL
+>  WHERE land_id = <id> AND html IS NOT NULL
+>    AND (readable IS NULL OR readable = '');
+> ```
+> then `land readable`, then `land consolidate`.
 
 **Command:**
 ```bash
@@ -788,13 +845,17 @@ python mywi.py land medianalyse --name="AsthmaResearch" --depth=2 --minrel=0.5
 **Notes:**
 - This process downloads media files to perform detailed analysis.
 - Configuration for media analysis (e.g., `media_min_width`, `media_max_file_size`) can be found in `settings.py`.
-- The results, including dimensions, file size, format, dominant colors, EXIF data, and perceptual hash, are stored in the database.
+- The results, including dimensions, file size, format, dominant colors, EXIF data, and hashes, are stored in the database.
+- **Two fingerprints, two questions.** `image_hash` is a SHA-256 of the downloaded bytes and answers *"is this the same FILE?"* — re-encode a PNG at another compression level and the hash is unrelated. `perceptual_hash` is a 64-bit dHash and answers *"is this the same IMAGE?"* — a photo reprinted by another outlet after a recompression or a resize keeps a close fingerprint, which is how you measure image circulation across a corpus. Until 2026-09 only the first existed, under a comment and a documentation that called it "perceptual".
+- **`perceptual_hash` is NULL on everything analysed before migration 016.** It cannot be backfilled from the database — the bytes are not stored. Run `python mywi.py db migrate`, then `python mywi.py land reanalyze --name=LAND` to fill it. That re-downloads one file per media, so go in steps with `--limit` on a large land.
+- **Your measurements survive `land consolidate`.** Since 2026-09 consolidation reconciles media rows by URL instead of deleting and recreating them, so analysed media keep their `id` and their enrichment columns.
+- `land readable` (Mercury) sees **markdown images only**. Video, audio and HTML `<img>` media discovered by the crawl are still dropped on that path — this predates the reconciliation work and is unchanged. Run `land consolidate` after `land readable` if you need them back.
 
 **Media maintenance verbs:**
 
 ```bash
 # Aggregate statistics: totals, formats, dimension/size buckets, duplicates by hash
-python mywi.py land media_stats --name=LAND_NAME
+python mywi.py land media_stats --name=LAND_NAME [--near=5]
 
 # Pure dry-run: count + up to 20 example URLs of non-conforming media (deletes nothing)
 python mywi.py land preview_deletion --name=LAND_NAME [--minwidth=N] [--minheight=N] [--maxsize=MB]
@@ -855,7 +916,7 @@ python mywi.py land export --name="MyResearchTopic" --type=EXPORT_TYPE [--minrel
 
 **EXPORT_TYPE values:**
 - `pagecsv`: CSV of pages
-- `pagegexf`: GEXF graph of pages
+- `pagegexf`: GEXF graph of pages — **inter-domain edges only**. An edge between two pages of the same site is dropped, while `nodelinkcsv` (`*_pageslinks.csv`) and `pagesjson` keep it. Deliberate (a Gephi page map is usually read for inter-site circulation), but it means the GEXF and the CSV of the same land do not carry the same edge count: use `nodelinkcsv` or `pagesjson` for the complete page graph.
 - `fullpagecsv`: CSV with full page content
 - `nodecsv`: CSV of nodes
 - `nodegexf`: GEXF graph of nodes
@@ -961,16 +1022,16 @@ other host keeps its bare netloc.
 
 ```bash
 # URL rules over listed platforms (safe — never a global re-baseline)
-python mywi.py heuristic update --name=LAND
+python mywi.py heuristic update --land=LAND
 
 # Preview without writing
-python mywi.py heuristic update --name=LAND --dry-run
+python mywi.py heuristic update --land=LAND --dry-run
 
 # Resolve listed platforms from the page HTML (per-platform declarative signal)
-python mywi.py heuristic update --name=LAND --html
+python mywi.py heuristic update --land=LAND --html
 
 # Non-fullhtml land: fetch missing HTML on the fly (--limit is required)
-python mywi.py heuristic update --name=LAND --html --fetch-missing --limit=500
+python mywi.py heuristic update --land=LAND --html --fetch-missing --limit=500
 ```
 
 Options:
@@ -1004,9 +1065,10 @@ The `land consolidate` pipeline is designed to re-compute and repair the interna
 
 **Purpose:**  
 - Recalculates the relevance score for each crawled page (expressions with a non-null `fetched_at`).
-- Re-extracts and recreates all outgoing links (ExpressionLink) and media (Media) for these pages.
+- Re-extracts and rebuilds all outgoing links (ExpressionLink) for these pages.
+- **Reconciles** media (Media) by URL rather than rebuilding them: a media still referenced by the page keeps its row — same `id`, same measurements (dimensions, EXIF, hashes, dominant colours) — one that disappeared from the content is removed, and a new one is added. Before 2026-09 every consolidation wiped and recreated these rows, so the twelve enrichment columns went back to NULL and the `id` changed, which silently broke external joins on `mediacsv.id` (mwiR). If your measurements were lost that way, `land medianalyse` (or `land reanalyze`) recomputes them.
 - Adds any missing documents referenced by links.
-- Rebuilds the link graph and media associations from scratch, replacing any outdated or inconsistent data.
+- Rebuilds the link graph, replacing any outdated or inconsistent data.
 - **Respects stored LLM verdicts**: after the lexical recompute, any expression with `validllm='non'` keeps `relevance=0` — consolidation never resurrects a page the LLM previously rejected (`validllm='oui'` or NULL applies the lexical score as before).
 
 **When to use:**  
@@ -1037,6 +1099,7 @@ python mywi.py land consolidate --name="AsthmaResearch" --llm=true --issuecrawl
 
 **Notes:**
 - Only pages that have already been crawled (`fetched_at` is set) are affected.
+- **All-or-nothing per page.** Each expression is fully prepared first (relevance, link extraction, optional LLM gate) and only then rewritten inside a single short transaction. If anything fails mid-way — a locked database, a disk hiccup, a Ctrl-C — that page keeps its previous links, media and metadata instead of being left stripped. Consolidation is also exhaustive in one pass now, including with `--minrel` (it used to skip roughly a quarter of the pages it filtered on).
 - Consolidation does **not** call the LLM by default; it only respects already-stored verdicts unless `--llm=true` is passed.
 - For each page, the number of extracted links and media is displayed.
 - This pipeline is especially useful after bulk imports, migrations, or when using third-party clients that may not maintain all MyWI invariants.
@@ -1067,7 +1130,10 @@ brought up to date with:
 
 ```bash
 # Always backup first!
-cp data/mwi.db data/mwi.db.bak_$(date +%Y%m%d_%H%M%S)
+# WAL-safe backup. A plain `cp data/mwi.db` is NOT enough: the database
+# runs in WAL mode, so committed transactions live in data/mwi.db-wal
+# until a checkpoint — copying the main file alone can lose them.
+sqlite3 data/mwi.db ".backup data/mwi.db.bak_$(date +%Y%m%d_%H%M%S)"
 
 # Preview (no DB writes)
 python mywi.py land normalize --name=LAND_NAME --dry-run --verbose
@@ -1099,8 +1165,15 @@ group (every variant converging on the same target belongs to one group):
   the minimum; `relevance` is left untouched — run `land consolidate`
   afterwards to recompute it) from the duplicate without ever overwriting
   a non-empty field, then DELETE the redundant Expression (CASCADE removes
-  its Media, Paragraph, TaggedContent — rebuilt by `land consolidate` from
-  the merged readable).
+  its Media, Paragraph and TaggedContent).
+- **What the cascade destroys, and what brings it back.** `Media` comes back
+  with `land consolidate` (and `land medianalyse` for the measurements);
+  `Paragraph` / embeddings / similarities come back with `embedding generate`
+  then `embedding similarity`; **`TaggedContent` does not come back at all**.
+  Tagged snippets are manual annotations — nothing can recompute them. **Export
+  them before normalising**: `python mywi.py tag export --name=LAND
+  --type=content`. (This page claimed consolidation rebuilt all three until
+  2026-09; it never touched Paragraph or TaggedContent.)
 - Wayback-of-Wayback chains are resolved transitively in one pass.
 - The report counts `renamed`, `promoted`, `merged`, `collision groups`
   and `backfilled` fields. In `--dry-run`, link-remap and cascade volumes
@@ -1112,7 +1185,10 @@ slash) — to collapse an existing corpus polluted by URL-variant rows:
 ```bash
 # 1. Backup (checkpoint the WAL first)
 sqlite3 data/mwi.db "PRAGMA wal_checkpoint(TRUNCATE);"
-cp data/mwi.db data/mwi.db.bak_$(date +%Y%m%d_%H%M%S)
+# WAL-safe backup. A plain `cp data/mwi.db` is NOT enough: the database
+# runs in WAL mode, so committed transactions live in data/mwi.db-wal
+# until a checkpoint — copying the main file alone can lose them.
+sqlite3 data/mwi.db ".backup data/mwi.db.bak_$(date +%Y%m%d_%H%M%S)"
 
 # 2. Enable the strict rules (also harden them in settings.py so future
 #    crawls keep using them — otherwise variants reappear)
@@ -1163,7 +1239,9 @@ Alternative without code change: `MYWI_DATA_DIR=/some/dir python mywi.py …`
 
 ## Testing
 
-MyWI ships with a JOSS-grade test suite (832 tests across 38 numbered files, 3 expected skips; coverage ~87%, last measured 10 June 2026).
+MyWI ships with a JOSS-grade test suite. Run `make test` for the current figures; the
+reference count, the command that produces it and the expected skips are kept in one
+place, `CLAUDE.md` §4.1. Coverage was ~87% when last measured on 10 June 2026.
 
 ### Quick start
 
@@ -1223,7 +1301,14 @@ make test-apis
 
 ### Further reading
 
-For pytest marker definitions, see `pytest.ini`. For CI configuration, see `.github/workflows/`.
+**`--db PATH`** rebinds the SQLite file and **nothing else**: the file must already exist, and exports plus `lands/<id>/` still go to `settings.data_location`. Pointing `--db` at another project's database therefore writes that project's exports into the *current* data directory.
+
+For pytest marker definitions, see `pytest.ini`. For CI configuration, see `.github/workflows/ci.yml`.
+
+`make lint` is exactly what CI blocks on (the flake8 bug class: syntax errors,
+undefined names, impossible comparisons). `make lint-all` (full flake8) and
+`make typecheck` (mypy) are informational — they report a measured debt that is
+being paid down, and they do not fail the build.
 
 #  Embeddings & Pseudolinks (User Guide)
 
@@ -1509,7 +1594,10 @@ python mywi.py db migrate
 This command is idempotent: it inspects `data/mwi.db` (or the location specified via `MYWI_DATA_DIR`) and adds any missing fields. Run it after every upgrade or before sharing a database. For safety, back up the file first:
 
 ```bash
-cp data/mwi.db data/mwi.db.bak_$(date +%Y%m%d_%H%M%S)
+# WAL-safe backup. A plain `cp data/mwi.db` is NOT enough: the database
+# runs in WAL mode, so committed transactions live in data/mwi.db-wal
+# until a checkpoint — copying the main file alone can lose them.
+sqlite3 data/mwi.db ".backup data/mwi.db.bak_$(date +%Y%m%d_%H%M%S)"
 ```
 
 ## Repair archive.org domain attributions
@@ -1518,13 +1606,13 @@ Older crawls sometimes attached `archive.org` (or `web.archive.org`) as the `dom
 
 ```bash
 # Preview only — list affected expressions, write nothing
-python mywi.py db fix_archive_domains --dryrun
+python mywi.py db fix_archive_domains --dry-run
 
 # Apply the re-attribution
 python mywi.py db fix_archive_domains
 ```
 
-The command is non-destructive — it only updates the `expression.domain` foreign key and creates the missing `Domain` rows. Use `--dryrun` first to inspect what would change. Run it after a `db migrate` if you suspect that archive.org is over-represented in your domain stats.
+The command is non-destructive — it only updates the `expression.domain` foreign key and creates the missing `Domain` rows. Use `--dry-run` first to inspect what would change (nothing is written, and no `Domain` row is created). Run it after a `db migrate` if you suspect that archive.org is over-represented in your domain stats.
 
 ## SQLite Recovery
 
@@ -1554,7 +1642,10 @@ MYWI_DATA_DIR="$PWD/data/test-repaired" python mywi.py land list
 
 If everything looks good, adopt the repaired DB (after a manual backup):
 ```bash
-cp data/mwi.db data/mwi.db.bak_$(date +%Y%m%d_%H%M%S)
+# WAL-safe backup. A plain `cp data/mwi.db` is NOT enough: the database
+# runs in WAL mode, so committed transactions live in data/mwi.db-wal
+# until a checkpoint — copying the main file alone can lose them.
+sqlite3 data/mwi.db ".backup data/mwi.db.bak_$(date +%Y%m%d_%H%M%S)"
 mv data/mwi_repaired.db data/mwi.db
 ```
 
@@ -1732,7 +1823,7 @@ line per window indicating the covered dates and how many URLs SerpAPI returned.
 ### Testing (developer view)
 
 - Active suite: `tests/test_01_installation.py` … `tests/test_08_expression_html.py` (numbered files).
-- Legacy smokes (`test_cli.py`, `test_core.py`, etc.) live under `tests/legacy/` and are **not** run by `make test`.
+- Legacy smokes (`test_cli.py`, `test_core.py`, etc.) live under `tests/legacy/`. They **are** run by `make test`: `pytest.ini` sets `testpaths = tests` and pytest recurses. (This line claimed the opposite until 2026-09.)
 - Conftest in `tests/conftest.py` sets up an isolated SQLite per test using temp directories.
 - See the full Make-target table in the [Testing](#testing) section above for entry points.
 
