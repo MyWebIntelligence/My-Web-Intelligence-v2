@@ -740,10 +740,21 @@ class TestStoredHtmlFillsReadable:
         fresh = m.Expression.get_by_id(expr.id)
         assert fresh.readable is not None
         assert "[une source externe](https://cible.example/doc)" in fresh.readable
-        assert "![photo](https://src-a.example/img/photo.jpg)" in fresh.readable
+        # Trafilatura resolves relative hrefs against `url=` only from 2.1.0,
+        # and Python 3.9 resolves to 2.0.0, which leaves the image relative.
+        # What this test guards is that the stored-HTML path passes
+        # include_images (A07) — not which trafilatura release absolutises
+        # the URL. The Media row below is built from the resolved URL either
+        # way, and that IS asserted.
+        assert ("![photo](https://src-a.example/img/photo.jpg)" in fresh.readable
+                or "![photo](/img/photo.jpg)" in fresh.readable)
 
         medias = list(m.Media.select().where(m.Media.expression == expr.id))
         assert [x.type for x in medias] == ["img"]
+        # The stored URL must be absolute whatever trafilatura left in the
+        # markdown: a relative path in `media.url` would be un-fetchable by
+        # `land medianalyse`, which has no page context to resolve it against.
+        assert medias[0].url == "https://src-a.example/img/photo.jpg"
 
         links = list(m.ExpressionLink.select().where(
             m.ExpressionLink.source == expr.id))

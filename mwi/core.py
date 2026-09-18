@@ -2905,6 +2905,11 @@ def link_expression(land: model.Land, source_expression: model.Expression, url: 
     return False
 
 
+# An IPv6 literal host, with an optional zone id and port: the only form
+# in which square brackets are legal in a netloc (RFC 3986 §3.2.2).
+_IPV6_HOST = re.compile(r"^\[[0-9A-Fa-f:.]+(?:%25[^\]]+)?\](?::\d+)?$")
+
+
 def is_crawlable(url: str):
     """Check whether a URL is valid and suitable for crawling.
 
@@ -2927,10 +2932,19 @@ def is_crawlable(url: str):
     try:
         if not url or not url.startswith(('http://', 'https://')):
             return False
+        parsed = urlparse(url)
+        # A bracketed host is only legal as an IPv6 literal. Python >= 3.11
+        # raises ValueError while parsing "https://[domain]/x"; 3.9 returns
+        # hostname='domain' without complaining. Reject it explicitly so the
+        # verdict is the same on every supported interpreter instead of being
+        # borrowed from whichever stdlib happens to be installed.
+        host = parsed.netloc.rsplit('@', 1)[-1]
+        if ('[' in host or ']' in host) and not _IPV6_HOST.match(host):
+            return False
         # Test the extension on the PATH only (not the whole URL): a query
         # string or fragment must not smuggle a binary past the filter
         # (…/doc.pdf?dl=1) nor make an editorial URL look binary (…/article#x).
-        path = urlparse(url).path.lower()
+        path = parsed.path.lower()
         exclude_ext = ('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.svg',
                        '.ico', '.pdf', '.txt', '.csv', '.xls', '.xlsx', '.doc',
                        '.docx', '.ppt', '.pptx', '.zip', '.mp4', '.webm',
