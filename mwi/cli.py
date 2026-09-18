@@ -26,8 +26,9 @@ def command_run(args: Any):
             object. If dict, it will be converted to Namespace.
 
     Returns:
-        None. The function delegates to dispatch() which calls the
-        appropriate controller method.
+        int: the controller's return code, 1 (success) or 0 (business
+        failure). It used to be dropped, which is how `mywi.py` ended up
+        exiting 0 on every failure (A09).
 
     Notes:
         This is the programmatic entry point for running commands without
@@ -36,7 +37,7 @@ def command_run(args: Any):
     """
     if isinstance(args, dict):
         args = argparse.Namespace(**args)
-    dispatch(args)
+    return dispatch(args)
 
 
 def command_input():
@@ -47,8 +48,8 @@ def command_input():
     appropriate controller.
 
     Returns:
-        None. The function delegates to dispatch() which calls the
-        appropriate controller method.
+        int: the controller's return code, 1 (success) or 0 (business
+        failure). `mywi.main()` turns it into the process exit code (A09).
 
     Notes:
         This is the main entry point for command-line usage. It supports
@@ -115,7 +116,8 @@ def command_input():
     parser.add_argument('--vacuum',
                         action='store_true',
                         default=False,
-                        help='Run VACUUM after deletion to reclaim disk space (slow on large databases)')
+                        help='Run VACUUM after deletion to reclaim disk space (slow on large '
+                             'databases)')
     parser.add_argument('--prune-orphans',
                         action='store_true',
                         default=False,
@@ -185,12 +187,14 @@ def command_input():
                         nargs='?')
     parser.add_argument('--merge',
                         type=str,
-                        help='Merge strategy for readable: smart_merge, mercury_priority, preserve_existing',
+                        help='Merge strategy for readable: smart_merge, mercury_priority, '
+                             'preserve_existing',
                         default='smart_merge',
                         nargs='?')
     parser.add_argument('--llm',
                         type=str,
-                        help='Toggle OpenRouter validation during readable pipeline (true|false, default=false)',
+                        help='Toggle OpenRouter validation during readable pipeline (true|false, '
+                             'default=false)',
                         default='false')
     parser.add_argument('--query',
                         type=str,
@@ -220,7 +224,8 @@ def command_input():
                         nargs='?')
     parser.add_argument('--timestep',
                         type=str,
-                        help='Date window size when iterating between datestart/dateend (day|week|month)',
+                        help='Date window size when iterating between datestart/dateend '
+                             '(day|week|month)',
                         default='week',
                         nargs='?')
     parser.add_argument('--progress',
@@ -268,6 +273,15 @@ def command_input():
                              'Overrides settings.openrouter_issue_mode for this run '
                              '(land crawl | readable | consolidate | llm validate)')
     # Media maintenance verbs (land media_stats / preview_deletion / reanalyze)
+    parser.add_argument('--near',
+                        type=int,
+                        help='For land media_stats: also search near-duplicate '
+                             'images within this Hamming distance on the dHash '
+                             'fingerprint (0-64, try 5). Opt-in because the '
+                             'search is quadratic; bounded by '
+                             'settings.media_near_duplicate_max.',
+                        nargs='?',
+                        const=5)
     parser.add_argument('--minwidth',
                         type=int,
                         help='Minimum media width in pixels (default: settings.media_min_width)',
@@ -278,26 +292,31 @@ def command_input():
                         nargs='?')
     parser.add_argument('--maxsize',
                         type=float,
-                        help='Maximum media file size in MB (default: settings.media_max_file_size)',
+                        help='Maximum media file size in MB '
+                             '(default: settings.media_max_file_size)',
                         nargs='?')
     parser.add_argument('--suppress',
                         action='store_true',
                         help='For land reanalyze: delete non-conforming media after confirmation')
-    parser.add_argument('--dryrun',
-                        action='store_true',
-                        help='Dry run mode - show what would be changed without modifying database')
-    # land normalize options
+    # Simulation flag. ONE official spelling since 2026-09 (decision D-15):
+    # the glued `--dryrun` was removed, argparse now rejects it with exit
+    # code 2. Do not touch nargs/const/type: `--dry-run=FALSE` must stay a
+    # real run, and a bare `--dry-run` must not swallow the next flag.
     parser.add_argument('--dry-run',
                         type=str,
                         dest='dry_run',
-                        help='For land normalize: TRUE to preview, FALSE/absent to apply.',
+                        help='Preview without writing; accepted by land delete, '
+                             'land normalize, heuristic update and '
+                             'db fix_archive_domains. TRUE (or bare) to '
+                             'preview, FALSE/absent to apply.',
                         nargs='?',
                         const='TRUE',
                         default=None)
     parser.add_argument('--reset-status',
                         type=str,
                         dest='reset_status',
-                        help='For land normalize: TRUE to clear http_status / fetched_at on renamed expressions.',
+                        help='For land normalize: TRUE to clear http_status / fetched_at on '
+                             'renamed expressions.',
                         nargs='?',
                         const='TRUE',
                         default=None)
@@ -336,11 +355,12 @@ def command_input():
     args = parser.parse_args()
     # Always convert lang to a list
     if hasattr(args, "lang") and isinstance(args.lang, str):
-        args.lang = [l.strip() for l in args.lang.split(",") if l.strip()]
+        args.lang = [code.strip() for code in args.lang.split(",")
+                     if code.strip()]
     # Optional: switch the SQLite file before any model operation
     if getattr(args, 'db', None):
         _switch_database(args.db)
-    dispatch(args)
+    return dispatch(args)
 
 
 def _switch_database(db_path: str) -> None:
@@ -379,8 +399,8 @@ def dispatch(args):
             Must include 'object' and 'verb' attributes at minimum.
 
     Returns:
-        The return value from the called controller method, typically None
-        for side-effect operations like database updates or exports.
+        int: the controller's return code, 1 (success) or 0 (business
+        failure). Controllers never raise on invalid input, they return 0.
 
     Raises:
         ValueError: If the specified object is not recognized or if a nested
@@ -443,7 +463,7 @@ def dispatch(args):
         },
     }
     controller = controllers.get(args.object)
-    if controller:
+    if isinstance(controller, dict):
         action = controller.get(args.verb)
         # Support nested verbs: e.g. controllers['land']['llm']['validate']
         if isinstance(action, dict):

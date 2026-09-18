@@ -20,7 +20,7 @@ def _resolve_api_key() -> Optional[str]:
     if key:
         return key
     try:
-        import settings  # type: ignore
+        import settings
         return getattr(settings, "TAVILY_API_KEY", None)
     except ImportError:
         return None

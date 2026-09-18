@@ -1,3 +1,4 @@
+import asyncio
 import json
 from typing import Optional, List
 
@@ -65,7 +66,8 @@ def build_relevance_prompt(land: model.Land, expression: model.Expression,
     desc = str(getattr(expression, "description", "") or "")
     url = str(getattr(expression, "url", "") or "")
     land_desc = str(getattr(land, "description", "") or "")
-    primary_lang = str(getattr(land, "lang", "") or "fr").split(',')[0].split('-')[0].strip().lower()
+    primary_lang = str(getattr(land, "lang", "") or "fr").split(',')[
+                       0].split('-')[0].strip().lower()
     lang_name = _LANG_NAMES.get(primary_lang, primary_lang)
 
     # Shared block: English wrapper, but the model is told the project's working
@@ -190,6 +192,26 @@ def is_relevant_via_openrouter(land: model.Land, expression: model.Expression,
         Respects settings for enabled status, API credentials, and call
         budget. Increments global call counter. Prints verdict to stdout.
     """
+    prompt = _gate_prompt(land, expression, issue_mode)
+    if prompt is None:
+        return None
+    try:
+        content = ask_openrouter_yesno(prompt)
+    except Exception as e:
+        print(f"OpenRouter gate error for {expression.url}: {e}")
+        return None
+    return _gate_verdict(content, expression)
+
+
+def _gate_prompt(land: model.Land, expression: model.Expression,
+                 issue_mode: Optional[bool]) -> Optional[str]:
+    """Preconditions, budget and prompt building. Returns None to skip.
+
+    Everything here stays ON the event loop: it reads mutable `settings` and
+    touches Peewee (`_get_land_terms`), neither of which is safe to hand to a
+    worker thread. The budget is spent BEFORE the network call, exactly as the
+    original did, so a failing call still counts against the cap.
+    """
     global _call_count
 
     # Preconditions
@@ -216,21 +238,50 @@ def is_relevant_via_openrouter(land: model.Land, expression: model.Expression,
         # Fallback to a minimal context if readable is missing
         readable_text = ""
 
-    prompt = build_relevance_prompt(land, expression, readable_text, issue_mode=issue_mode)
+    prompt = build_relevance_prompt(land, expression, readable_text,
+                                    issue_mode=issue_mode)
+    _call_count += 1
+    return prompt
 
-    try:
-        _call_count += 1
-        content = ask_openrouter_yesno(prompt)
-        verdict = _normalize_yesno(content)
-        if verdict == "non":
-            print(f"OpenRouter gate verdict=NON for {expression.url}")
-            return False
-        if verdict == "oui":
-            print(f"OpenRouter gate verdict=OUI for {expression.url}")
-            return True
-        print(f"OpenRouter gate verdict=INCONNU for {expression.url}: '{content[:50]}...'")
+
+def _gate_verdict(content: str,
+                  expression: model.Expression) -> Optional[bool]:
+    """Turn the model's answer into True / False / None. Pure, no I/O."""
+    verdict = _normalize_yesno(content)
+    if verdict == "non":
+        print(f"OpenRouter gate verdict=NON for {expression.url}")
+        return False
+    if verdict == "oui":
+        print(f"OpenRouter gate verdict=OUI for {expression.url}")
+        return True
+    print(f"OpenRouter gate verdict=INCONNU for {expression.url}: '{content[:50]}...'")
+    return None
+
+
+async def is_relevant_via_openrouter_async(
+        land: model.Land, expression: model.Expression,
+        issue_mode: Optional[bool] = None) -> Optional[bool]:
+    """Async variant: the HTTP call runs in a worker thread (O01).
+
+    `ask_openrouter_yesno` is a synchronous `requests.post` with a 15 s
+    timeout. Called straight from a coroutine it froze the WHOLE batch of
+    `parallel_connections` siblings — measured: four 0.4 s gates in a `gather`
+    took 1.64 s and the event loop got a single tick.
+
+    Use this from crawl and readable. `consolidate_land` and `llm validate`
+    keep the synchronous façade: their loops are sequential, so there is no
+    sibling coroutine to starve, and their tests patch the sync name.
+
+    The global name is looked up at call time, so
+    `monkeypatch.setattr(llm_openrouter, 'ask_openrouter_yesno', ...)` still
+    intercepts it.
+    """
+    prompt = _gate_prompt(land, expression, issue_mode)
+    if prompt is None:
         return None
+    try:
+        content = await asyncio.to_thread(ask_openrouter_yesno, prompt)
     except Exception as e:
         print(f"OpenRouter gate error for {expression.url}: {e}")
         return None
-
+    return _gate_verdict(content, expression)

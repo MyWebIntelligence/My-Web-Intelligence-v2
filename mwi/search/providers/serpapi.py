@@ -30,14 +30,14 @@ def _resolve_api_key() -> Optional[str]:
     if key:
         return key
     try:
-        import settings  # type: ignore
+        import settings
         upper = getattr(settings, "SERPAPI_API_KEY", None)
         if upper:
-            return upper
+            return str(upper)
         # Soft fallback to the historical snake-case key.
         legacy = getattr(settings, "serpapi_api_key", None)
         if legacy:
-            return legacy
+            return str(legacy)
     except ImportError:
         pass
     return None

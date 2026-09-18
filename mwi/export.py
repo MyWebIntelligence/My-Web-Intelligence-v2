@@ -21,7 +21,7 @@ import datetime
 import json
 import re
 from textwrap import dedent
-from typing import Optional
+from typing import Any, Dict, List, Optional, Set
 import unicodedata
 from lxml import etree
 from zipfile import ZipFile
@@ -40,6 +40,11 @@ DEFAULT_LINK_PROFILE = 'citation'
 # author. Reference blocks stay IN: the ground truth counts them as citations
 # (place_group EDITORIAL in gold_v1, an older naming), and excluding them
 # converts genuine citations into losses. Overridable via settings.link_profiles.
+# Similarity methods carried by the pseudolinks export. 'verbatim' is the
+# rigorously-identical-text pairing (decision D-2), kept separate from
+# 'cosine' so repeated boilerplate cannot drown real proximities.
+PSEUDOLINK_METHODS = ('nli', 'cosine', 'cosine_lsh', 'verbatim')
+
 DEFAULT_LINK_PROFILES = {
     'citation': ('body', 'ref'),
     'citation+reco': ('body', 'ref', 'reco'),
@@ -66,12 +71,16 @@ class Export:
         relevance: Minimum relevance score threshold for filtering expressions.
     """
     gexf_ns = {None: 'http://www.gexf.net/1.2draft', 'viz': 'http://www.gexf.net/1.1draft/viz'}
-    type = None
-    land = None
-    relevance = 1
+    # Declared, not initialised: `land = None` made every `self.land.get_id()`
+    # an error against an Optional the constructor always assigns anyway. The
+    # declaration says what the attribute IS; __init__ says what it holds.
+    type: str
+    land: model.Land
+    relevance: int
 
     def __init__(self, export_type: str, land: model.Land, minimum_relevance: int,
-                 fullhtml: bool = False, link_profile: str = DEFAULT_LINK_PROFILE):
+                 fullhtml: bool = False, link_profile: str = DEFAULT_LINK_PROFILE,
+                 method=None):
         """Initialize an Export instance with specified parameters.
 
         Args:
@@ -83,6 +92,10 @@ class Export:
             link_profile: which structural link kinds belong to the exported
                 network (sprint body-links). Unknown names fall back to the
                 default rather than raising mid-export.
+            method: for pseudolinks, restrict the export to one similarity
+                method. None (default) exports them all. Unknown names fall
+                back to all with a warning. NEVER interpolated into SQL: it is
+                only ever looked up in PSEUDOLINK_METHODS.
 
         Notes:
             The export_type determines which write method will be called.
@@ -92,6 +105,7 @@ class Export:
         self.land = land
         self.relevance = minimum_relevance
         self.fullhtml = fullhtml
+        self.method = method
         profiles = _link_profiles()
         if link_profile not in profiles:
             print(f"Unknown link profile '{link_profile}', "
@@ -205,6 +219,10 @@ class Export:
             LEFT JOIN tag t ON t.id = tc.tag_id
             WHERE e.land_id = ? AND relevance >= ?
             GROUP BY e.id
+            -- O05: total ordering, by contract. Without it the row
+            -- order is whatever the query plan happens to be, and a
+            -- reproducible tool cannot rest on that.
+            ORDER BY e.id
         """
         records, seorank_keys = self._fetch_page_rows_with_seorank(col_map, sql)
         base_keys = list(col_map.keys())
@@ -217,7 +235,8 @@ class Export:
                 writer.writerow(header)
                 for base_data, seorank_payload in records:
                     row = [self._normalize_value(base_data.get(key)) for key in base_keys]
-                    row.extend(self._normalize_value(seorank_payload.get(key)) for key in seorank_keys)
+                    row.extend(self._normalize_value(seorank_payload.get(key))
+                               for key in seorank_keys)
                     writer.writerow(row)
                     count += 1
         return count
@@ -260,6 +279,10 @@ class Export:
             LEFT JOIN tag t ON t.id = tc.tag_id
             WHERE e.land_id = ? AND relevance >= ?
             GROUP BY e.id
+            -- O05: total ordering, by contract. Without it the row
+            -- order is whatever the query plan happens to be, and a
+            -- reproducible tool cannot rest on that.
+            ORDER BY e.id
         """
         cursor = self.get_sql_cursor(sql, col_map)
         return self.write_csv(filename, col_map.keys(), cursor)
@@ -293,6 +316,10 @@ class Export:
             JOIN expression AS e ON e.domain_id = d.id
             WHERE land_id = ? AND e.relevance >= ?
             GROUP BY d.id
+            -- O05: total ordering, by contract. Without it the row
+            -- order is whatever the query plan happens to be, and a
+            -- reproducible tool cannot rest on that.
+            ORDER BY d.id
         """
         cursor = self.get_sql_cursor(sql, col_map)
         return self.write_csv(filename, col_map.keys(), cursor)
@@ -356,7 +383,7 @@ class Export:
             WHERE e.land_id = ? AND e.relevance >= ?
             ORDER BY e.domain_id, e.url
         """
-        corpus_by_domain = {}
+        corpus_by_domain: Dict[Any, List[Dict[str, Any]]] = {}
         for domain_id, title, urlarticle, description, published_at in \
                 self.get_sql_cursor(corpus_sql, corpus_cols):
             corpus_by_domain.setdefault(domain_id, []).append({
@@ -497,6 +524,10 @@ class Export:
             JOIN expression AS e ON e.id = m.expression_id
             WHERE e.land_id = ? AND e.relevance >= ?
             GROUP BY m.id
+            -- O05: total ordering, by contract. Without it the row
+            -- order is whatever the query plan happens to be, and a
+            -- reproducible tool cannot rest on that.
+            ORDER BY m.id
         """
         cursor = self.get_sql_cursor(sql, col_map)
         return self.write_csv(filename, col_map.keys(), cursor)
@@ -595,7 +626,8 @@ class Export:
                 writer.writerow(header)
                 for base_data, seorank_payload in records:
                     row = [self._normalize_value(base_data.get(key)) for key in base_keys]
-                    row.extend(self._normalize_value(seorank_payload.get(key)) for key in seorank_keys)
+                    row.extend(self._normalize_value(seorank_payload.get(key))
+                               for key in seorank_keys)
                     writer.writerow(row)
                     count += 1
         print(f"  - {filename.rsplit('_', 1)[-1]}: {count} expressions")
@@ -716,16 +748,17 @@ class Export:
               AND link.target_id IN idx
               AND e1.domain_id != e2.domain_id
             GROUP BY e1.domain_id, e2.domain_id
-            ORDER BY link_count DESC
+            -- O05: DESC on the count alone leaves every tie to the plan.
+            ORDER BY link_count DESC, e1.domain_id, e2.domain_id
         """
         cursor = self.get_sql_cursor(sql, col_map)
         count = self.write_csv(filename, col_map.keys(), cursor)
         print(f"  - domainlinks.csv: {count} domain links")
         return count
 
-    # ------------------------------------------------------------------ #
+    # ------------------------------------------------------------------  #
     # Raw-HTML link network (sprint fullhtml-linknetwork)                 #
-    # ------------------------------------------------------------------ #
+    # ------------------------------------------------------------------  #
 
     def _fullhtml_lookup(self, idx, href):
         """Resolve a raw href to an in-land expression id (closed network).
@@ -775,29 +808,44 @@ class Export:
         minrel = self.relevance
 
         # --- preload lookups (drained BEFORE the streaming cursor opens) ---
-        idx = ({}, {}, {})
-        url_of, domain_of = {}, {}
+        # O03: ONE query with a LEFT JOIN instead of two, and iterated rather
+        # than fetchall()'d. The domain table was loaded WHOLE — 25 101 rows
+        # for the 1 992 domains actually used by one land — while only the
+        # names of the corpus domains can ever be printed. Measured: preload
+        # peak 12.6 -> 9.9 MB on 40 456 edges.
+        #
+        # What this does NOT do, and must not be claimed: the O(N+E)
+        # structures below (idx, url_of, mywi_page_edges, kind_of...) stay
+        # resident by construction — this export builds a graph. The gain is
+        # on the preload, not on the run.
+        #
+        # LEFT JOIN, not JOIN: an expression whose domain row vanished must
+        # still appear, with an empty name, rather than drop out of the graph.
+        idx: link_context.UrlIndex = ({}, {}, {})
+        url_of, domain_of, domain_name = {}, {}, {}
         cur = model.DB.execute_sql(
-            "SELECT id, url, domain_id FROM expression "
-            "WHERE land_id = ? AND relevance >= ?", (land_id, minrel))
-        for eid, url, domain_id in cur.fetchall():
+            "SELECT e.id, e.url, e.domain_id, d.name "
+            "FROM expression AS e "
+            "LEFT JOIN domain AS d ON d.id = e.domain_id "
+            "WHERE e.land_id = ? AND e.relevance >= ?", (land_id, minrel))
+        for eid, url, domain_id, dname in cur:
             url_of[eid] = url
             domain_of[eid] = domain_id
+            if domain_id is not None:
+                domain_name[domain_id] = dname
             link_context.add_to_url_index(idx, eid, url)
 
-        domain_name = {}
-        for did, name in model.DB.execute_sql(
-                "SELECT id, name FROM domain").fetchall():
-            domain_name[did] = name
-
         mywi_page_edges = set()
+        kind_of = {}
+        # Iterated, not fetchall()'d. `add_to_url_index` is not called here and
+        # nothing in this loop touches the connection, so draining lazily is
+        # safe on the single shared connection.
         cur = model.DB.execute_sql(
             "WITH idx(x) AS (SELECT id FROM expression "
             "WHERE land_id = ? AND relevance >= ?) "
             "SELECT source_id, target_id, kind FROM expressionlink "
             "WHERE source_id IN idx AND target_id IN idx", (land_id, minrel))
-        kind_of = {}
-        for s, t, k in cur.fetchall():
+        for s, t, k in cur:
             mywi_page_edges.add((s, t))
             kind_of[(s, t)] = k or 'body'
 
@@ -831,7 +879,8 @@ class Export:
         header = ['Source', 'Target', 'Weight', 'weightbody', 'weighthtml',
                   'citation', 'source_url', 'source_domain_id',
                   'target_url', 'target_domain_id', 'kind']
-        domain_acc = {}   # (sd, td) -> [in_mwi (Σweightbody), out_mwi (Σweighthtml)]
+        # (sd, td) -> [in_mwi (Σweightbody), out_mwi (Σweighthtml)]
+        domain_acc: Dict[Any, List[int]] = {}
         body_edges = rawonly_edges = citation_edges = count = 0
         pages_total = pages_with_html = 0
 
@@ -841,7 +890,11 @@ class Export:
 
             # 1) citation edges (ExpressionLink, both endpoints qualified by
             #    minrel). No DB cursor here — reads only preloaded sets.
-            for sid, tid in mywi_page_edges:
+            # O05: sorted(), never the raw set. The hash of an (int, int)
+            # tuple is not salted, so this LOOKS deterministic today — it is
+            # not: the order still depends on insertion history and on the
+            # hash table's growth.
+            for sid, tid in sorted(mywi_page_edges):
                 if sid == tid:
                     continue
                 sdom, td = domain_of.get(sid), domain_of.get(tid)
@@ -857,15 +910,21 @@ class Export:
 
             # 2) raw-only edges — single streaming pass over stored HTML (the
             #    only live DB statement; no DB access inside the loop).
+            # O05: `WHERE id IN (subquery) ORDER BY id`, not a bare
+            # `ORDER BY id` on the filtered scan — this shape follows the
+            # primary key and adds no TEMP B-TREE (checked with EXPLAIN
+            # QUERY PLAN).
             src_cursor = model.DB.execute_sql(
                 "SELECT id, url, domain_id, html FROM expression "
-                "WHERE land_id = ? AND relevance >= ?", (land_id, minrel))
+                "WHERE id IN (SELECT id FROM expression "
+                "             WHERE land_id = ? AND relevance >= ?) "
+                "ORDER BY id", (land_id, minrel))
             for sid, surl, sdom, shtml in src_cursor:
                 pages_total += 1
                 if not shtml:
                     continue
                 pages_with_html += 1
-                per_target = {}
+                per_target: Dict[int, int] = {}
                 for href in extract_all_links(shtml, surl):
                     tid = self._fullhtml_lookup(idx, href)
                     if tid is not None:
@@ -922,8 +981,11 @@ class Export:
         domain_name = getattr(self, '_fullhtml_domain_name', {})
         header = ['Source', 'Target', 'Weight', 'in_mwi', 'out_mwi',
                   'source_domain_name', 'target_domain_name']
+        # O05: `reverse=True` on the weight alone leaves every tie to the
+        # dict's insertion order. Negate the weight and close the key on the
+        # domain pair instead, so ties sort ascending and reproducibly.
         rows = sorted(domain_acc.items(),
-                      key=lambda kv: kv[1][0] + kv[1][1], reverse=True)
+                      key=lambda kv: (-(kv[1][0] + kv[1][1]), kv[0]))
         count = 0
         with open(filename, 'w', newline='\n', encoding='utf-8') as file:
             writer = csv.writer(file, quoting=csv.QUOTE_ALL)
@@ -987,7 +1049,7 @@ class Export:
         rows = cursor.fetchall()
 
         records = []
-        seorank_keys = set()
+        seorank_keys: Set[str] = set()
         for row in rows:
             data = dict(zip(select_map.keys(), row))
             payload = self._parse_seorank_payload(data.pop('_seorank', None))
@@ -1110,6 +1172,8 @@ class Export:
             FROM expression AS e
             JOIN domain AS d ON d.id = e.domain_id
             WHERE land_id = ? AND relevance >= ?
+            -- O05: total ordering of the emitted nodes.
+            ORDER BY e.id
         """
         records, seorank_keys = self._fetch_page_rows_with_seorank(node_map, sql)
 
@@ -1151,6 +1215,9 @@ class Export:
                 source_id IN idx
                 AND target_id IN idx
                 AND source_domain_id != target_domain_id
+            -- O05: `link.` prefix, not `expressionlink.` — the alias survives
+            -- the sub-select substitution of get_sql_cursor (link profiles).
+            ORDER BY link.source_id, link.target_id
         """
         cursor = self.get_sql_cursor(sql, edge_map)
 
@@ -1161,6 +1228,23 @@ class Export:
         tree = etree.ElementTree(gexf)
         tree.write(filename, xml_declaration=True, pretty_print=True, encoding='utf-8')
         return count
+
+    def _pseudolink_method_clause(self) -> str:
+        """Build the IN(...) list of similarity methods for pseudolinks.
+
+        The user-supplied `--method` is only ever used as a LOOKUP KEY in
+        PSEUDOLINK_METHODS, never interpolated: the emitted fragment is always
+        made of module constants (database.md, SQL boundary rule).
+        """
+        wanted = (self.method or '').strip().lower()
+        methods = list(PSEUDOLINK_METHODS)
+        if wanted and wanted != 'all':
+            if wanted in PSEUDOLINK_METHODS:
+                methods = [wanted]
+            else:
+                print('Unknown --method "%s"; exporting every method [%s]'
+                      % (self.method, ', '.join(PSEUDOLINK_METHODS)))
+        return ', '.join("'%s'" % m for m in methods)
 
     def write_pseudolinks(self, filename) -> int:
         """Write paragraph-level semantic links to CSV file.
@@ -1175,7 +1259,13 @@ class Export:
             Exports semantic relationships between paragraphs based on NLI/embedding similarity.
             Columns: Source_ParagraphID, Target_ParagraphID, RelationScore (-1|0|1),
             ConfidenceScore, Source_Text, Target_Text, Source_ExpressionID, Target_ExpressionID.
-            Only includes similarities from 'nli', 'cosine', or 'cosine_lsh' methods.
+            Includes 'nli', 'cosine', 'cosine_lsh' and 'verbatim'
+            similarities; `Method` says which one produced each row, so the
+            researcher can separate VERBATIM circulation (rigorously identical
+            text, decision D-2) from semantic proximity. `--method=NAME`
+            restricts the export to one of them -- useful because on a land
+            full of repeated boilerplate the verbatim rows can dominate the
+            file by orders of magnitude.
             Results ordered by descending score.
         """
         col_map = {
@@ -1183,6 +1273,7 @@ class Export:
             'Target_ParagraphID': 'p2.id',
             'RelationScore': 's.score',
             'ConfidenceScore': 'COALESCE(s.score_raw, s.score)',
+            'Method': 's.method',
             'Source_Text': 'p1.text',
             'Target_Text': 'p2.text',
             'Source_ExpressionID': 'e1.id',
@@ -1199,9 +1290,11 @@ class Export:
             WHERE e1.land_id = ?
               AND e1.relevance >= ?
               AND e2.land_id = e1.land_id
-              AND s.method IN ('nli', 'cosine', 'cosine_lsh')
-            ORDER BY s.score DESC
-        """
+              AND s.method IN (%s)
+            -- O05: the score ties constantly, and since D-2 the SAME pair can
+            -- carry two methods. Order on the full key.
+            ORDER BY s.score DESC, p1.id, p2.id, s.method
+        """ % self._pseudolink_method_clause()
         cursor = self.get_sql_cursor(sql, col_map)
         return self.write_csv(filename, col_map.keys(), cursor)
 
@@ -1250,7 +1343,7 @@ class Export:
               CASE WHEN e1.id <= e2.id THEN e1.id ELSE e2.id END,
               CASE WHEN e1.id <= e2.id THEN e2.id ELSE e1.id END
             HAVING PairCount > 0
-            ORDER BY PairCount DESC
+            ORDER BY PairCount DESC, Source_ExpressionID, Target_ExpressionID
         """
         cursor = self.get_sql_cursor(sql, col_map)
         return self.write_csv(filename, col_map.keys(), cursor)
@@ -1274,9 +1367,11 @@ class Export:
             Results ordered by descending PairCount.
         """
         col_map = {
-            'Source_DomainID': 'CASE WHEN e1.domain_id <= e2.domain_id THEN e1.domain_id ELSE e2.domain_id END',
+            'Source_DomainID': 'CASE WHEN e1.domain_id <= e2.domain_id THEN e1.domain_id ELSE '
+            'e2.domain_id END',
             'Source_Domain': 'CASE WHEN e1.domain_id <= e2.domain_id THEN d1.name ELSE d2.name END',
-            'Target_DomainID': 'CASE WHEN e1.domain_id <= e2.domain_id THEN e2.domain_id ELSE e1.domain_id END',
+            'Target_DomainID': 'CASE WHEN e1.domain_id <= e2.domain_id THEN e2.domain_id ELSE '
+            'e1.domain_id END',
             'Target_Domain': 'CASE WHEN e1.domain_id <= e2.domain_id THEN d2.name ELSE d1.name END',
             'PairCount': 'COUNT(*)',
             'Weight': 'COUNT(*)',
@@ -1305,7 +1400,7 @@ class Export:
               CASE WHEN e1.domain_id <= e2.domain_id THEN e1.domain_id ELSE e2.domain_id END,
               CASE WHEN e1.domain_id <= e2.domain_id THEN e2.domain_id ELSE e1.domain_id END
             HAVING PairCount > 0
-            ORDER BY PairCount DESC
+            ORDER BY PairCount DESC, Source_DomainID, Target_DomainID
         """
         cursor = self.get_sql_cursor(sql, col_map)
         return self.write_csv(filename, col_map.keys(), cursor)
@@ -1350,7 +1445,10 @@ class Export:
             FROM domain AS d
             JOIN expression AS e ON e.domain_id = d.id
             WHERE land_id = ? AND relevance >= ?
-            GROUP BY d.name
+            -- O05: GROUP BY d.id, not d.name — two domains can share a name
+            -- after a merge, and the id is the identity that closes the order.
+            GROUP BY d.id
+            ORDER BY d.id
         """
         cursor = self.get_sql_cursor(sql, node_map)
 
@@ -1386,6 +1484,8 @@ class Export:
                 AND target_id IN idx
                 AND source_domain_id != target_domain_id
             GROUP BY source_domain_id, target_domain_id
+            -- O05: total ordering of the emitted edges.
+            ORDER BY source_domain_id, target_domain_id
         """
         cursor = self.get_sql_cursor(sql, edge_map)
 
@@ -1533,7 +1633,10 @@ class Export:
             WHERE t.land_id = ?
                 AND e.relevance >= ?
             GROUP BY tc.expression_id, path
-            ORDER BY tc.expression_id, t.parent_id, t.sorting
+            -- O05: `path` closes the key. t.parent_id / t.sorting are bare
+            -- columns under a GROUP BY, so two sibling tags at the same
+            -- sorting rank tie and the header column order drifts.
+            ORDER BY tc.expression_id, t.parent_id, t.sorting, path
             """
 
             cursor = model.DB.execute_sql(sql, (self.land.get_id(), self.relevance))
@@ -1585,7 +1688,8 @@ class Export:
             JOIN expression AS e ON e.id = tc.expression_id
             WHERE t.land_id = ?
                 AND e.relevance >= ?
-            ORDER BY t.parent_id, t.sorting
+            -- O05: two snippets of the same tag tie on (parent, sorting).
+            ORDER BY t.parent_id, t.sorting, tc.expression_id, tc.id
             """
 
             cursor = model.DB.execute_sql(sql, (self.land.get_id(), self.relevance))
@@ -1631,6 +1735,9 @@ class Export:
             LEFT JOIN tag t ON t.id = tc.tag_id
             WHERE e.land_id = ? AND relevance >= ?
             GROUP BY e.id
+            -- O05: the zip is written in batches of 1000, so this order also
+            -- decides WHICH expression lands in corpus_00001 vs _00002.
+            ORDER BY e.id
         """
 
         cursor = self.get_sql_cursor(sql, col_map)
@@ -1638,40 +1745,43 @@ class Export:
         batch_size = 1000
         batch_count = 0
         current_batch = 0
-        
+
         # Enlever l'extension .zip du nom de fichier de base
         base_filename = filename.replace('.zip', '')
-        
-        arch = None
-        
+
+        arch: Optional[ZipFile] = None
+
         for row in cursor:
             # Créer un nouveau ZIP toutes les 1000 expressions
             if current_batch == 0:
                 batch_count += 1
                 if arch:
                     arch.close()
-                
+
                 # Créer le nom du fichier avec numérotation : nom_00001.zip, nom_00002.zip, etc.
                 batch_filename = f"{base_filename}_{batch_count:05d}.zip"
                 arch = ZipFile(batch_filename, 'w')
                 print(f"Création du fichier ZIP : {batch_filename}")
-            
+
             count += 1
             current_batch += 1
-            
+
             row = dict(zip(col_map.keys(), row))
             txt_filename = '{}-{}.txt'.format(row.get('id'), self.slugify(row.get('title', '')))
             data = self.to_metadata(row) + row.get('readable', '')
+            # The first row of every batch opens `arch` (current_batch == 0 on
+            # entry); the assert states that invariant rather than hiding it.
+            assert arch is not None
             arch.writestr(txt_filename, data)
-            
+
             # Reset le compteur de batch si on atteint 1000
             if current_batch >= batch_size:
                 current_batch = 0
-        
+
         # Fermer le dernier ZIP
         if arch:
             arch.close()
-        
+
         print(f"Export terminé : {count} expressions réparties dans {batch_count} fichiers ZIP")
         return count
 
@@ -1761,12 +1871,16 @@ class Export:
         import csv
         import io
 
+        # O05: order the manifest and the zip entries. Both filters stay in
+        # the sub-select — test_08 counts exactly the expressions that have
+        # stored HTML and pass minrel.
         rows = (model.Expression
                 .select(model.Expression, model.Domain.name.alias('domain_name'))
                 .join(model.Domain)
                 .where((model.Expression.land == self.land)
                        & (model.Expression.html.is_null(False))
-                       & (model.Expression.relevance >= self.relevance)))
+                       & (model.Expression.relevance >= self.relevance))
+                .order_by(model.Expression.id))
 
         n = 0
         with zipfile.ZipFile(filename, 'w', zipfile.ZIP_DEFLATED) as zf:

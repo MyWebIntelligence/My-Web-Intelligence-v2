@@ -157,7 +157,8 @@ class AiohttpStrategy(FetchStrategy):
                  user_agent: Optional[str] = None):
         self._session = session
         self._timeout = timeout
-        self._user_agent = user_agent if user_agent is not None else getattr(settings, 'user_agent', '')
+        self._user_agent = user_agent if user_agent is not None else getattr(
+            settings, 'user_agent', '')
 
     async def fetch(self, url: str) -> Optional[FetchResult]:
         headers = {"User-Agent": self._user_agent}
@@ -375,7 +376,8 @@ class ArchiveOrgStrategy(FetchStrategy):
     name = "archive_org"
 
     def __init__(self, timeout: Optional[float] = None):
-        self._timeout = timeout if timeout is not None else float(getattr(settings, 'default_timeout', 10))
+        self._timeout = timeout if timeout is not None else float(
+            getattr(settings, 'default_timeout', 10))
 
     async def fetch(self, url: str) -> Optional[FetchResult]:
         # Don't archive an archive
