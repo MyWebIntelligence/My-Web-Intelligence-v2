@@ -73,17 +73,16 @@ jobs:
       - name: Lint (classe bugs) — bloquant
         run: make lint
 
-      - name: Lint complet — informatif
-        # 390 -> 0 le 2026-09-18 (lot L16). Retirer continue-on-error pour
-        # verrouiller l'acquis, après un premier run vert.
-        continue-on-error: true
+      # BLOQUANTS depuis le 2026-09-19. Les deux comptes sont passés à zéro le
+      # 2026-09-18 (390 -> 0 pour flake8, lot L16 ; 215 -> 0 pour mypy, décision
+      # D-16), et le premier run vert (run 35409588128, PR #4) a confirmé qu'ils
+      # rendent le même verdict sur un runner Linux que sur le poste de dev.
+      # Un acquis qu'on ne verrouille pas se reperd : laissés informatifs, ils
+      # seraient revenus à plusieurs centaines sans que personne le voie.
+      - name: Lint complet — bloquant
         run: make lint-all
 
-      - name: Typage (mypy) — informatif
-        # 215 -> 0 le 2026-09-18 (décision D-16), dont ~140 marqueurs
-        # d'exception devenus inutiles. Rendre bloquant après un premier run
-        # vert, même raison que ci-dessus.
-        continue-on-error: true
+      - name: Typage (mypy) — bloquant
         run: make typecheck
 
   # --- Tests : matrice sur les versions de Python supportées (>=3.10) --------
