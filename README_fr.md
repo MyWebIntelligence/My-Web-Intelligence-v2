@@ -500,6 +500,19 @@ python mywi.py land crawl --name="MonProjet" [--limit N] [--http CODE] [--retry-
 > Utiliser `--retry-status=403,429` pour rejouer la cascade sur les URLs
 > déjà crawlées sans réinitialiser leur `fetched_at`. Config détaillée :
 > `settings-example.py` (bloc `crawl_fallback_*`).
+>
+> **Les certificats TLS ne sont pas vérifiés pendant `land crawl`.** C'est un
+> arbitrage assumé, pas un oubli : les sites institutionnels à certificat expiré
+> ou mal configuré sont fréquents dans les corpus anciens, et les perdre
+> biaiserait silencieusement l'échantillon. Conséquence : sur ce seul chemin,
+> l'identité du serveur d'origine n'est pas authentifiée
+> cryptographiquement — une page archivée peut en principe provenir d'un
+> intermédiaire non authentifié. Ce que MWI garantit sur une archive, c'est son
+> horodatage, son statut HTTP et la stratégie qui l'a livrée. Tous les autres
+> chemins réseau (`land readable`, `land medianalyse`, `land reanalyze`,
+> `domain crawl`, `heuristic update --fetch-missing`, et le repli `curl_cffi`)
+> vérifient, eux. Réactiver la vérification si vous collectez un jour depuis un
+> réseau que vous ne maîtrisez pas.
 
 > **Archivage HTML brut (`--fullhtml`, sprint-html)** — quand l'option est
 > active, le HTML retourné par la cascade est persisté dans
