@@ -136,8 +136,60 @@ def _normalize_yesno(text: str) -> str:
     return "?"
 
 
+def ask_openrouter_chat(prompt: str, model: Optional[str] = None,
+                        timeout: Optional[int] = None,
+                        max_tokens: Optional[int] = None) -> str:
+    """Send a single-turn prompt to OpenRouter and return the raw content.
+
+    Generalisation, rétro-compatible, de :func:`ask_openrouter_yesno` (sprint
+    recode-links, 2026-07-07) : ``ask_openrouter_yesno`` figeait le modèle à
+    ``settings.openrouter_model`` ; le codage à **quatre juges** exige un modèle
+    par appel. Cette fonction accepte un ``model`` par appel (slug OpenRouter) et
+    un ``timeout`` optionnel.
+
+    Args:
+        prompt: Formatted prompt string for the LLM.
+        model: OpenRouter model slug. Defaults to ``settings.openrouter_model``.
+        timeout: Per-call timeout (s). Defaults to ``settings.openrouter_timeout``.
+
+    Returns:
+        Raw response content from the LLM (``choices[0].message.content``).
+
+    Raises:
+        requests.HTTPError: If the API request fails (non-2xx).
+
+    Note:
+        temperature=0 (déterministe). Le comptage d'appels / le plafond de
+        budget ne sont PAS gérés ici (transport pur) : l'appelant (gate de
+        pertinence, moteur de recodage) applique sa propre politique.
+    """
+    headers = {
+        "Authorization": f"Bearer {settings.openrouter_api_key}",
+        "Content-Type": "application/json",
+    }
+    body = {
+        "model": model or settings.openrouter_model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0,
+    }
+    # Plafond de sortie : borne le coût des modèles à raisonnement, qui sinon
+    # génèrent des milliers de tokens de "thinking" facturés (jusqu'à 11k observés
+    # sur le run recode-links). None = pas de plafond (comportement historique).
+    if max_tokens:
+        body["max_tokens"] = int(max_tokens)
+    resp = requests.post(
+        "https://openrouter.ai/api/v1/chat/completions",
+        headers=headers,
+        data=json.dumps(body),
+        timeout=timeout or settings.openrouter_timeout,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    return data["choices"][0]["message"]["content"]
+
+
 def ask_openrouter_yesno(prompt: str) -> str:
-    """Send a yes/no question to OpenRouter API.
+    """Send a yes/no question to OpenRouter API (thin wrapper on chat).
 
     Args:
         prompt: Formatted prompt string for the LLM.
@@ -149,26 +201,9 @@ def ask_openrouter_yesno(prompt: str) -> str:
         requests.HTTPError: If the API request fails.
 
     Note:
-        Uses temperature=0 for deterministic responses.
+        Uses temperature=0 for deterministic responses. Model = settings default.
     """
-    headers = {
-        "Authorization": f"Bearer {settings.openrouter_api_key}",
-        "Content-Type": "application/json",
-    }
-    body = {
-        "model": settings.openrouter_model,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0,
-    }
-    resp = requests.post(
-        "https://openrouter.ai/api/v1/chat/completions",
-        headers=headers,
-        data=json.dumps(body),
-        timeout=settings.openrouter_timeout,
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    return data["choices"][0]["message"]["content"]
+    return ask_openrouter_chat(prompt)
 
 
 def is_relevant_via_openrouter(land: model.Land, expression: model.Expression,
