@@ -28,12 +28,21 @@ lint: ## BLOCKING in CI: the bug-class subset of flake8 (syntax, undefined names
 	@echo "Linting (bug class only: E9,F63,F7,F82)..."
 	uv run --locked flake8 mwi tests --count --select=E9,F63,F7,F82 --show-source --statistics
 
-lint-all: ## Informational: the full flake8 report (style debt)
-	@echo "Full flake8 report (informational)..."
+# BLOCKING in CI since 2026-09-19 (both targets below). Caveat worth knowing:
+# flake8's verdict DEPENDS ON THE INTERPRETER RUNNING IT. Since Python 3.12
+# (PEP 701) the tokenizer emits tokens inside f-string replacement fields, so
+# pycodestyle finally inspects them -- `f"{getattr(x,'y','')}"` is 2 x E231 on
+# 3.12 and silent on 3.11. The CI `quality` job runs 3.12 and is therefore the
+# authority; a local `.venv` on 3.11 UNDER-reports. To reproduce the CI verdict:
+#   uv run --locked --python 3.12 flake8 mwi/ --count
+# Be aware it REBUILDS .venv under 3.12; the next `make test` rebuilds it back.
+# That churn is why the version is not pinned in the recipes themselves.
+lint-all: ## BLOCKING in CI: the full flake8 report
+	@echo "Full flake8 report..."
 	uv run --locked flake8 mwi/ --count --statistics
 
-typecheck: ## Informational: mypy on the mwi package
-	@echo "Type checking (informational)..."
+typecheck: ## BLOCKING in CI: mypy on the mwi package
+	@echo "Type checking..."
 	uv run --locked mypy mwi
 
 test: test-basic ## Run basic tests (no API keys required) - alias for test-basic
