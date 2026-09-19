@@ -19,13 +19,28 @@ from peewee import (
     FloatField
 )
 
-DB = SqliteDatabase(path.join(settings.data_location, 'mwi.db'), pragmas={
+# The single pragma set. `mwi/cli.py` carried its own copy for the `--db`
+# switch, so every change had to be made in two files or the two paths
+# silently diverged.
+SQLITE_PRAGMAS = {
     'journal_mode': 'wal',
     'cache_size': -1 * 512000,
     'foreign_keys': 1,
-    'ignore_check_constrains': 0,
-    'synchronous': 0
-})
+    # `ignore_check_constrains` (no final 't') is NOT a SQLite pragma: an
+    # unknown name is silently ignored, so the line read as configuration
+    # while doing nothing at all. The value stays 0, which is the default.
+    'ignore_check_constraints': 0,
+    # NORMAL (1), not OFF (0). Under WAL, NORMAL is the documented minimum:
+    # OFF leaves the file open to corruption on a power loss or an OS crash,
+    # and this database usually lives inside a cloud-sync mount. Measured on
+    # APFS (2026-09-19): 20 000 batched inserts 0.59 -> 0.69 s, 2 000
+    # individual commits 0.19 -> 0.32 s — +65 us per save(), against the
+    # 50-5000 ms of the network fetch that precedes it.
+    'synchronous': 1,
+}
+
+DB = SqliteDatabase(path.join(settings.data_location, 'mwi.db'),
+                    pragmas=SQLITE_PRAGMAS)
 
 
 class BaseModel(Model):

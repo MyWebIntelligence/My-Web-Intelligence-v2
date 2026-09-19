@@ -20,19 +20,14 @@ sys.path.insert(0, path.dirname(path.dirname(path.abspath(__file__))))
 
 from mwi import core, model  # noqa: E402
 
-_PRAGMAS = {
-    'journal_mode': 'wal',
-    'cache_size': -1 * 512000,
-    'foreign_keys': 1,
-    'ignore_check_constrains': 0,
-    'synchronous': 0,
-}
-
 
 def _switch_db(db_path):
+    # model.SQLITE_PRAGMAS, not a third copy of the pragma set: this tool
+    # rewrites Expression.domain in bulk on a real user database, so it is
+    # the last place that should run with weaker durability than the app.
     abs_path = path.abspath(db_path)
     model.DB.close()
-    model.DB.init(abs_path, pragmas=_PRAGMAS)
+    model.DB.init(abs_path, pragmas=model.SQLITE_PRAGMAS)
     print(f"Using database: {abs_path}")
 
 

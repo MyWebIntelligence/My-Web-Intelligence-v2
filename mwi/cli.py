@@ -366,25 +366,50 @@ def command_input():
 def _switch_database(db_path: str) -> None:
     """Re-bind the global Peewee database to the given SQLite file.
 
-    Called from command_input when the user passes --db PATH. Preserves
-    the same pragma set as the default initialization in mwi.model.
+    Called from command_input when the user passes --db PATH. Uses the very
+    same pragma set as the default initialization — model.SQLITE_PRAGMAS —
+    rather than a second copy of it, which is how the two could diverge.
     """
     import os
     from . import model
     abs_path = os.path.abspath(db_path)
     if not os.path.exists(abs_path):
         raise SystemExit(f'--db: file not found: {abs_path}')
-    pragmas = {
-        'journal_mode': 'wal',
-        'cache_size': -1 * 512000,
-        'foreign_keys': 1,
-        'ignore_check_constrains': 0,
-        'synchronous': 0,
-    }
     if not model.DB.is_closed():
         model.DB.close()
-    model.DB.init(abs_path, pragmas=pragmas)
+    model.DB.init(abs_path, pragmas=model.SQLITE_PRAGMAS)
     print(f'Using database: {abs_path}')
+
+
+def _refresh_planner_statistics() -> None:
+    """Give SQLite a chance to refresh its query-planner statistics.
+
+    Nothing in MWI ever produced them: `ANALYZE` runs only inside migration
+    013, and `db setup` builds the schema without going through migrations.
+    A database that has never been analysed leaves the planner on its
+    defaults, and the graph exports pay for it — measured on a 4 000-page
+    land (2026-09-19): the edge query costs 7.02 s without statistics and
+    0.27 s with them, and grows quadratically with the page count instead of
+    linearly.
+
+    `PRAGMA optimize` is the maintenance-free form: it re-analyses only the
+    tables this connection actually queried, and only when their statistics
+    are missing or stale (21-46 ms measured, a no-op otherwise). An ANALYZE
+    in `db setup` would achieve nothing — SQLite writes no statistics for
+    empty tables, which is exactly what a fresh schema has.
+
+    Deliberately swallows its own failure. The statistics are an
+    optimisation; a crawl that did its work must not be reported as failed
+    because a PRAGMA could not take the write lock. The reason is printed,
+    never hidden.
+    """
+    from . import model
+    if model.DB.is_closed():
+        return
+    try:
+        model.DB.execute_sql('PRAGMA optimize')
+    except Exception as exc:
+        print(f'PRAGMA optimize skipped ({exc})')
 
 
 def dispatch(args):
@@ -499,5 +524,11 @@ def call(func, args):
         providing clear error messages for debugging.
     """
     if callable(func):
-        return func(args)
+        # The single point every executed command passes through, CLI and
+        # programmatic alike — so the planner statistics are refreshed once
+        # per command, whatever the entry point and even on failure.
+        try:
+            return func(args)
+        finally:
+            _refresh_planner_statistics()
     raise ValueError("Invalid action call {} on object {}".format(args.verb, args.object))
