@@ -1050,5 +1050,69 @@ class TestRootPathAndPercentEncoding:
         assert 'trk=abc' not in out
 
     def test_absent_key_keeps_the_previous_behaviour(self):
-        assert normalize_url('https://linkedin.com/p?trk=abc') == \
+        # Explicit rules, like every other test in this class. `{}` merges onto
+        # DEFAULT_RULES, where `strip_trackers_by_host` is empty -- so the key
+        # really is absent, which is what the name claims. Reading the ambient
+        # configuration instead made the verdict depend on the machine: green
+        # here, red on a fresh clone, whose example config DEFINES the key.
+        assert normalize_url('https://linkedin.com/p?trk=abc', {}) == \
             'https://linkedin.com/p?trk=abc'
+
+
+class TestDbOverrideDoesNotMoveExports:
+    """R03 (c) - CONTRACT: `--db PATH` rebinds the database, NOT the data dir.
+
+    `cli._switch_database` re-inits `model.DB` and nothing else. Exports and
+    `lands/<id>/` still land in `settings.data_location`, because that is what
+    `core.export_land` reads. So pointing `--db` at a database sitting in
+    another project writes that project's exports into the CURRENT data
+    directory — surprising enough that the README example was actively
+    misleading.
+
+    Restoring `model.DB` in a `finally` is mandatory: a leaked rebind
+    contaminates every later test in the session.
+    """
+
+    def test_exports_stay_in_settings_data_location(self, fresh_db, tmp_path):
+        import glob as _glob
+        import shutil
+
+        from mwi import cli, model
+
+        controller = fresh_db["controller"]
+        core = fresh_db["core"]
+        data_dir = str(fresh_db["data_dir"])
+        original_path = model.DB.database
+
+        controller.LandController.create(
+            core.Namespace(name="dbo_land", desc="d", lang=["fr"]))
+        m = fresh_db["model"]
+        land = m.Land.get(m.Land.name == "dbo_land")
+        domain, _ = m.Domain.get_or_create(name="dbo.example")
+        m.Expression.create(land=land, domain=domain,
+                            url="https://dbo.example/a", depth=0, relevance=5,
+                            title="t", http_status="200")
+
+        # Checkpoint before copying: WAL keeps committed rows out of the main
+        # file until then, so the copy would otherwise be empty.
+        model.DB.execute_sql("PRAGMA wal_checkpoint(TRUNCATE)")
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        other = elsewhere / "other.db"
+        shutil.copy(original_path, str(other))
+
+        try:
+            cli._switch_database(str(other))
+            assert controller.LandController.export(
+                core.Namespace(name="dbo_land", type="pagecsv", minrel=0)) == 1
+        finally:
+            if not model.DB.is_closed():
+                model.DB.close()
+            model.DB.init(original_path, pragmas={
+                'journal_mode': 'wal', 'cache_size': -1 * 512000,
+                'foreign_keys': 1, 'ignore_check_constrains': 0,
+                'synchronous': 0})
+
+        assert len(_glob.glob(os.path.join(
+            data_dir, "export_land_*_pagecsv_*"))) == 1
+        assert _glob.glob(str(elsewhere / "export_land_*")) == []

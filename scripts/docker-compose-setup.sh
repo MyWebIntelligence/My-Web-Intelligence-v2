@@ -206,7 +206,11 @@ fi
 section "Verification"
 
 info "Checking installation..."
-if docker compose exec mwi python mywi.py land list &> /dev/null; then
+# Probe with `db migrate` (idempotent, succeeds on an empty database) rather
+# than `land list`: since A09 the exit code reflects the outcome, and
+# `land list` on a brand-new install correctly reports "no land created" and
+# exits 1 -- which would raise a false alarm on every fresh setup.
+if docker compose exec mwi python mywi.py db migrate &> /dev/null; then
     success "MyWI is running correctly"
 else
     warning "MyWI may not be configured correctly"

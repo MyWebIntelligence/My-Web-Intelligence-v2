@@ -281,6 +281,11 @@ class TestLandSeorankMocked:
             return (1, 1)  # processed, updated
 
         monkeypatch.setattr(core, "update_seorank_for_land", mock_update_seorank)
+        # The controller refuses to run without a key and returns 0 before ever
+        # reaching the mock. Pin one: relying on the machine's configuration
+        # made this test green here and red on a fresh clone, where the example
+        # config ships an empty key.
+        monkeypatch.setattr(controller.settings, "seorank_api_key", "test-key")
 
         ret = controller.LandController.seorank(
             core.Namespace(name=name, limit=None, depth=None, http="200", minrel=1, force=False)

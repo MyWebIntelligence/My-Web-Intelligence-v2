@@ -30,7 +30,7 @@ Design constraints:
 import re
 import warnings
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urldefrag, urljoin, urlparse
 
 import settings
@@ -56,6 +56,10 @@ MAX_LIST_DEPTH = 4
 MAX_ANCESTOR_TOKENS = 32
 
 _VALID_TOKEN = re.compile(r'^[A-Za-z0-9_-]+$')
+
+# The 3-key URL index: exact -> relaxed -> host+path, each mapping to an
+# expression id. Named so the three dicts cannot drift apart silently.
+UrlIndex = Tuple[Dict[str, int], Dict[str, int], Dict[str, int]]
 
 
 @dataclass
@@ -191,7 +195,9 @@ def _anchor_stats(anchors):
     unique among *living* objects, and BeautifulSoup is free to release a node
     whose id we would then read back as somebody else's.
     """
-    counts, chars, alive = {}, {}, {}
+    counts: Dict[int, int] = {}
+    chars: Dict[int, int] = {}
+    alive: Dict[int, Any] = {}
     for a_tag in anchors:
         length = len(a_tag.get_text(' ', strip=True))
         for parent in a_tag.parents:
@@ -215,7 +221,7 @@ def _ancestor_features(ancestors, counts):
     """
     aside = None
     in_list = False
-    tokens = []
+    tokens: List[str] = []
     container = None
     for depth, parent in enumerate(ancestors):
         if aside is None:
@@ -512,17 +518,38 @@ def _read_url_token(s: str, start: int):
     return ''.join(chars), i
 
 
-def iter_markdown_link_tokens(md_content: Optional[str]):
-    """Yield the RAW URL tokens (as written, RELATIVE links included) of a
-    markdown body, in document order, duplicates preserved.
+def _read_destination(s: str, start: int):
+    """Read a link/image destination from `start` (just after the opening '(').
 
-    Recognizes inline links ``[text](url)`` (images ``![alt](url)`` excluded)
-    and autolinks ``<url>``. Parentheses are balanced (neither overflow nor
-    truncation). Never raises.
+    Handles the CommonMark angle-bracket form ``(<url>)``, which the plain
+    reader hands back with its chevrons attached — and which then became junk
+    rows such as ``https://site/<https:/site/i.jpg>`` once urljoin'ed.
 
-    The RAW (unresolved) token is exposed because
-    :func:`extract_md_paragraph` locates the paragraph on the *literal* href
-    — the readable pipeline needs ``raw_url`` to keep that lookup working.
+    Falls back to :func:`_read_url_token` whenever the '<' is not closed the
+    way a destination is (no '>' at all, a newline, a nested '<', or
+    whitespace inside): an unmatched '<' must never let the scan run forward
+    to some ``<b>`` tag further down the document. CommonMark does allow
+    spaces inside ``<...>``, but a destination with a raw space is not
+    something MWI can store anyway, and rejecting it is what keeps the
+    overflow guard simple.
+    """
+    if start < len(s) and s[start] == '<':
+        close = s.find('>', start + 1)
+        if close != -1:
+            inner = s[start + 1:close]
+            if (inner and '<' not in inner
+                    and not any(ch.isspace() for ch in inner)):
+                return inner, close + 1
+    return _read_url_token(s, start)
+
+
+def _iter_markdown_inline_tokens(md_content: Optional[str], images: bool):
+    """Shared scanner behind the link and image token readers.
+
+    One reader, two filters: `images=False` yields inline-link and autolink
+    destinations, `images=True` yields image destinations. Before A04 three
+    divergent regexes read image URLs (crawl, extract_medias, Mercury) and
+    each had its own corruption mode.
     """
     if not md_content or not isinstance(md_content, str):
         return
@@ -531,13 +558,14 @@ def iter_markdown_link_tokens(md_content: Optional[str]):
     i = 0
     while i < n:
         c = s[i]
-        # Autolink: <url>  (always absolute)
+        # Autolink: <url>  (always absolute) — a link, never an image
         if c == '<':
             close = s.find('>', i + 1)
             if close != -1:
                 content = s[i + 1:close]
                 if ' ' not in content and _SCHEME_RE.match(content):
-                    yield content
+                    if not images:
+                        yield content
                     i = close + 1
                     continue
             i += 1
@@ -547,14 +575,47 @@ def iter_markdown_link_tokens(md_content: Optional[str]):
             is_image = i > 0 and s[i - 1] == '!'
             close = s.find(']', i + 1)
             if close != -1 and close + 1 < n and s[close + 1] == '(':
-                token, end = _read_url_token(s, close + 2)
-                if not is_image and token:
+                if images and not is_image and '[' in s[i + 1:close]:
+                    # Linked image `[![alt](img)](target)`: the media is the
+                    # INNER image, not the outer destination. Step one char
+                    # so the nested '![' is visited on its own.
+                    i += 1
+                    continue
+                token, end = _read_destination(s, close + 2)
+                if token and is_image == images:
                     yield token
                 i = end
                 continue
             i += 1
             continue
         i += 1
+
+
+def iter_markdown_link_tokens(md_content: Optional[str]):
+    """Yield the RAW URL tokens (as written, RELATIVE links included) of a
+    markdown body, in document order, duplicates preserved.
+
+    Recognizes inline links ``[text](url)`` (images ``![alt](url)`` excluded)
+    and autolinks ``<url>``. Parentheses are balanced (neither overflow nor
+    truncation) and an angle-bracketed destination is unwrapped. Never raises.
+
+    The RAW (unresolved) token is exposed because
+    :func:`extract_md_paragraph` locates the paragraph on the *literal* href
+    — the readable pipeline needs ``raw_url`` to keep that lookup working.
+    """
+    yield from _iter_markdown_inline_tokens(md_content, images=False)
+
+
+def iter_markdown_image_tokens(md_content: Optional[str]):
+    """Yield the RAW destinations of markdown images ``![alt](url)``.
+
+    Same reader, same guarantees as :func:`iter_markdown_link_tokens`:
+    balanced parentheses, CommonMark title dropped, ``<url>`` unwrapped,
+    relative destinations preserved as written (the caller resolves them).
+    A linked image ``[![alt](img)](target)`` yields the image, not the target.
+    Never raises.
+    """
+    yield from _iter_markdown_inline_tokens(md_content, images=True)
 
 
 def extract_markdown_links(md_content: Optional[str],
@@ -578,9 +639,9 @@ def extract_markdown_links(md_content: Optional[str],
     return out
 
 
-# --------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------  #
 # Tolerant URL resolution — 3-key ladder (sprint dedup-selfloops)              #
-# --------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------  #
 # Same ladder as the fullhtml export: exact normalize_url, then relaxed
 # (lowercase, no trailing slash), then host+path (scheme/www-insensitive).
 # Used by consolidate to resolve readable links onto EXISTING corpus
@@ -643,7 +704,7 @@ def build_url_index(pairs, rules: Optional[Dict] = None) -> tuple:
 
     ``rules`` freezes the normalization; see :func:`add_to_url_index`.
     """
-    index = ({}, {}, {})
+    index: UrlIndex = ({}, {}, {})
     for eid, url in pairs:
         add_to_url_index(index, eid, url, rules)
     return index

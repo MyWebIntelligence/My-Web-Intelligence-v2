@@ -101,16 +101,35 @@ class TestLandExportCSV:
         assert ret == 1
 
     def test_export_corpus(self, populated_land):
-        """--type=corpus génère le corpus texte."""
+        """--type=corpus writes one zip of {id}-{slug}.txt files.
+
+        D01c: the only corpus batching test lived in tests/legacy/, returned
+        True/False instead of asserting (a PytestReturnNotNoneWarning, i.e. a
+        test pytest does not consider to have asserted anything), and never
+        called `Export.write_corpus` — it exercised `str.replace` and
+        `ZipFile`. It is deleted; this test covers the real thing.
+        """
+        import zipfile
+
         controller = populated_land["controller"]
         core = populated_land["core"]
         name = populated_land["name"]
+        data_dir = str(populated_land["data_dir"])
 
         ret = controller.LandController.export(
             core.Namespace(name=name, type="corpus", minrel=0)
         )
 
         assert ret == 1
+        zips = sorted(glob.glob(os.path.join(data_dir,
+                                             "export_land_*_corpus_*.zip")))
+        # Batches of 1000: 20 expressions make exactly one _00001.zip.
+        assert len(zips) == 1
+        assert zips[0].endswith("_00001.zip")
+        with zipfile.ZipFile(zips[0]) as zf:
+            names = zf.namelist()
+        assert len(names) == 20
+        assert all(n.endswith(".txt") and "-" in n for n in names)
 
     def test_export_nodelinkcsv(self, populated_land):
         """--type=nodelinkcsv crée des fichiers CSV."""
@@ -671,3 +690,55 @@ class TestLandExportPagesJSON:
         node = next(n for n in graph["nodes"] if n["id"] == expr0.id)
         assert node["seorank"] == {"sr_rank": 5, "sr_traffic": 1000}
         assert isinstance(node["seorank"]["sr_rank"], int)
+
+
+class TestPagegexfExcludesIntraDomainEdges:
+    """R03 (b) - CONTRACT: `pagegexf` drops intra-domain edges, the CSV keeps them.
+
+    `export.py` filters `e1.domain_id != e2.domain_id` for the GEXF page graph,
+    while `_pageslinks` and `pagesjson` keep every edge. Both are defensible —
+    a Gephi page map is usually read for inter-site circulation — but the user
+    documentation never said so, and a researcher comparing the two files sees
+    edges vanish with no explanation.
+
+    Do NOT "harmonise" this: adding intra-domain edges to the GEXF changes
+    every graph already published from this tool. It is a scientific decision,
+    not a cleanup. Documented in the README instead; this test is the lock.
+    """
+
+    def test_intra_domain_edge_is_in_the_csv_and_not_in_the_gexf(self,
+                                                                 populated_land):
+        import xml.etree.ElementTree as ET
+
+        controller = populated_land["controller"]
+        core = populated_land["core"]
+        model = populated_land["model"]
+        name = populated_land["name"]
+        exprs = populated_land["expressions"]
+        data_dir = str(populated_land["data_dir"])
+
+        # expressions 0 and 2 share domain1 (the fixture alternates by parity).
+        src, dst = exprs[0], exprs[2]
+        assert src.domain_id == dst.domain_id
+        model.ExpressionLink.get_or_create(source=src, target=dst)
+
+        assert controller.LandController.export(
+            core.Namespace(name=name, type="nodelinkcsv", minrel=0)) == 1
+        assert controller.LandController.export(
+            core.Namespace(name=name, type="pagegexf", minrel=0)) == 1
+
+        candidates = sorted(glob.glob(os.path.join(
+            data_dir, "*_pageslinks.csv")))
+        assert candidates, sorted(os.listdir(data_dir))
+        links_csv = candidates[-1]
+        with open(links_csv, newline="", encoding="utf-8") as fh:
+            rows = list(csv.DictReader(fh))
+        pairs = {(r['source_id'], r['target_id']) for r in rows}
+        assert (str(src.id), str(dst.id)) in pairs
+
+        gexf = sorted(glob.glob(os.path.join(
+            data_dir, "export_land_*_pagegexf_*.gexf")))[-1]
+        tree = ET.parse(gexf)
+        edges = {(e.get("source"), e.get("target"))
+                 for e in tree.iter() if e.tag.endswith("edge")}
+        assert (str(src.id), str(dst.id)) not in edges

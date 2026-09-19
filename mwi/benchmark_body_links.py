@@ -41,7 +41,7 @@ import time
 import zlib
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 from urllib.parse import urljoin
 
 import trafilatura
@@ -99,9 +99,9 @@ def sha256_file(path: str) -> str:
     return digest.hexdigest()
 
 
-# --------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------  #
 # Gold                                                                         #
-# --------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------  #
 
 @dataclass(frozen=True)
 class GoldRow:
@@ -169,9 +169,9 @@ def load_gold(path: str) -> Tuple[List[GoldRow], str]:
     return rows, sha256_file(path)
 
 
-# --------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------  #
 # Corpus (read-only)                                                           #
-# --------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------  #
 
 def open_corpus(path: str) -> sqlite3.Connection:
     """Open the bench corpus read-only. Writes raise OperationalError."""
@@ -199,9 +199,9 @@ def read_page(conn: sqlite3.Connection, url: str) -> Optional[str]:
     return raw.decode('utf-8', errors='replace')
 
 
-# --------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------  #
 # Extraction (replica of the crawl path, without any write)                    #
-# --------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------  #
 
 @dataclass
 class Counters:
@@ -232,8 +232,12 @@ class Counters:
 def _trafilatura(raw_html: str, output_format: str, counters: Counters,
                  favor_recall: bool = False):
     counters.trafilatura_calls += 1
-    kwargs = {'include_links': True, 'include_comments': False,
-              'include_images': True, 'output_format': output_format}
+    # Dict[str, Any], not the inferred Dict[str, object]: the values are
+    # heterogeneous (bool and str), and without the annotation every keyword
+    # of the ** call is reported as incompatible with its parameter.
+    kwargs: Dict[str, Any] = {
+        'include_links': True, 'include_comments': False,
+        'include_images': True, 'output_format': output_format}
     if favor_recall:
         # Widens Trafilatura's notion of "body". Diagnostic only here; the
         # extraction tickets decide whether to ship it, and on which leg.
@@ -328,7 +332,7 @@ def predict(conn: sqlite3.Connection, idx: tuple, rows: Sequence[GoldRow], *,
         counters.html_bytes += len(raw_html)
         source_id = link_context.resolve_url_in_index(idx, source_url,
                                                       rules=BENCH_URL_RULES)
-        found = {}
+        found: Dict[Any, Any] = {}
         kinds_allowed = PROFILES.get(profile, PROFILES['citation'])
         for url, kind in extract_links(raw_html, source_url, variant=variant,
                                        counters=counters,
@@ -355,9 +359,9 @@ def predict(conn: sqlite3.Connection, idx: tuple, rows: Sequence[GoldRow], *,
     return kept, kinds
 
 
-# --------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------  #
 # Estimator                                                                    #
-# --------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------  #
 
 def ht_ratio(rows: Sequence[GoldRow], numerator, denominator) -> Tuple[float, float]:
     """Horvitz-Thompson ratio of totals, with a 95% half-interval.
@@ -451,9 +455,9 @@ def score(rows: Sequence[GoldRow], kept: Set[Tuple[str, str]],
     return result
 
 
-# --------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------  #
 # Outputs                                                                      #
-# --------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------  #
 
 EDGE_COLUMNS = ('source_url', 'target_url', 'stratum', 'place_group',
                 'place_code', 'cites', 'gold', 'predicted', 'kind', 'outcome')
@@ -501,7 +505,7 @@ def write_summary(out_dir: str, result: BenchResult, *, gold_sha256: str,
     for row in rows:
         strata[row.stratum] = (row.stratum_sample_n, row.stratum_population_n)
 
-    lines = []
+    lines: List[str] = []
     add = lines.append
     add('body-links benchmark')
     add('====================')
@@ -590,7 +594,7 @@ def write_perf(out_dir: str, counters: Counters, wall_clock: float) -> None:
         handle.write('\n')
 
 
-# --------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------  #
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description='Body-links benchmark.')

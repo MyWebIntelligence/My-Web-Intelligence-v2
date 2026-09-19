@@ -620,3 +620,167 @@ class TestLandPruneOrphans:
 
 # Note: Tests SerpAPI et autres tests avec API keys sont volontairement omis
 # car ils nécessitent des clés API réelles et sont testés dans les tests legacy
+
+
+class TestLandDeleteMaxrelGuard:
+    """A05 - `--maxrel` below 1 must be refused, never read as "delete all".
+
+    `LandController.delete` defaulted maxrel to 0, so it could not tell
+    "absent" from "0"; `cli.py` declares `--maxrel` with nargs='?' const=0, so
+    a bare `--maxrel` also arrived as 0. Both fell into the `elif not prune`
+    branch and deleted the ENTIRE land after a confirmation prompt whose
+    wording was identical in both scopes. `--maxrel=-1` did the same.
+
+    The absent-maxrel case (delete the whole land) is deliberate, documented
+    and pinned by test_delete_land / test_07 / legacy: it is NOT changed here.
+    """
+
+    def _land_with_content(self, fresh_db):
+        from datetime import datetime
+        controller = fresh_db["controller"]
+        model = fresh_db["model"]
+        core = fresh_db["core"]
+
+        name = rand_name("guard")
+        controller.LandController.create(
+            core.Namespace(name=name, desc="d", lang=["fr"]))
+        land = model.Land.get(model.Land.name == name)
+        domain, _ = model.Domain.get_or_create(name="example.com")
+        a = model.Expression.create(land=land, domain=domain,
+                                    url="https://example.com/a", depth=0,
+                                    relevance=3, fetched_at=datetime.now())
+        b = model.Expression.create(land=land, domain=domain,
+                                    url="https://example.com/b", depth=1,
+                                    relevance=0, fetched_at=datetime.now())
+        model.ExpressionLink.create(source=a, target=b)
+        model.Media.create(expression=a, url="https://example.com/i.jpg",
+                           type="img")
+        return name, land
+
+    @pytest.mark.parametrize("maxrel,extra", [
+        pytest.param(0, {}, id="zero"),
+        pytest.param(-1, {}, id="minus_one"),
+        pytest.param(-5, {}, id="minus_five"),
+        pytest.param(0, {"prune_orphans": True}, id="zero_with_prune"),
+        pytest.param(0, {"dry_run": "TRUE"}, id="zero_with_dry_run"),
+    ])
+    def test_non_positive_maxrel_is_refused_and_deletes_nothing(
+            self, fresh_db, monkeypatch, capsys, maxrel, extra):
+        controller = fresh_db["controller"]
+        model = fresh_db["model"]
+        core = fresh_db["core"]
+        name, land = self._land_with_content(fresh_db)
+
+        calls = []
+        monkeypatch.setattr(core, "confirm",
+                            lambda msg: calls.append(msg) or True, raising=True)
+
+        ret = controller.LandController.delete(
+            core.Namespace(name=name, maxrel=maxrel, **extra))
+
+        assert ret == 0
+        assert calls == [], "the guard must fire before any confirmation"
+        assert model.Land.get_or_none(model.Land.name == name) is not None
+        assert model.Expression.select().where(
+            model.Expression.land == land).count() == 2
+        assert model.ExpressionLink.select().count() == 1
+        assert model.Media.select().count() == 1
+        out = capsys.readouterr().out
+        assert "--maxrel" in out
+        assert "[dry-run]" not in out
+
+    def test_absent_maxrel_still_announces_and_deletes_the_entire_land(
+            self, fresh_db, monkeypatch, capsys):
+        controller = fresh_db["controller"]
+        model = fresh_db["model"]
+        core = fresh_db["core"]
+        name, land = self._land_with_content(fresh_db)
+
+        seen = []
+        monkeypatch.setattr(core, "confirm",
+                            lambda msg: seen.append(msg) or True, raising=True)
+
+        ret = controller.LandController.delete(
+            core.Namespace(name=name, maxrel=None))
+
+        assert ret == 1
+        assert len(seen) == 1
+        assert "ENTIRE" in seen[0]
+        assert name in seen[0]
+        assert "2 expression" in seen[0]
+        assert model.Land.get_or_none(model.Land.name == name) is None
+
+    def test_positive_maxrel_announces_the_narrow_scope(self, fresh_db,
+                                                        monkeypatch):
+        controller = fresh_db["controller"]
+        core = fresh_db["core"]
+        name, land = self._land_with_content(fresh_db)
+
+        seen = []
+        monkeypatch.setattr(core, "confirm",
+                            lambda msg: seen.append(msg) or True, raising=True)
+
+        ret = controller.LandController.delete(
+            core.Namespace(name=name, maxrel=5))
+
+        assert ret == 1
+        assert "ENTIRE" not in seen[0]
+        assert name in seen[0]
+        assert "relevance < 5" in seen[0]
+
+    def test_dry_run_without_maxrel_announces_the_whole_land(
+            self, fresh_db, monkeypatch, capsys):
+        controller = fresh_db["controller"]
+        model = fresh_db["model"]
+        core = fresh_db["core"]
+        name, land = self._land_with_content(fresh_db)
+
+        monkeypatch.setattr(core, "confirm", lambda msg: True, raising=True)
+
+        ret = controller.LandController.delete(
+            core.Namespace(name=name, maxrel=None, dry_run="TRUE"))
+
+        assert ret == 1
+        out = capsys.readouterr().out
+        assert "[dry-run]" in out
+        assert "ENTIRE" in out
+        assert model.Land.get_or_none(model.Land.name == name) is not None
+
+    def test_dry_run_prune_only_reports_orphans_not_the_whole_land(
+            self, fresh_db, monkeypatch, capsys):
+        controller = fresh_db["controller"]
+        core = fresh_db["core"]
+        name, land, nodes = _build_orphan_graph(fresh_db)
+        monkeypatch.setattr(core, "confirm", lambda msg: True, raising=True)
+
+        ret = controller.LandController.delete(core.Namespace(
+            name=name, maxrel=None, prune_orphans=True, dry_run="TRUE"))
+
+        assert ret == 1
+        out = capsys.readouterr().out
+        assert "uncrawled orphan(s) would be pruned" in out
+        assert "ENTIRE" not in out
+
+    def test_bare_maxrel_flag_from_argv_is_refused(self, fresh_db, monkeypatch):
+        """End-to-end: argparse turns a bare `--maxrel` into 0 (const=0).
+
+        Proves the guard neutralises it without touching cli.py, which
+        test_16 introspects as source.
+        """
+        import sys
+        controller = fresh_db["controller"]
+        model = fresh_db["model"]
+        core = fresh_db["core"]
+        cli = fresh_db["cli"]
+        name, land = self._land_with_content(fresh_db)
+
+        monkeypatch.setattr(core, "confirm", lambda msg: True, raising=True)
+        monkeypatch.setattr(sys, "argv",
+                            ["mywi.py", "land", "delete",
+                             "--name=%s" % name, "--maxrel"])
+
+        cli.command_input()
+
+        assert model.Land.get_or_none(model.Land.name == name) is not None
+        assert model.Expression.select().where(
+            model.Expression.land == land).count() == 2

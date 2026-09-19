@@ -51,6 +51,34 @@ def canonicalize_url(url: str) -> str:
     return urlunsplit((scheme, netloc, path, parts.query, ""))
 
 
+def merge_into(existing: SearchResult, incoming: SearchResult) -> None:
+    """Fold `incoming` into `existing`, in place. `existing.url` is untouched.
+
+    Providers are concatenated with ``+`` preserving order and uniqueness, the
+    lowest non-None rank wins, and title/snippet are backfilled only when the
+    existing value is empty.
+
+    Extracted from :func:`merge_results` (A08) because the same fold is needed
+    one layer down, at persistence time: two results that survive the router's
+    `canonicalize_url` dedup can still collapse onto a single Expression once
+    `normalize_url` has stripped trackers, sorted parameters or unwrapped a
+    Wayback URL — and `SearchResultLog` is UNIQUE on (search_query, url).
+    """
+    seen = existing.providers.split("+") if existing.providers else []
+    for p in (incoming.providers or "").split("+"):
+        if p and p not in seen:
+            seen.append(p)
+    existing.providers = "+".join(seen)
+
+    ranks = [v for v in (existing.rank, incoming.rank) if v is not None]
+    existing.rank = min(ranks) if ranks else None
+
+    if not existing.title and incoming.title:
+        existing.title = incoming.title
+    if not existing.snippet and incoming.snippet:
+        existing.snippet = incoming.snippet
+
+
 def merge_results(batches: Iterable[List[SearchResult]]) -> List[SearchResult]:
     """Merge per-provider result lists, dedup by canonical URL, keep best rank.
 
@@ -89,23 +117,7 @@ def merge_results(batches: Iterable[List[SearchResult]]) -> List[SearchResult]:
                 )
                 continue
 
-            existing = by_url[key]
-            # Concatenate provider names while preserving order and uniqueness.
-            seen = existing.providers.split("+") if existing.providers else []
-            for p in (r.providers or "").split("+"):
-                if p and p not in seen:
-                    seen.append(p)
-            existing.providers = "+".join(seen)
-
-            # Keep the best rank (lowest), ignoring None values.
-            ranks = [v for v in (existing.rank, r.rank) if v is not None]
-            existing.rank = min(ranks) if ranks else None
-
-            # Backfill title/snippet only when the existing one is empty.
-            if not existing.title and r.title:
-                existing.title = r.title
-            if not existing.snippet and r.snippet:
-                existing.snippet = r.snippet
+            merge_into(by_url[key], r)
 
     def _sort_key(r: SearchResult) -> tuple:
         # None rank sorts last, deterministically.
@@ -114,4 +126,4 @@ def merge_results(batches: Iterable[List[SearchResult]]) -> List[SearchResult]:
     return sorted(by_url.values(), key=_sort_key)
 
 
-__all__ = ["canonicalize_url", "merge_results"]
+__all__ = ["canonicalize_url", "merge_into", "merge_results"]

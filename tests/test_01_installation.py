@@ -216,3 +216,44 @@ class TestInstallWizardSerialization:
         assert generated.nli_entailment_threshold == 0.8
         assert generated.similarity_top_k == 50
         assert generated.user_agent == "test-agent"
+
+
+class TestRequirementsMlMirrorsTheExtra:
+    """R03 (e) - CONTRACT: requirements-ml.txt is hand-maintained.
+
+    `pyproject.toml` carries the `ml` optional-dependency group and
+    `requirements-ml.txt` repeats it for the pip fallback. Nothing generates
+    one from the other (`uv export` does not emit extras here, and
+    `tool.uv.package = false`), so the two drift the day someone edits one.
+    This test fails on that day and names the difference.
+
+    Set equality, never a count: asserting `len == 6` would pass while the
+    contents diverged.
+    """
+
+    def test_ml_extra_and_requirements_file_declare_the_same_packages(self):
+        import re
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parent.parent
+        pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
+        req = (root / "requirements-ml.txt").read_text(encoding="utf-8")
+
+        # Regex, not tomllib: the CI matrix still runs 3.9 and 3.10.
+        block = re.search(r"^ml\s*=\s*\[(.*?)\]", pyproject,
+                          re.MULTILINE | re.DOTALL)
+        assert block, "no `ml = [...]` extra in pyproject.toml"
+
+        def _name(spec):
+            return re.split(r"[<>=!\[;]", spec.strip().strip('"\''))[0].strip().lower()
+
+        from_extra = {_name(s) for s in block.group(1).split(",")
+                      if s.strip() and not s.strip().startswith("#")}
+        from_file = {_name(line) for line in req.splitlines()
+                     if line.strip() and not line.strip().startswith("#")
+                     and not line.strip().startswith("-")}
+
+        assert from_extra == from_file, (
+            "pyproject `ml` extra and requirements-ml.txt have drifted: "
+            "only in pyproject=%s, only in file=%s"
+            % (sorted(from_extra - from_file), sorted(from_file - from_extra)))

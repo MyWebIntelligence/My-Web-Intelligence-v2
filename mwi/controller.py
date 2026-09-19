@@ -2,6 +2,7 @@
 Application controller
 """
 import asyncio
+from typing import Any, Dict, List
 import csv
 import os
 import sys
@@ -63,7 +64,7 @@ class DbController:
         MigrationManager = None
         # Try standard package imports first
         try:
-            from migrations.migrate import MigrationManager as _MM  # type: ignore
+            from migrations.migrate import MigrationManager as _MM
             MigrationManager = _MM
         except Exception:
             try:
@@ -71,7 +72,8 @@ class DbController:
                 MigrationManager = _MM2
             except Exception:
                 # Fallback to file-based dynamic import in common locations
-                import importlib.util, os
+                import importlib.util
+                import os
                 repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
                 candidate_paths = [
                     os.path.join(repo_root, 'migrations', 'migrate.py'),
@@ -81,10 +83,13 @@ class DbController:
                 ]
                 for module_path in candidate_paths:
                     if os.path.exists(module_path):
-                        spec = importlib.util.spec_from_file_location('mywi_migrations_migrate', module_path)
+                        spec = importlib.util.spec_from_file_location(
+                            'mywi_migrations_migrate', module_path)
+                        # Assert BEFORE module_from_spec, not after: the call
+                        # itself is what needs a non-None spec.
+                        assert spec is not None and spec.loader is not None
                         migrate_module = importlib.util.module_from_spec(spec)
-                        assert spec and spec.loader
-                        spec.loader.exec_module(migrate_module)  # type: ignore
+                        spec.loader.exec_module(migrate_module)
                         MigrationManager = getattr(migrate_module, 'MigrationManager', None)
                         if MigrationManager is not None:
                             break
@@ -96,18 +101,21 @@ class DbController:
 
         # Filet de sécurité ad hoc: s'assurer que les nouvelles colonnes LLM existent
         try:
-            cols = [row[1] for row in model.DB.execute_sql("PRAGMA table_info('expression')").fetchall()]
+            cols = [row[1] for row in model.DB.execute_sql(
+                "PRAGMA table_info('expression')").fetchall()]
             if 'validllm' not in cols:
                 model.DB.execute_sql("ALTER TABLE expression ADD COLUMN validllm TEXT DEFAULT NULL")
                 print("[migrate] Added missing column expression.validllm")
             if 'validmodel' not in cols:
-                model.DB.execute_sql("ALTER TABLE expression ADD COLUMN validmodel TEXT DEFAULT NULL")
+                model.DB.execute_sql(
+                    "ALTER TABLE expression ADD COLUMN validmodel TEXT DEFAULT NULL")
                 print("[migrate] Added missing column expression.validmodel")
             # HTML storage feature columns
             if 'html' not in cols:
                 model.DB.execute_sql("ALTER TABLE expression ADD COLUMN html TEXT DEFAULT NULL")
                 print("[migrate] Added missing column expression.html")
-            land_cols = [row[1] for row in model.DB.execute_sql("PRAGMA table_info('land')").fetchall()]
+            land_cols = [row[1]
+                         for row in model.DB.execute_sql("PRAGMA table_info('land')").fetchall()]
             if 'fullhtml' not in land_cols:
                 model.DB.execute_sql("ALTER TABLE land ADD COLUMN fullhtml INTEGER DEFAULT 0")
                 print("[migrate] Added missing column land.fullhtml")
@@ -180,6 +188,12 @@ class DbController:
             model.DB.create_tables(tables_clean)
             print("Model created, setup complete")
             return 1
+        # A09: this was the ONE dispatch target that fell through to None on a
+        # refusal, so `db setup` answered "n" exited 0 and the wrapper script
+        # went on to announce "Database initialized". Placed AFTER the `if`,
+        # not in an `else`, so the success path above is untouched.
+        print('Aborted')
+        return 0
 
     @staticmethod
     def fix_archive_domains(args: core.Namespace):
@@ -245,7 +259,7 @@ class DbController:
 
         updated = 0
         errors = 0
-        domain_cache = {}
+        domain_cache: Dict[str, Any] = {}
 
         # Iterate without loading all into memory to avoid encoding issues
         for i, expr in enumerate(query.iterator(), 1):
@@ -259,13 +273,23 @@ class DbController:
                     errors += 1
                     continue
 
-                # Get or create the real domain
+                # Get or create the real domain.
+                # A06: under simulation nothing is created. get_or_create used
+                # to run BEFORE the dry-run guard below, so a "simulation" left
+                # brand-new Domain rows behind and the next `domain crawl` went
+                # out to fetch domains no expression ever validated.
                 if real_domain_name in domain_cache:
                     real_domain = domain_cache[real_domain_name]
+                elif dryrun:
+                    real_domain = model.Domain.get_or_none(
+                        model.Domain.name == real_domain_name)
+                    domain_cache[real_domain_name] = real_domain
+                    if real_domain is None:
+                        print(f"  Would create new domain: {real_domain_name}")
                 else:
                     real_domain, created = model.Domain.get_or_create(name=real_domain_name)
                     domain_cache[real_domain_name] = real_domain
-                    if created and not dryrun:
+                    if created:
                         print(f"  Created new domain: {real_domain_name}")
 
                 # Update the expression using a direct SQL update to avoid loading all columns
@@ -281,19 +305,21 @@ class DbController:
                 updated += 1
 
                 if i % 100 == 0:
-                    print(f"Progress: {i}/{total} expressions processed ({updated} updated, {errors} errors)")
+                    print(
+                        f"Progress: {i}/{total} expressions processed ({updated} updated, {errors} "
+                        f"errors)")
 
             except Exception as e:
                 print(f"Error processing expression {expr.id} ({expr.url}): {e}")
                 errors += 1
 
-        print(f"\nMigration completed:")
+        print("\nMigration completed:")
         print(f"  Total expressions: {total}")
         print(f"  Updated: {updated}")
         print(f"  Errors: {errors}")
 
         if dryrun:
-            print("\nThis was a DRY RUN. Run without --dryrun to apply changes.")
+            print("\nThis was a DRY RUN. Run without --dry-run to apply changes.")
 
         return 1
 
@@ -386,7 +412,8 @@ class LandController:
 
         Prints totals (analyzed / errors), the distribution by format, by
         dimension buckets and by file-size buckets, and the number of
-        duplicate groups detected through the perceptual image hash.
+        duplicate groups: exact ones via image_hash (SHA-256 of the
+        bytes) and near ones via perceptual_hash (dHash).
 
         Args:
             args: Namespace object containing command-line arguments. Required
@@ -426,12 +453,12 @@ class LandController:
         dim_buckets = [
             ('unknown', model.Media.width.is_null(True) | model.Media.height.is_null(True)),
             ('small (<200px)', dims_known
-                               & ((model.Media.width < 200) | (model.Media.height < 200))),
+             & ((model.Media.width < 200) | (model.Media.height < 200))),
             ('medium', dims_known
-                       & (model.Media.width >= 200) & (model.Media.height >= 200)
-                       & ((model.Media.width < 1000) | (model.Media.height < 1000))),
+             & (model.Media.width >= 200) & (model.Media.height >= 200)
+             & ((model.Media.width < 1000) | (model.Media.height < 1000))),
             ('large (>=1000px)', dims_known
-                                 & (model.Media.width >= 1000) & (model.Media.height >= 1000)),
+             & (model.Media.width >= 1000) & (model.Media.height >= 1000)),
         ]
         print('  By dimensions:')
         for label, cond in dim_buckets:
@@ -441,13 +468,15 @@ class LandController:
             ('unknown', model.Media.file_size.is_null(True)),
             ('<100KB', model.Media.file_size < 100 * 1024),
             ('100KB-1MB', (model.Media.file_size >= 100 * 1024)
-                          & (model.Media.file_size < 1024 * 1024)),
+             & (model.Media.file_size < 1024 * 1024)),
             ('>=1MB', model.Media.file_size >= 1024 * 1024),
         ]
         print('  By file size:')
         for label, cond in size_buckets:
             print(f'    {label}: {base.where(cond).count()}')
 
+        # Two questions, two fingerprints (R02 lot B).
+        # image_hash (SHA-256 of the bytes): "the same FILE?"
         duplicates = (model.Media
                       .select(model.Media.image_hash, fn.COUNT(model.Media.id).alias('n'))
                       .join(model.Expression)
@@ -457,7 +486,51 @@ class LandController:
                       .having(fn.COUNT(model.Media.id) > 1))
         dup_groups = duplicates.count()
         dup_medias = sum(row.n for row in duplicates)
-        print(f'  Duplicates: {dup_groups} group(s), {dup_medias} media')
+        print(f'  Exact duplicates (SHA-256): {dup_groups} group(s), {dup_medias} media')
+
+        # perceptual_hash (dHash): "the same IMAGE?". Grouping on EQUALITY by
+        # default — one GROUP BY, no cost — because a recompression usually
+        # lands on the very same fingerprint. NULL fingerprints are excluded:
+        # every database is in that state until `land reanalyze` has run.
+        near = (model.Media
+                .select(model.Media.perceptual_hash, fn.COUNT(model.Media.id).alias('n'))
+                .join(model.Expression)
+                .where((model.Expression.land == land)
+                       & (model.Media.perceptual_hash.is_null(False)))
+                .group_by(model.Media.perceptual_hash)
+                .having(fn.COUNT(model.Media.id) > 1))
+        near_groups = near.count()
+        near_medias = sum(row.n for row in near)
+        print(f'  Near-duplicates (dHash): {near_groups} group(s), {near_medias} media')
+
+        # Distance search is OPT-IN (--near=N) because it is quadratic: it
+        # compares every analysed media with every other one. Print how many
+        # are being compared, and refuse beyond a ceiling rather than run for
+        # hours on a land nobody meant to scan whole.
+        threshold = core.get_arg_option('near', args, set_type=int, default=None)
+        if threshold is not None and threshold >= 0:
+            from .media_analyzer import hamming_distance
+
+            rows = list(model.Media
+                        .select(model.Media.id, model.Media.perceptual_hash)
+                        .join(model.Expression)
+                        .where((model.Expression.land == land)
+                               & (model.Media.perceptual_hash.is_null(False)))
+                        .order_by(model.Media.id))
+            ceiling = int(getattr(settings, 'media_near_duplicate_max', 20000))
+            if len(rows) > ceiling:
+                print(f'  Near search skipped: too many media ({len(rows)} > '
+                      f'{ceiling}). Narrow the scope with --minrel / --depth, '
+                      f'or raise settings.media_near_duplicate_max.')
+            else:
+                pairs = 0
+                for i in range(len(rows)):
+                    for j in range(i + 1, len(rows)):
+                        if hamming_distance(rows[i].perceptual_hash,
+                                            rows[j].perceptual_hash) <= threshold:
+                            pairs += 1
+                print(f'  Near search (distance <= {threshold}): {pairs} pair(s), '
+                      f'{len(rows)} media compared')
         return 1
 
     @staticmethod
@@ -501,7 +574,8 @@ class LandController:
             conditions = cond if conditions is None else (conditions | cond)
 
         if conditions is None:
-            print('[preview_deletion] No criteria given (flags or settings) — nothing would be deleted')
+            print('[preview_deletion] No criteria given (flags or settings) — nothing would be '
+                  'deleted')
             return 1
 
         non_conforming = analyzed_query.where(conditions)
@@ -593,7 +667,7 @@ class LandController:
 
         to_delete = [media.id for media in
                      LandController._media_base_query(land)
-                         .where(model.Media.analyzed_at.is_null(False))
+                     .where(model.Media.analyzed_at.is_null(False))
                      if not media.is_conforming(min_width, min_height, max_file_size)]
         if not to_delete:
             print('[reanalyze] No non-conforming media to delete')
@@ -655,7 +729,8 @@ class LandController:
                     ).count()
                     print(f'  - {available_land.name} ({expr_count} expressions)')
             else:
-                print('[seorank] No lands found in database. Create one with: python mywi.py land create')
+                print('[seorank] No lands found in database. Create one with: python mywi.py land '
+                      'create')
             return 0
 
         limit = core.get_arg_option('limit', args, set_type=int, default=0)
@@ -675,7 +750,8 @@ class LandController:
         )
 
         if processed == 0:
-            print(f"[seorank] No expressions selected for land {args.name} (check depth/force options)")
+            print(f"[seorank] No expressions selected for land "
+                  f"{args.name} (check depth/force options)")
 
         limit_display = limit if limit > 0 else 'all'
         depth_display = 'all' if depth is None else depth
@@ -742,12 +818,11 @@ class LandController:
             )
             consolidated, errors = results
             print(
-                f"%d expressions consolidated (%d errors, minrel=%d)"
+                "%d expressions consolidated (%d errors, minrel=%d)"
                 % (consolidated, errors, min_relevance)
             )
             return 1
         return 0
-
 
     @staticmethod
     def normalize(args: core.Namespace):
@@ -781,7 +856,7 @@ class LandController:
 
         mapping_out = core.get_arg_option('mapping_out', args,
                                           set_type=str, default=None)
-        mapping_rows = []
+        mapping_rows: List[Any] = []
         if mapping_out:
             # Fail on a mistyped path in a second, not after forty minutes of
             # merges. The merges are not reversible.
@@ -839,7 +914,6 @@ class LandController:
         if dry_run:
             print('Run again without --dry-run to apply.')
         return 1
-
 
     @staticmethod
     def list(args: core.Namespace):
@@ -911,13 +985,13 @@ class LandController:
                 fetch_methods = []
                 try:
                     fm_select = (model.Expression
-                        .select(
-                            model.Expression.fetch_method,
-                            fn.COUNT(model.Expression.id).alias('num'))
-                        .where((model.Expression.land == land)
-                               & (model.Expression.fetched_at.is_null(False)))
-                        .group_by(model.Expression.fetch_method)
-                        .order_by(fn.COUNT(model.Expression.id).desc()))
+                                 .select(
+                                     model.Expression.fetch_method,
+                                     fn.COUNT(model.Expression.id).alias('num'))
+                                 .where((model.Expression.land == land)
+                                        & (model.Expression.fetched_at.is_null(False)))
+                                 .group_by(model.Expression.fetch_method)
+                                 .order_by(fn.COUNT(model.Expression.id).desc()))
                     fetch_methods = [
                         "%s: %s" % (s.fetch_method or 'unknown', s.num)
                         for s in fm_select
@@ -986,11 +1060,13 @@ class LandController:
                         "JOIN paragraph p2 ON p2.id = s.target_paragraph_id "
                         "JOIN expression e2 ON e2.id = p2.expression_id "
                         "WHERE e1.land_id = ? AND e2.land_id = e1.land_id "
-                        "AND s.method IN ('nli','cosine','cosine_lsh')"
+                        "AND s.method IN ('nli','cosine','cosine_lsh','verbatim')"
                     )
                     psl_cnt = model.DB.execute_sql(psl_sql, (land.id,)).fetchone()[0]
 
-                    print(f"\tEmbedding: paragraph: {para_cnt} - embed: {emb_cnt} - pseudolink: {psl_cnt}")
+                    print(
+                        f"\tEmbedding: paragraph: {para_cnt} - embed: {emb_cnt} - pseudolink: "
+                        f"{psl_cnt}")
                 except Exception as e:
                     print(f"\tEmbedding: N/A ({e})")
                 print("\n")
@@ -1030,7 +1106,11 @@ class LandController:
         # Parse --fullhtml option (default FALSE for new lands)
         fullhtml_raw = core.get_arg_option('fullhtml', args, set_type=str, default=None)
         store_html = fullhtml_raw.upper() == 'TRUE' if fullhtml_raw else False
-        land = model.Land.create(name=args.name, description=args.desc, lang=lang_str, fullhtml=store_html)
+        land = model.Land.create(
+            name=args.name,
+            description=args.desc,
+            lang=lang_str,
+            fullhtml=store_html)
         os.makedirs(os.path.join(settings.data_location, 'lands/%s') % land.id, exist_ok=True)
         html_status = "enabled" if store_html else "disabled"
         print(f'Land "{args.name}" created (fullhtml={html_status})')
@@ -1065,8 +1145,9 @@ class LandController:
         if land is None:
             print('Land "%s" not found' % args.land)
         else:
-            land_langs = [l.strip().lower() for l in
-                          str(land.lang or 'fr').split(',') if l.strip()] or ['fr']
+            land_langs = [code.strip().lower() for code in
+                          str(land.lang or 'fr').split(',')
+                          if code.strip()] or ['fr']
             for term in core.split_arg(args.terms):
                 with model.DB.atomic():
                     for lang in land_langs:
@@ -1106,8 +1187,9 @@ class LandController:
         if land is None:
             print('Land "%s" not found' % args.name)
             return 0
-        land_langs = [l.strip().lower() for l in
-                      str(land.lang or 'fr').split(',') if l.strip()] or ['fr']
+        land_langs = [code.strip().lower() for code in
+                      str(land.lang or 'fr').split(',')
+                      if code.strip()] or ['fr']
         terms = sorted({str(w.term) for w in core.get_land_dictionary(land)})
         if not terms:
             print(f'No terms in land "{args.name}" dictionary — nothing to do')
@@ -1230,7 +1312,8 @@ class LandController:
         # (sprint-multilang, A7).
         lang_list = getattr(args, 'lang', None)
         if isinstance(lang_list, str):
-            lang_list = [l.strip() for l in lang_list.split(',') if l.strip()]
+            lang_list = [code.strip() for code in lang_list.split(',')
+                         if code.strip()]
         if isinstance(lang_list, list) and lang_list:
             lang = lang_list[0]
         else:
@@ -1313,7 +1396,8 @@ class LandController:
                         expression.title = title
                         has_changes = True
                     if published_at:
-                        earliest = core.prefer_earlier_datetime(expression.published_at, published_at)
+                        earliest = core.prefer_earlier_datetime(
+                            expression.published_at, published_at)
                         if earliest != expression.published_at:
                             expression.published_at = earliest
                             has_changes = True
@@ -1381,7 +1465,9 @@ class LandController:
         # tests, external callers) is persisted here instead.
         persist_results(serp_results)
 
-        print(f'[urlist] Added {added} new URLs, skipped {skipped} (existing or invalid) for land {args.name}')
+        print(
+            f'[urlist] Added {added} new URLs, skipped {skipped} (existing or invalid) for land '
+            f'{args.name}')
         return 1
 
     @staticmethod
@@ -1408,9 +1494,13 @@ class LandController:
             etc.) via recursive deletion. User must type 'Y' to confirm.
         """
         core.check_args(args, 'name')
-        maxrel = core.get_arg_option('maxrel', args, set_type=int, default=0)
+        # default=None, not 0: the command must tell "absent" (delete the whole
+        # land, deliberate) from "0" (a filter that matches nothing, since
+        # relevance is NULL or an integer >= 0). cli.py declares --maxrel with
+        # nargs='?' const=0, so a bare `--maxrel` also arrives as 0.
+        maxrel = core.get_arg_option('maxrel', args, set_type=int, default=None)
         prune = getattr(args, 'prune_orphans', False)
-        dry = getattr(args, 'dry_run', False)
+        dry = core.get_dryrun(args)
         do_vacuum = getattr(args, 'vacuum', False)
 
         land = model.Land.get_or_none(model.Land.name == args.name)
@@ -1418,24 +1508,48 @@ class LandController:
             print('Land "%s" not found' % args.name)
             return 0
 
+        if maxrel is not None and maxrel < 1:
+            print("--maxrel must be >= 1 (strict filter relevance < maxrel); "
+                  "use --maxrel=1 to drop relevance-0 pages, omit it to "
+                  "delete the whole land")
+            return 0
+
+        # Announce the exact scope once, and reuse it for both the dry run and
+        # the confirmation prompt: the two used to print the same sentence
+        # whatever was about to happen.
+        if maxrel is not None:
+            n = model.Expression.select().where(
+                (model.Expression.land == land)
+                & (model.Expression.relevance < maxrel)
+                & (model.Expression.fetched_at.is_null(False))).count()
+            scope = ('%d crawled expression(s) with relevance < %d in land "%s"'
+                     % (n, maxrel, args.name))
+        else:
+            total = model.Expression.select().where(
+                model.Expression.land == land).count()
+            scope = ('the ENTIRE land "%s" and all its data (%d expression(s))'
+                     % (args.name, total))
+
+        orphans = 0
+        orphan_sample = []
+        if prune:
+            # Projected BEFORE the maxrel DELETE, and before the dry-run exit.
+            orphans, orphan_sample = core.prune_orphan_expressions(
+                land, dry_run=True, maxrel=maxrel or 0)
+            scope += " + %d uncrawled orphan(s)" % orphans
+
         if dry:
-            if maxrel > 0:
-                n = model.Expression.select().where(
-                    (model.Expression.land == land)
-                    & (model.Expression.relevance < maxrel)
-                    & (model.Expression.fetched_at.is_null(False))).count()
-                print("[dry-run] %d expression(s) would be deleted by --maxrel" % n)
+            if maxrel is not None or not prune:
+                print("[dry-run] %s would be deleted" % scope)
             if prune:
-                count, sample = core.prune_orphan_expressions(land, dry_run=True, maxrel=maxrel)
-                print("[dry-run] %d uncrawled orphan(s) would be pruned" % count)
-                for url, depth in sample:
+                print("[dry-run] %d uncrawled orphan(s) would be pruned" % orphans)
+                for url, depth in orphan_sample:
                     print("    - [d%s] %s" % (depth, url))
             return 1
 
-        if not core.confirm(
-                "Land and/or underlying objects will be deleted, type 'Y' to proceed : "):
+        if not core.confirm("%s will be deleted, type 'Y' to proceed : " % scope):
             return 0
-        if maxrel > 0:
+        if maxrel is not None:
             query = model.Expression.delete().where(
                 (model.Expression.land == land)
                 & (model.Expression.relevance < maxrel)
@@ -1553,7 +1667,7 @@ class LandController:
             Delegates to readable_pipeline.run_readable_pipeline.
         """
         core.check_args(args, 'name')
-        
+
         # Récupération des paramètres
         fetch_limit = core.get_arg_option('limit', args, set_type=int, default=0)
         depth_limit = core.get_arg_option('depth', args, set_type=int, default=None)
@@ -1567,19 +1681,19 @@ class LandController:
             print(f'Depth limit set to {depth_limit}')
         print(f'Merge strategy: {merge_strategy}')
         print(f'OpenRouter validation: {"enabled" if llm_enabled else "disabled"}')
-        
+
         land = model.Land.get_or_none(model.Land.name == args.name)
         if land is None:
             print('Land "%s" not found' % args.name)
             return 0
-        
+
         # Import du nouveau pipeline
         from .readable_pipeline import run_readable_pipeline
-        
+
         # Configuration de l'event loop selon la plateforme
         if sys.platform == 'win32':
             asyncio.set_event_loop(asyncio.ProactorEventLoop())
-        
+
         # --issuecrawl: stricter "controversy analysis" prompt for the LLM gate
         # (None => settings.openrouter_issue_mode).
         issue_mode = True if getattr(args, 'issuecrawl', False) else None
@@ -1589,7 +1703,7 @@ class LandController:
             run_readable_pipeline(land, fetch_limit, depth_limit, merge_strategy,
                                   llm_enabled, issue_mode=issue_mode)
         )
-        
+
         print("%d expressions processed (%d errors)" % results)
         return 1
 
@@ -1656,8 +1770,11 @@ class LandController:
             if args.type in valid_types:
                 link_profile = core.get_arg_option('link_profile', args,
                                                    set_type=str, default=None)
+                method = core.get_arg_option('method', args, set_type=str,
+                                             default=None)
                 core.export_land(land, args.type, minimum_relevance,
-                                 fullhtml=store_html, link_profile=link_profile)
+                                 fullhtml=store_html, link_profile=link_profile,
+                                 method=method)
                 return 1
             print('Invalid export type "%s" [%s]' % (args.type, ', '.join(valid_types)))
         return 0
@@ -1694,7 +1811,8 @@ class LandController:
             print('OpenRouter non activé (settings.openrouter_enabled=False) — abandon')
             return 0
         if not settings.openrouter_api_key or not settings.openrouter_model:
-            print('OpenRouter: clé API ou modèle manquant — renseignez settings.openrouter_api_key et openrouter_model')
+            print('OpenRouter: clé API ou modèle manquant — renseignez settings.openrouter_api_key '
+                  'et openrouter_model')
             return 0
 
         land = model.Land.get_or_none(model.Land.name == args.name)
@@ -1708,7 +1826,8 @@ class LandController:
         # None => the gate falls back to settings.openrouter_issue_mode.
         issue_mode = True if getattr(args, 'issuecrawl', False) else None
 
-        # Expressions à valider: sans verdict ('oui'/'non') ET avec readable non NULL et suffisamment long
+        # Expressions à valider: sans verdict ('oui'/'non') ET avec
+        # readable non NULL et suffisamment long
         # Base condition on previous verdicts
         verdict_cond = (
             model.Expression.validllm.is_null(True)
@@ -1725,7 +1844,8 @@ class LandController:
                  & verdict_cond
                  & (
                      model.Expression.readable.is_null(False)
-                     & (fn.LENGTH(model.Expression.readable) >= getattr(settings, 'openrouter_readable_min_chars', 0))
+                     & (fn.LENGTH(model.Expression.readable)
+                        >= getattr(settings, 'openrouter_readable_min_chars', 0))
                  )
              )
              .order_by(model.Expression.id))
@@ -1749,7 +1869,11 @@ class LandController:
                 expr.validmodel = settings.openrouter_model
                 # Fixer la pertinence à 0 en cas de NON
                 expr.relevance = 0
-                expr.save(only=[model.Expression.validllm, model.Expression.validmodel, model.Expression.relevance])
+                expr.save(
+                    only=[
+                        model.Expression.validllm,
+                        model.Expression.validmodel,
+                        model.Expression.relevance])
                 updated += 1
             else:
                 # verdict None: ne pas toucher
@@ -1794,7 +1918,8 @@ class EmbeddingController:
             print(f'Land "{args.name}" not found')
             return 0
         from .embedding_pipeline import generate_embeddings_for_paragraphs
-        created_p, created_e = generate_embeddings_for_paragraphs(land, limit_expressions=limit or None)
+        created_p, created_e = generate_embeddings_for_paragraphs(
+            land, limit_expressions=limit or None)
         print(f"Paragraphs created: {created_p}, embeddings created: {created_e}")
         return 1
 
@@ -1898,31 +2023,44 @@ class EmbeddingController:
                 suggestions.append("Set settings.embed_api_url for provider 'http'.")
         elif prov == 'openai':
             key = getattr(settings, 'embed_openai_api_key', '')
-            print(f"OpenAI key: {'set' if key else 'MISSING'}; base={getattr(settings,'embed_openai_base_url','')}")
+            print(
+                f"OpenAI key: {'set' if key else 'MISSING'}; "
+                f"base={getattr(settings,'embed_openai_base_url','')}")
             if not key:
                 ok = False
-                suggestions.append("Set settings.embed_openai_api_key or switch to 'fake' for offline tests.")
+                suggestions.append(
+                    "Set settings.embed_openai_api_key or switch to 'fake' for offline tests.")
         elif prov == 'mistral':
             key = getattr(settings, 'embed_mistral_api_key', '')
-            print(f"Mistral key: {'set' if key else 'MISSING'}; base={getattr(settings,'embed_mistral_base_url','')}")
+            print(
+                f"Mistral key: {'set' if key else 'MISSING'}; "
+                f"base={getattr(settings,'embed_mistral_base_url','')}")
             if not key:
                 ok = False
                 suggestions.append("Set settings.embed_mistral_api_key or switch provider.")
         elif prov == 'gemini':
             key = getattr(settings, 'embed_gemini_api_key', '')
-            print(f"Gemini key: {'set' if key else 'MISSING'}; base={getattr(settings,'embed_gemini_base_url','')}")
+            print(
+                f"Gemini key: {'set' if key else 'MISSING'}; "
+                f"base={getattr(settings,'embed_gemini_base_url','')}")
             if not key:
                 ok = False
                 suggestions.append("Set settings.embed_gemini_api_key or switch provider.")
         elif prov == 'huggingface':
             key = getattr(settings, 'embed_hf_api_key', '')
-            print(f"HF key: {'set' if key else 'MISSING'}; base={getattr(settings,'embed_hf_base_url','')}")
+            print(
+                f"HF key: {'set' if key else 'MISSING'}; "
+                f"base={getattr(settings,'embed_hf_base_url','')}")
             if not key:
                 ok = False
-                suggestions.append("Set settings.embed_hf_api_key (create a token at huggingface.co/settings/tokens).")
+                suggestions.append(
+                    "Set settings.embed_hf_api_key (create a token at "
+                    "huggingface.co/settings/tokens).")
         elif prov == 'ollama':
             print(f"Ollama base: {getattr(settings,'embed_ollama_base_url','')}")
-            suggestions.append("Ensure Ollama is running locally and the embedding model is pulled (e.g., 'ollama pull nomic-embed-text').")
+            suggestions.append(
+                "Ensure Ollama is running locally and the embedding model is pulled (e.g., 'ollama "
+                "pull nomic-embed-text').")
 
         # ANN libs (FAISS only)
         try:
@@ -1950,7 +2088,8 @@ class EmbeddingController:
             importlib.import_module('torch')
         except Exception:
             # Only suggest if sentence-transformers is desired
-            suggestions.append("pip install -U torch torchvision torchaudio  # required by sentence-transformers")
+            suggestions.append(
+                "pip install -U torch torchvision torchaudio  # required by sentence-transformers")
 
         # DB tables presence
         try:
@@ -2026,7 +2165,9 @@ class EmbeddingController:
                                .delete()
                                .where(model.Paragraph.id.in_(pids))
                                .execute())
-            print(f'Deleted land={land_name}: paragraphs={par_deleted}, embeddings={emb_deleted}, similarities={sim_deleted}')
+            print(
+                f'Deleted land={land_name}: paragraphs={par_deleted}, embeddings={emb_deleted}, '
+                f'similarities={sim_deleted}')
             return 1
         else:
             # Wipe all (requires confirmation)
@@ -2038,14 +2179,18 @@ class EmbeddingController:
                 print('No embedding-related rows to delete (database already clean)')
                 return 1
             force = bool(getattr(args, 'force', False))
-            if not force and not core.confirm(f"This will delete ALL embeddings data (paragraphs={pc}, embeddings={ec}, similarities={sc}). Type 'Y' to proceed: "):
+            if not force and not core.confirm(
+                    f"This will delete ALL embeddings data (paragraphs={pc}, embeddings={ec}, "
+                    f"similarities={sc}). Type 'Y' to proceed: "):
                 print('Aborted')
                 return 0
             with model.DB.atomic():
                 sim_deleted = model.ParagraphSimilarity.delete().execute()
                 emb_deleted = model.ParagraphEmbedding.delete().execute()
                 par_deleted = model.Paragraph.delete().execute()
-            print(f'Deleted ALL: paragraphs={par_deleted}, embeddings={emb_deleted}, similarities={sim_deleted}')
+            print(
+                f'Deleted ALL: paragraphs={par_deleted}, embeddings={emb_deleted}, '
+                f'similarities={sim_deleted}')
             return 1
 
 
@@ -2156,9 +2301,20 @@ class HeuristicController:
             int: 1 on success, 0 on a validation error (unknown land, or
             ``--fetch-missing`` without ``--html`` / without ``--limit``).
         """
+        # A14/D-11: this verb takes --land, never --name. Refuse instead of
+        # aliasing: with --name alone the land filter was silently dropped and
+        # the command fell into its "every land" mode, rewriting
+        # Expression.domain across the WHOLE database. Checked before any read.
+        if getattr(args, 'name', None) and not getattr(args, 'land', None):
+            print('heuristic update expects --land=LAND '
+                  '(the --name option is not recognised here)')
+            return 0
+
         use_html = bool(getattr(args, 'html', False))
         fetch_missing = bool(getattr(args, 'fetch_missing', False))
-        dry_run = bool(getattr(args, 'dry_run', False))
+        # core.get_dryrun, not a hand-rolled read: bool("FALSE") is True, so
+        # `--dry-run=FALSE` used to be taken for a simulation here (A06).
+        dry_run = core.get_dryrun(args)
         limit = core.get_arg_option('limit', args, set_type=int, default=None)
         minrel = core.get_arg_option('minrel', args, set_type=int, default=None)
         land_name = getattr(args, 'land', None)
@@ -2325,7 +2481,8 @@ class SearchController:
 
         router = SearchController._build_router()
         if not router.providers:
-            print('[search run] no provider configured. Run `python mywi.py search check` to diagnose.')
+            print('[search run] no provider configured. Run `python mywi.py search check` to '
+                  'diagnose.')
             return 0
 
         active = list(router.provider_names)
@@ -2374,6 +2531,7 @@ class SearchController:
         """
         import datetime
         import json
+        from .search.utils import merge_into
         from .url_normalizer import normalize_url
 
         with model.DB.atomic():
@@ -2389,7 +2547,15 @@ class SearchController:
 
             new_urls = 0
             duplicates = 0
-            collected = 0
+            # A08: the router deduped on canonicalize_url, which keeps the
+            # query string; add_expression then applies normalize_url, which
+            # strips trackers, sorts parameters and unwraps Wayback. Two
+            # results can therefore collapse onto ONE Expression, and
+            # SearchResultLog is UNIQUE on (search_query, url) — the
+            # IntegrityError used to roll back this whole transaction after
+            # the provider quotas had been spent, storing nothing at all.
+            # So: fold on the STORED url, then write the logs once.
+            pending: dict = {}
             for r in results:
                 if not r.url:
                     continue
@@ -2402,27 +2568,35 @@ class SearchController:
                 ) is not None
 
                 expression = core.add_expression(land, r.url)
-                if expression is False or expression is None:
+                if not isinstance(expression, model.Expression):
                     # URL not crawlable (PDF, image, scheme filter, …).
+                    continue
+
+                key = str(expression.url)
+                if key in pending:
+                    # The SearchResult objects are private copies made by
+                    # merge_results, so folding mutates nothing shared.
+                    merge_into(pending[key][0], r)
                     continue
 
                 if pre_exists:
                     duplicates += 1
                 else:
                     new_urls += 1
+                pending[key] = (r, expression)
 
+            for url, (r, expression) in pending.items():
                 model.SearchResultLog.create(
                     search_query=sq,
-                    url=expression.url,
+                    url=url,
                     title=r.title,
                     snippet=r.snippet,
                     providers=r.providers or "",
                     rank_min=r.rank,
                     expression=expression,
                 )
-                collected += 1
 
-            sq.num_collected = collected
+            sq.num_collected = len(pending)
             sq.completed_at = datetime.datetime.now()
             sq.save()
 

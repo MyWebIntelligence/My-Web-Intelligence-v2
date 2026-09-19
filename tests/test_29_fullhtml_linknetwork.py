@@ -608,3 +608,68 @@ class TestFullhtmlIndexPerimeter:
 
         rows = _edge_map(out + "_pageslinksfullhtml.csv")
         assert all(str(buried.id) not in key for key in rows)
+
+
+class TestDomainNamesArePreloadedFromTheCorpusOnly:
+    """O03 - the domain table is no longer loaded whole.
+
+    The preload ran `SELECT id, name FROM domain` with no filter: 25 101 rows
+    on a land using 1 992 of them. It is now a LEFT JOIN on the corpus
+    expressions, so only the domains that can actually be printed are kept.
+
+    The first assertion is BEHAVIOUR (the names must still resolve, including
+    for a domain whose only expression is below minrel but still reachable as
+    a link target). The second is a CHARACTERISATION assertion — it looks at
+    `_fullhtml_domain_name`, an implementation detail, on purpose: without it
+    the test would pass just as well with the whole table loaded, which is the
+    very thing being fixed. Delete it if the preload is restructured; keep the
+    first one.
+    """
+
+    def test_domain_names_resolved_with_unrelated_domains_present(self,
+                                                                  fresh_db):
+        import csv as _csv
+        import glob as _glob
+        import os as _os
+        from datetime import datetime
+
+        m = fresh_db["model"]
+        controller = fresh_db["controller"]
+        core = fresh_db["core"]
+
+        controller.LandController.create(
+            core.Namespace(name="o03", desc="d", lang=["fr"]))
+        land = m.Land.get(m.Land.name == "o03")
+        d_a = m.Domain.create(name="a.example")
+        d_b = m.Domain.create(name="b.example")
+        # Domains nothing in this land points at: they must NOT be preloaded.
+        for i in range(5):
+            m.Domain.create(name="unrelated%d.example" % i)
+
+        a = m.Expression.create(
+            land=land, domain=d_a, url="https://a.example/1", depth=0,
+            relevance=5, http_status="200", fetched_at=datetime.now(),
+            html="<html><body><a href='https://b.example/1'>b</a></body></html>")
+        b = m.Expression.create(
+            land=land, domain=d_b, url="https://b.example/1", depth=1,
+            relevance=5, http_status="200", fetched_at=datetime.now(),
+            html="<html><body>b</body></html>")
+        m.ExpressionLink.create(source=a, target=b)
+
+        assert controller.LandController.export(core.Namespace(
+            name="o03", type="nodelinkcsv", minrel=0, fullhtml="TRUE")) == 1
+
+        path = sorted(_glob.glob(_os.path.join(
+            str(fresh_db["data_dir"]), "*_domainlinksfullhtml.csv")))[-1]
+        with open(path, newline="", encoding="utf-8") as fh:
+            rows = list(_csv.DictReader(fh))
+        names = {(r['source_domain_name'], r['target_domain_name'])
+                 for r in rows}
+        assert ("a.example", "b.example") in names
+
+        from mwi.export import Export
+        exporter = Export("nodelinkcsv", land, 0, fullhtml=True)
+        exporter.write("nodelinkcsv", _os.path.join(
+            str(fresh_db["data_dir"]), "probe.csv"))
+        assert set(exporter._fullhtml_domain_name.values()) == {"a.example",
+                                                                "b.example"}

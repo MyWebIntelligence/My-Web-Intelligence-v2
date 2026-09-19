@@ -7,12 +7,22 @@ import hashlib
 import json
 import math
 import re
-from typing import List, Tuple, Dict, DefaultDict
+from typing import Any, List, Tuple, Dict, DefaultDict
 
 import requests
 
 import settings
 from . import model
+
+# D-2: pairs of RIGOROUSLY IDENTICAL text are not dropped from the similarity
+# output, they are written under their own method. Folding them into `cosine`
+# would drown real proximities -- one "Subscribe to our newsletter" block
+# repeated over n pages yields C(n,2) pairs at 1.0. Keeping them under a
+# distinct method lets the researcher choose, at analysis time, between
+# verbatim circulation and semantic proximity. `ParagraphSimilarity` already
+# carries `method` in its composite key, so both natures coexist with no
+# extra migration.
+METHOD_VERBATIM = 'verbatim'
 
 
 def _clean_text(s: str) -> str:
@@ -118,12 +128,16 @@ def _http_embed(texts: List[str]) -> List[List[float]]:
     # allow custom headers mapping from settings
     try:
         if isinstance(settings.embed_http_headers, str):
-            headers = json.loads(settings.embed_http_headers)  # type: ignore
+            headers = json.loads(settings.embed_http_headers)
         elif isinstance(settings.embed_http_headers, dict):
             headers = dict(settings.embed_http_headers)
     except Exception:
         headers = {}
-    resp = requests.post(settings.embed_api_url, json=payload, headers=headers, timeout=settings.default_timeout)
+    resp = requests.post(
+        settings.embed_api_url,
+        json=payload,
+        headers=headers,
+        timeout=settings.default_timeout)
     resp.raise_for_status()
     data = resp.json()
     items = data.get("data") or []
@@ -196,7 +210,9 @@ def _gemini_embed(texts: List[str]) -> List[List[float]]:
         Uses batchEmbedContents endpoint for multiple inputs.
     """
     # Use batchEmbedContents for multiple inputs
-    base = (settings.embed_gemini_base_url or "https://generativelanguage.googleapis.com/v1beta").rstrip("/")
+    base = (settings.embed_gemini_base_url
+            or "https://generativelanguage.googleapis.com/v1beta"
+            ).rstrip("/")
     model_name = settings.embed_model_name
     # If caller passes short model name, prepend 'models/'
     if not model_name.startswith("models/"):
@@ -208,7 +224,7 @@ def _gemini_embed(texts: List[str]) -> List[List[float]]:
             "model": model_name,
             "content": {"parts": [{"text": t}]}
         })
-    payload = {"requests": reqs}
+    payload: Dict[str, Any] = {"requests": reqs}
     resp = requests.post(url, json=payload, timeout=settings.default_timeout)
     resp.raise_for_status()
     embeddings = resp.json().get("embeddings", [])
@@ -244,9 +260,11 @@ def _huggingface_embed(texts: List[str]) -> List[List[float]]:
     data = resp.json()
     # HF returns list for single/ multi: we normalize to list-of-vectors
     # Possible shapes: [vec] or [[vec], [vec], ...] or nested. Flatten one level when needed.
-    if isinstance(data, list) and data and isinstance(data[0], list) and isinstance(data[0][0], (int, float)):
+    if isinstance(data, list) and data and isinstance(
+            data[0], list) and isinstance(data[0][0], (int, float)):
         return data  # already list-of-vectors
-    if isinstance(data, list) and data and isinstance(data[0], list) and isinstance(data[0][0], list):
+    if isinstance(data, list) and data and isinstance(
+            data[0], list) and isinstance(data[0][0], list):
         return [v for v in data]  # assume list-of-vectors
     if isinstance(data, list) and data and isinstance(data[0], (int, float)):
         return [data]
@@ -314,7 +332,8 @@ def _embed_texts(texts: List[str]) -> List[List[float]]:
         return _fake_embed(texts)
 
 
-def generate_embeddings_for_paragraphs(land: model.Land, limit_expressions: int | None = None) -> Tuple[int, int]:
+def generate_embeddings_for_paragraphs(
+        land: model.Land, limit_expressions: int | None = None) -> Tuple[int, int]:
     """Create Paragraph rows from readable content and generate embeddings.
 
     Args:
@@ -335,21 +354,24 @@ def generate_embeddings_for_paragraphs(land: model.Land, limit_expressions: int 
     if limit_expressions and limit_expressions > 0:
         expr_query = expr_query.limit(limit_expressions)
 
+    expr_query = expr_query.order_by(model.Expression.id)
+
     paragraphs_created = 0
     embeddings_created = 0
 
-    # Create Paragraph rows
+    # Create Paragraph rows: ONE OCCURRENCE PER PAGE (A11/D-1). The key is
+    # (expression, text_hash), not text_hash alone — a paragraph is something
+    # a page carries, not a string the database owns.
     for expr in expr_query:
         paras = split_into_paragraphs(expr)
         pidx = 0
         for ptxt in paras:
             pidx += 1
             th = hashlib.sha256(ptxt.encode('utf-8')).hexdigest()
-            # Deduplicate globally by text hash
             paragraph, created = model.Paragraph.get_or_create(
+                expression=expr,
                 text_hash=th,
                 defaults={
-                    'expression': expr,
                     'domain': expr.domain,
                     'para_index': pidx,
                     'text': ptxt,
@@ -361,47 +383,98 @@ def generate_embeddings_for_paragraphs(land: model.Land, limit_expressions: int 
     # Generate embeddings for paragraphs missing them
     # Collect paragraphs without embedding for this land
     q = (model.Paragraph
-         .select(model.Paragraph.id, model.Paragraph.text)
+         .select(model.Paragraph.id, model.Paragraph.text,
+                 model.Paragraph.text_hash)
          .join(model.Expression)
          .where((model.Expression.land == land) &
                 (~model.Paragraph.id.in_(
                     model.ParagraphEmbedding.select(model.ParagraphEmbedding.paragraph)
                 )))
          )
-    batch = []
-    batch_ids = []
+    batch: List[str] = []
+    batch_ids: List[int] = []
+    batch_hashes: List[str] = []
     for row in q.iterator():
         batch.append(row.text)
         batch_ids.append(row.id)
+        batch_hashes.append(row.text_hash)
         if len(batch) >= settings.embed_batch_size:
-            embeddings_created += _persist_embeddings(batch_ids, batch)
-            batch, batch_ids = [], []
+            embeddings_created += _persist_embeddings(batch_ids, batch,
+                                                      batch_hashes)
+            batch, batch_ids, batch_hashes = [], [], []
     if batch:
-        embeddings_created += _persist_embeddings(batch_ids, batch)
+        embeddings_created += _persist_embeddings(batch_ids, batch,
+                                                  batch_hashes)
 
     return paragraphs_created, embeddings_created
 
 
-def _persist_embeddings(ids: List[int], texts: List[str]) -> int:
-    """Generate and persist embeddings for paragraph batch.
+def _known_vectors(hashes: List[str]) -> Dict[str, Tuple[str, float]]:
+    """Return {text_hash: (embedding_json, norm)} already computed for these texts.
+
+    One query joining ParagraphEmbedding to Paragraph, filtered on the CURRENT
+    model: a vector produced by another model must never be reused (A11).
+
+    This is what keeps "one occurrence per page" cheap. Occurrences share the
+    embedding COST — the provider is called once per distinct text — while each
+    one keeps its own row (ParagraphEmbedding.paragraph is unique).
+    """
+    if not hashes:
+        return {}
+    known: Dict[str, Tuple[str, float]] = {}
+    rows = (model.ParagraphEmbedding
+            .select(model.ParagraphEmbedding.embedding,
+                    model.ParagraphEmbedding.norm,
+                    model.Paragraph.text_hash)
+            .join(model.Paragraph,
+                  on=(model.ParagraphEmbedding.paragraph == model.Paragraph.id))
+            .where((model.Paragraph.text_hash.in_(list(set(hashes)))) &
+                   (model.ParagraphEmbedding.model_name ==
+                    settings.embed_model_name)))
+    for row in rows.iterator():
+        known.setdefault(row.paragraph.text_hash,
+                         (row.embedding, row.norm or 1.0))
+    return known
+
+
+def _persist_embeddings(ids: List[int], texts: List[str],
+                        hashes: List[str]) -> int:
+    """Generate and persist embeddings for a paragraph batch.
 
     Args:
         ids: List of paragraph IDs.
         texts: List of corresponding text strings.
+        hashes: List of corresponding text hashes.
 
     Returns:
         Number of embedding records created.
 
     Note:
         Computes L2 norm and stores embeddings as JSON in database.
+        A text already vectorised with the same model is NOT sent to the
+        provider again; its stored vector is copied onto the new occurrence.
     """
-    vecs = _embed_texts(texts)
+    known = _known_vectors(hashes)
+    # One text per missing hash (a batch can carry the same text twice).
+    todo: Dict[str, str] = {}
+    for h, text in zip(hashes, texts):
+        if h not in known:
+            todo.setdefault(h, text)
+
+    if todo:
+        # zip() truncates when the provider returns fewer vectors than asked,
+        # exactly as before: the surplus paragraphs simply stay unembedded.
+        for h, vec in zip(list(todo), _embed_texts(list(todo.values()))):
+            norm = math.sqrt(sum(v * v for v in vec)) or 1.0
+            known[h] = (json.dumps(vec), norm)
+
     created = 0
     with model.DB.atomic():
-        for pid, vec in zip(ids, vecs):
-            # Compute norm if not normalized
-            norm = math.sqrt(sum(v * v for v in vec)) or 1.0
-            payload = json.dumps(vec)
+        for pid, h in zip(ids, hashes):
+            item = known.get(h)
+            if item is None:
+                continue
+            payload, norm = item
             if not model.ParagraphEmbedding.get_or_none(model.ParagraphEmbedding.paragraph == pid):
                 model.ParagraphEmbedding.create(
                     paragraph=pid,
@@ -469,41 +542,62 @@ def compute_paragraph_similarities(
             .select(
                 model.Paragraph.id,
                 model.Paragraph.expression,
+                model.Paragraph.text_hash,
                 model.ParagraphEmbedding.embedding,
             )
             .join(model.Expression)
             .switch(model.Paragraph)
-            .join(model.ParagraphEmbedding, on=(model.ParagraphEmbedding.paragraph == model.Paragraph.id))
+            .join(model.ParagraphEmbedding,
+                  on=(model.ParagraphEmbedding.paragraph
+                      == model.Paragraph.id))
             .where(model.Expression.land == land)
             )
     if isinstance(minrel, int) and minrel > 0:
         rows = rows.where(model.Expression.relevance >= minrel)
-    data: List[Tuple[int, int, List[float]]] = []
+    data: List[Tuple[int, int, str, List[float]]] = []
     for r in rows.iterator():
         try:
-            vec = json.loads(r.paragraphembedding.embedding)  # type: ignore[attr-defined]
+            vec = json.loads(r.paragraphembedding.embedding)
         except Exception:
             continue
-        data.append((r.id, r.expression.id, vec))  # type: ignore[attr-defined]
+        data.append((r.id, r.expression.id, r.text_hash, vec))
 
-    # Clear existing similarities for this land+method to avoid duplicates
-    land_para_ids = [pid for pid, _, _ in data]
+    # Clear existing similarities for this land to avoid duplicates. The
+    # verbatim rows are produced by the same run, so they are cleared with it.
+    land_para_ids = [pid for pid, _, _, _ in data]
     if land_para_ids:
         model.ParagraphSimilarity.delete().where(
             (model.ParagraphSimilarity.source_paragraph.in_(land_para_ids)) &
-            (model.ParagraphSimilarity.method == meth)
+            (model.ParagraphSimilarity.method.in_([meth, METHOD_VERBATIM]))
         ).execute()
 
     # Select compute strategy
     algo = (meth or 'cosine').lower()
     if algo == 'cosine_lsh':
-        return _compute_similarities_lsh(data, thr, meth, top_k=top_k, lsh_bits=lsh_bits or 16, max_pairs=max_pairs)
+        total = _compute_similarities_lsh(
+            data,
+            thr,
+            meth,
+            top_k=top_k,
+            lsh_bits=lsh_bits or 16,
+            max_pairs=max_pairs)
     else:
-        return _compute_similarities_bruteforce(data, thr, meth, top_k=top_k, max_pairs=max_pairs)
+        total = _compute_similarities_bruteforce(data, thr, meth, top_k=top_k, max_pairs=max_pairs)
+
+    # Make the split visible without an SQL query: on lands full of repeated
+    # boilerplate the verbatim volume is what you have to bound (--maxpairs).
+    if land_para_ids:
+        verbatim = (model.ParagraphSimilarity
+                    .select()
+                    .where((model.ParagraphSimilarity.source_paragraph.in_(land_para_ids)) &
+                           (model.ParagraphSimilarity.method == METHOD_VERBATIM))
+                    .count())
+        print(f"{total - verbatim} paires {meth}, {verbatim} paires {METHOD_VERBATIM}")
+    return total
 
 
 def _compute_similarities_bruteforce(
-    data: List[Tuple[int, int, List[float]]], thr: float, meth: str,
+    data: List[Tuple[int, int, str, List[float]]], thr: float, meth: str,
     top_k: int | None, max_pairs: int | None
 ) -> int:
     """Compute similarities using brute-force pairwise comparison.
@@ -523,11 +617,17 @@ def _compute_similarities_bruteforce(
     batch_inserts = []
     # Optional top-k limiter per source paragraph
     for i in range(n):
-        pid_i, expr_i, vec_i = data[i]
+        pid_i, expr_i, hash_i, vec_i = data[i]
         candidates: List[Tuple[float, int]] = []  # (score, target_pid)
+        verbatim: List[int] = []
         for j in range(i + 1, n):
-            pid_j, expr_j, vec_j = data[j]
+            pid_j, expr_j, hash_j, vec_j = data[j]
             if expr_i == expr_j:
+                continue
+            if hash_i == hash_j:
+                # D-2: identical text. The vectors are identical by
+                # construction, so the dot product is not worth computing.
+                verbatim.append(pid_j)
                 continue
             score = _cosine(vec_i, vec_j)
             if score >= thr:
@@ -535,6 +635,18 @@ def _compute_similarities_bruteforce(
         if top_k and len(candidates) > top_k:
             candidates.sort(key=lambda x: x[0], reverse=True)
             candidates = candidates[:top_k]
+        for pid_j in verbatim:
+            batch_inserts.append({
+                'source_paragraph': pid_i,
+                'target_paragraph': pid_j,
+                'score': 1.0,
+                'score_raw': 1.0,
+                'method': METHOD_VERBATIM,
+            })
+            count += 1
+            if max_pairs and count >= max_pairs:
+                _flush_similarity_inserts(batch_inserts)
+                return count
         for score, pid_j in candidates:
             batch_inserts.append({
                 'source_paragraph': pid_i,
@@ -556,7 +668,7 @@ def _compute_similarities_bruteforce(
 
 
 def _compute_similarities_lsh(
-    data: List[Tuple[int, int, List[float]]], thr: float, meth: str,
+    data: List[Tuple[int, int, str, List[float]]], thr: float, meth: str,
     top_k: int | None, lsh_bits: int, max_pairs: int | None
 ) -> int:
     """Compute similarities using LSH (Locality-Sensitive Hashing).
@@ -580,7 +692,7 @@ def _compute_similarities_lsh(
     random.seed(42)
     if not data:
         return 0
-    dim = len(data[0][2])
+    dim = len(data[0][3])
     # Generate random hyperplanes
     planes: List[List[float]] = []
     for _ in range(lsh_bits):
@@ -601,9 +713,9 @@ def _compute_similarities_lsh(
 
     # Bucketize by signature
     from collections import defaultdict
-    buckets: DefaultDict[int, List[Tuple[int, int, List[float]]]] = defaultdict(list)
+    buckets: DefaultDict[int, List[Tuple[int, int, str, List[float]]]] = defaultdict(list)
     for item in data:
-        buckets[signature(item[2])].append(item)
+        buckets[signature(item[3])].append(item)
 
     count = 0
     batch_inserts = []
@@ -611,11 +723,17 @@ def _compute_similarities_lsh(
     for sig, items in buckets.items():
         m = len(items)
         for i in range(m):
-            pid_i, expr_i, vec_i = items[i]
+            pid_i, expr_i, hash_i, vec_i = items[i]
             candidates: List[Tuple[float, int]] = []
+            verbatim: List[int] = []
             for j in range(i + 1, m):
-                pid_j, expr_j, vec_j = items[j]
+                pid_j, expr_j, hash_j, vec_j = items[j]
                 if expr_i == expr_j:
+                    continue
+                if hash_i == hash_j:
+                    # D-2: identical text lands in the same LSH bucket by
+                    # construction; no need to pay for the dot product.
+                    verbatim.append(pid_j)
                     continue
                 score = _cosine(vec_i, vec_j)
                 if score >= thr:
@@ -623,6 +741,18 @@ def _compute_similarities_lsh(
             if top_k and len(candidates) > top_k:
                 candidates.sort(key=lambda x: x[0], reverse=True)
                 candidates = candidates[:top_k]
+            for pid_j in verbatim:
+                batch_inserts.append({
+                    'source_paragraph': pid_i,
+                    'target_paragraph': pid_j,
+                    'score': 1.0,
+                    'score_raw': 1.0,
+                    'method': METHOD_VERBATIM,
+                })
+                count += 1
+                if max_pairs and count >= max_pairs:
+                    _flush_similarity_inserts(batch_inserts)
+                    return count
             for score, pid_j in candidates:
                 batch_inserts.append({
                     'source_paragraph': pid_i,
@@ -654,12 +784,20 @@ def _flush_similarity_inserts(rows: List[Dict]):
     """
     if not rows:
         return
+    # Group by column set: cosine rows carry no score_raw, verbatim rows do
+    # (D-2), and insert_many builds its INSERT from one shape at a time.
+    groups: Dict[tuple, List[Dict]] = {}
+    for r in rows:
+        groups.setdefault(tuple(sorted(r.keys())), []).append(r)
     with model.DB.atomic():
-        try:
-            model.ParagraphSimilarity.insert_many(rows).execute()
-        except Exception:
+        for chunk in groups.values():
+            try:
+                model.ParagraphSimilarity.insert_many(chunk).execute()
+                continue
+            except Exception:
+                pass
             # Fallback: insert one by one ignoring duplicates
-            for r in rows:
+            for r in chunk:
                 try:
                     model.ParagraphSimilarity.create(**r)
                 except Exception:

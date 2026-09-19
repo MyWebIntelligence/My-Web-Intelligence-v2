@@ -132,7 +132,11 @@ def test_env(tmp_path, monkeypatch):
     # Point app to an isolated temp data directory
     data_dir = tmp_path / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setenv("MWI_DATA_LOCATION", str(data_dir))
+    # NOTE: nothing reads MWI_DATA_LOCATION — the code reads MYWI_DATA_DIR.
+    # The real isolation comes from patching settings.data_location a few
+    # lines below; this variable was decorative and is now at least named
+    # after the one the code actually looks up.
+    monkeypatch.setenv("MYWI_DATA_DIR", str(data_dir))
 
     # NOTE (2026-06-11): this fixture used to pop settings/mwi.* from
     # sys.modules before re-importing. The pop never actually re-imported

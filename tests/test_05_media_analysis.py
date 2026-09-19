@@ -359,7 +359,7 @@ class TestMediaDuplicateDetection:
     """Tests for duplicate detection using perceptual hashing."""
 
     def test_media_stores_image_hash(self, fresh_db):
-        """Le hash perceptuel est stocké dans Media."""
+        """Le empreinte SHA-256 (fichier identique) est stocké dans Media."""
         model = fresh_db["model"]
         controller = fresh_db["controller"]
         core = fresh_db["core"]
@@ -552,3 +552,64 @@ class TestMediaMaintenanceVerbs:
             core.Namespace(name=name, minwidth=200, minheight=200, suppress=True))
         assert ret == 0  # aborted
         assert model.Media.select().count() == before
+
+
+class TestImageHashIsCryptographic:
+    """R02 lot A - `image_hash` is a SHA-256 of the bytes, not a perceptual hash.
+
+    `media_analyzer.py` computed `hashlib.sha256(content).hexdigest()` under a
+    comment reading "empreinte SHA-256 (fichier identique)", and README / CLAUDE.md / Pipelines all
+    repeated the word. Two very different promises:
+
+      - SHA-256 answers "is this the SAME FILE?" — re-encode a PNG at another
+        compression level and the hash is unrelated;
+      - a perceptual hash answers "is this the SAME IMAGE?".
+
+    Researchers reading "perceptual hash" reasonably expected `media_stats` to
+    surface recompressed reuse across sites. It surfaced nothing. The real
+    perceptual fingerprint ships as `perceptual_hash` (lot B); this test locks
+    what `image_hash` actually is, so the documentation cannot drift back.
+    """
+
+    def test_image_hash_equals_sha256_of_downloaded_bytes(self, fresh_db):
+        import asyncio
+        import hashlib
+        import io as _io
+
+        from PIL import Image
+
+        from mwi.media_analyzer import MediaAnalyzer
+
+        # A gradient, not a flat colour: the colour pass runs KMeans with
+        # n_clusters=5 and a single-colour image makes it warn, which would
+        # add a warning to a suite whose target is zero.
+        img = Image.new("RGB", (32, 32))
+        img.putdata([(x * 8 % 256, y * 8 % 256, (x + y) * 4 % 256)
+                     for y in range(32) for x in range(32)])
+        buf = _io.BytesIO()
+        img.save(buf, format="PNG")
+        payload = buf.getvalue()
+
+        class _Resp:
+            content_length = len(payload)
+
+            async def read(self):
+                return payload
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+        class _Session:
+            def get(self, url):
+                return _Resp()
+
+        analyzer = MediaAnalyzer(_Session(), {})
+        result = asyncio.new_event_loop().run_until_complete(
+            analyzer.analyze_image("https://example.com/i.png"))
+
+        assert result["image_hash"] == hashlib.sha256(payload).hexdigest()
+        assert result["file_size"] == len(payload)
+        assert result["width"] == 32

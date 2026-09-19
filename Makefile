@@ -1,4 +1,4 @@
-.PHONY: help test test-basic test-all test-cov test-quick test-apis test-integration clean install install-ml lock bench-cache bench-links bench-determinism
+.PHONY: help test test-basic test-all test-cov test-quick test-apis test-integration lint lint-all typecheck clean install install-ml lock bench-cache bench-links bench-determinism
 
 # Default target
 .DEFAULT_GOAL := help
@@ -23,6 +23,18 @@ install-ml: ## Install with optional ML extras (FAISS + transformers/torch)
 lock: ## Re-resolve and refresh uv.lock, then regenerate requirements.txt
 	uv lock
 	uv export --no-hashes --no-default-groups --no-emit-project --no-annotate -o requirements.txt
+
+lint: ## BLOCKING in CI: the bug-class subset of flake8 (syntax, undefined names)
+	@echo "Linting (bug class only: E9,F63,F7,F82)..."
+	uv run --locked flake8 mwi tests --count --select=E9,F63,F7,F82 --show-source --statistics
+
+lint-all: ## Informational: the full flake8 report (style debt)
+	@echo "Full flake8 report (informational)..."
+	uv run --locked flake8 mwi/ --count --statistics
+
+typecheck: ## Informational: mypy on the mwi package
+	@echo "Type checking (informational)..."
+	uv run --locked mypy mwi
 
 test: test-basic ## Run basic tests (no API keys required) - alias for test-basic
 

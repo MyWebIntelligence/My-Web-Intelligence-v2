@@ -1,0 +1,163 @@
+# .github/workflows/ci.yml
+#
+# Intégration continue : rejoue les tests et le lint à chaque push et pull
+# request. C'est le verrou serveur, celui que rien ne contourne. Ce qui doit
+# bloquer un merge vit ici, pas dans CLAUDE.md, que le modèle charge comme
+# contexte et peut ne pas suivre.
+#
+# Projet géré avec uv (uv.lock versionné). Les commandes passent par le
+# Makefile, pour qu'un développeur puisse rejouer EXACTEMENT ce que la CI
+# bloque : `make lint`.
+#
+# Ce que ce workflow bloque (décision D-7, 2026-09-18) :
+#   - la suite de tests ;
+#   - `flake8 --select=E9,F63,F7,F82` : syntaxe invalide, nom non défini,
+#     comparaison impossible. Vert aujourd'hui, donc exigible tout de suite.
+# Restent informatifs pour l'instant : `flake8` complet et `mypy`. Les deux
+# sont à ZÉRO depuis le 2026-09-18 (lot L16) ; les rendre bloquants est un
+# changement d'une ligne par étape, à faire une fois qu'un premier run vert a
+# confirmé qu'ils se comportent pareil sur un runner Linux.
+#
+# Ruff a été écarté du projet le 2026-06-24 au profit de flake8 ; l'ancienne
+# version de ce fichier l'appelait encore alors qu'il n'est pas dans uv.lock.
+
+name: CI
+
+on:
+  push:
+    branches: ["master", "main"]
+  pull_request:
+  workflow_dispatch:
+
+# Annule les exécutions obsolètes quand on repousse sur la même branche / PR.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # --locked partout : --frozen accepte un lock périmé, --locked échoue si
+  # uv.lock ne correspond plus à pyproject.toml.
+  UV_LOCKED: "1"
+
+jobs:
+  # --- Lint et types : indépendants de la version de Python -----------------
+  quality:
+    name: Lint & types
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout du code
+        uses: actions/checkout@v4
+
+      - name: Installer uv (+ cache)
+        # Version EXACTE, pas un tag majeur flottant : astral-sh/setup-uv
+        # n'en publie plus depuis v7 (les releases v8, v9 et v10 n'existent
+        # qu'en semver complet). `@v8` n'a donc jamais pu se résoudre — la
+        # toute première exécution de cette CI l'a montré, aucun job ne
+        # démarrant. Épingler une version exacte est de toute façon plus
+        # cohérent avec `version: "0.11.23"` juste en dessous.
+        uses: astral-sh/setup-uv@v10.1.0
+        with:
+          enable-cache: true
+          # Épinglé sur la version du Dockerfile et du poste de développement.
+          version: "0.11.23"
+          python-version: "3.12"
+
+      - name: Synchroniser l'environnement (base + dev, gelé sur uv.lock)
+        run: uv sync --locked
+
+      # BLOQUANT. Ce job tourne sous 3.12 : une syntaxe 3.10+ n'y est donc pas
+      # vue comme une erreur E9. C'est le job `tests` en 3.10 qui la rattrape.
+      - name: Lint (classe bugs) — bloquant
+        run: make lint
+
+      - name: Lint complet — informatif
+        # 390 -> 0 le 2026-09-18 (lot L16). Retirer continue-on-error pour
+        # verrouiller l'acquis, après un premier run vert.
+        continue-on-error: true
+        run: make lint-all
+
+      - name: Typage (mypy) — informatif
+        # 215 -> 0 le 2026-09-18 (décision D-16), dont ~140 marqueurs
+        # d'exception devenus inutiles. Rendre bloquant après un premier run
+        # vert, même raison que ci-dessus.
+        continue-on-error: true
+        run: make typecheck
+
+  # --- Tests : matrice sur les versions de Python supportées (>=3.10) --------
+  tests:
+    name: Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - name: Checkout du code
+        uses: actions/checkout@v4
+
+      - name: Installer uv (+ cache)
+        # Version EXACTE, pas un tag majeur flottant : astral-sh/setup-uv
+        # n'en publie plus depuis v7 (les releases v8, v9 et v10 n'existent
+        # qu'en semver complet). `@v8` n'a donc jamais pu se résoudre — la
+        # toute première exécution de cette CI l'a montré, aucun job ne
+        # démarrant. Épingler une version exacte est de toute façon plus
+        # cohérent avec `version: "0.11.23"` juste en dessous.
+        uses: astral-sh/setup-uv@v10.1.0
+        with:
+          enable-cache: true
+          version: "0.11.23"
+          python-version: ${{ matrix.python-version }}
+
+      - name: Synchroniser l'environnement (base + dev, gelé sur uv.lock)
+        run: uv sync --locked
+
+      - name: Générer la configuration locale
+        # settings.py est gitignoré : il est produit à l'installation, donc un
+        # clone neuf n'en a pas et TOUT le paquet `mwi` échoue à l'import
+        # (`ModuleNotFoundError: No module named 'settings'`, 18 erreurs de
+        # collecte au premier run réel de cette CI). `scripts/install-basic.py`
+        # pose des questions, donc inutilisable ici : on copie l'exemple,
+        # exactement ce que fait le setup Docker.
+        run: cp settings-example.py settings.py
+
+      - name: Pré-télécharger les données NLTK (tokenisation déterministe)
+        # Le code retombe sur un tokeniseur simple si indisponible ; cette étape
+        # évite un téléchargement réseau en cours de test. nltk.download ne lève
+        # pas d'exception en cas d'échec, l'étape ne bloque donc jamais la CI.
+        run: uv run python -c "import nltk; nltk.download('punkt', quiet=True); nltk.download('punkt_tab', quiet=True)"
+
+      # Mêmes marqueurs exclus que `make test` (pas de clés d'API, pas de
+      # navigateur, pas d'intégration). La couverture est MESURÉE, pas un
+      # verrou : pytest.ini ne fixe aucun --cov-fail-under et on n'écrit pas un
+      # test pour colorer une ligne.
+      - name: Tests + couverture
+        env:
+          PYTHONPATH: .   # layout plat
+        run: >-
+          uv run pytest tests/
+          -m "not (serpapi or seorank or openrouter or mercury or playwright or integration)"
+          --cov=mwi --cov-report=term-missing --cov-report=xml
+
+  # --- Agrégateur : cible unique pour la "branch protection" ----------------
+  # Avec une matrice, exiger ce seul job en "required status check" suffit ;
+  # il échoue si quality OU n'importe quel job de la matrice échoue.
+  ci-ok:
+    name: CI passed
+    if: always()
+    needs: [quality, tests]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Vérifier que les jobs requis sont verts
+        run: |
+          if [ "${{ needs.quality.result }}" != "success" ] || [ "${{ needs.tests.result }}" != "success" ]; then
+            echo "Un job requis a échoué (quality=${{ needs.quality.result }}, tests=${{ needs.tests.result }})."
+            exit 1
+          fi
+          echo "Tous les jobs requis sont verts."
+
+# Pour faire de ce workflow une condition de merge : Settings > Branches >
+# Branch protection rules > Require status checks to pass > sélectionner
+# "CI passed". À n'activer qu'après un premier run vert sur une PR.

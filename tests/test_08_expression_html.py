@@ -656,3 +656,212 @@ class TestMigration:
         land_row = db.execute_sql("SELECT fullhtml FROM land WHERE name='test'").fetchone()
         assert land_row[0] == 0
         db.close()
+
+
+# ---------------------------------------------------------------------------
+# A07 - the stored-HTML path must fill `readable`, not just `content`
+# ---------------------------------------------------------------------------
+# `_extract_from_stored_html` asked Trafilatura for output_format='txt' with
+# favor_precision=True and filled MercuryResult.content; but
+# `_prepare_expression_update` reads MercuryResult.markdown, and the
+# content->markdown fallback only exists inside `_run_mercury`. So an
+# expression with stored HTML and no readable was dated `readable_at`,
+# reported as "Updated: 1" (the title did change), and kept an empty body.
+#
+# Version coupling: these tests assert on Trafilatura 2.x markdown rendering
+# (pyproject allows >=1.6.0). If the markdown shape changes, adjust the
+# assertions, not the production parameters -- they are deliberately the SAME
+# call as the crawl's markdown leg (core._extract_content_and_links), so the
+# two paths cannot drift apart.
+
+A07_HTML = """<!DOCTYPE html><html lang="fr"><head>
+<title>Un titre de page suffisamment informatif</title></head><body>
+<nav><a href="https://src-a.example/accueil">Accueil</a>
+<a href="https://src-a.example/contact">Contact</a></nav>
+<article>
+<p>Premier paragraphe de prose, assez long pour que Trafilatura le retienne
+comme du contenu principal et non comme du gabarit de navigation.</p>
+<p>Deuxieme paragraphe qui cite
+<a href="https://cible.example/doc">une source externe</a> au fil du texte,
+avec assez de mots autour pour ressembler a un vrai article de presse.</p>
+<p><img src="/img/photo.jpg" alt="photo"> Troisieme paragraphe, encore de la
+prose pour depasser confortablement le seuil des cent caracteres exige par
+le pipeline avant d acceptater une extraction locale.</p>
+</article></body></html>"""
+
+
+def _a07_land(fresh_db, terms=None):
+    from datetime import datetime
+    m = fresh_db["model"]
+    controller = fresh_db["controller"]
+    core = fresh_db["core"]
+
+    controller.LandController.create(
+        core.Namespace(name="a07", desc="d", lang=["fr"]))
+    land = m.Land.get(m.Land.name == "a07")
+    if terms:
+        controller.LandController.addterm(
+            core.Namespace(land="a07", terms=terms))
+    domain, _ = m.Domain.get_or_create(name="src-a.example")
+    expr = m.Expression.create(
+        land=land, domain=domain, url="https://src-a.example/article",
+        depth=0, fetched_at=datetime.now(), http_status="200",
+        html=A07_HTML)
+    return land, expr
+
+
+def _pipeline_without_mercury(monkeypatch):
+    """Pipeline whose Mercury leg is offline, with a call counter."""
+    from mwi.readable_pipeline import MercuryReadablePipeline, MercuryResult
+
+    calls = []
+
+    async def offline(self, url, *args, **kwargs):
+        calls.append(url)
+        return MercuryResult(error="offline")
+
+    monkeypatch.setattr(MercuryReadablePipeline, "_extract_with_mercury",
+                        offline)
+    return MercuryReadablePipeline(), calls
+
+
+class TestStoredHtmlFillsReadable:
+
+    def test_stored_html_produces_markdown_links_and_media(self, fresh_db,
+                                                           monkeypatch):
+        m = fresh_db["model"]
+        land, expr = _a07_land(fresh_db)
+        pipeline, mercury_calls = _pipeline_without_mercury(monkeypatch)
+
+        stats = _run(pipeline.process_land(land))
+
+        assert mercury_calls == [], "stored HTML must short-circuit Mercury"
+        assert stats["processed"] == 1
+        fresh = m.Expression.get_by_id(expr.id)
+        assert fresh.readable is not None
+        assert "[une source externe](https://cible.example/doc)" in fresh.readable
+        # Trafilatura resolves relative hrefs against `url=` only from 2.1.0,
+        # and Python 3.9 resolves to 2.0.0, which leaves the image relative.
+        # What this test guards is that the stored-HTML path passes
+        # include_images (A07) — not which trafilatura release absolutises
+        # the URL. The Media row below is built from the resolved URL either
+        # way, and that IS asserted.
+        assert ("![photo](https://src-a.example/img/photo.jpg)" in fresh.readable
+                or "![photo](/img/photo.jpg)" in fresh.readable)
+
+        medias = list(m.Media.select().where(m.Media.expression == expr.id))
+        assert [x.type for x in medias] == ["img"]
+        # The stored URL must be absolute whatever trafilatura left in the
+        # markdown: a relative path in `media.url` would be un-fetchable by
+        # `land medianalyse`, which has no page context to resolve it against.
+        assert medias[0].url == "https://src-a.example/img/photo.jpg"
+
+        links = list(m.ExpressionLink.select().where(
+            m.ExpressionLink.source == expr.id))
+        assert len(links) == 1, "the two nav anchors must not become edges"
+        assert links[0].origin == "md"
+        assert links[0].context is not None
+
+    def test_relevance_is_recomputed_and_approved(self, fresh_db, monkeypatch):
+        m = fresh_db["model"]
+        land, expr = _a07_land(fresh_db, terms="paragraphe, prose")
+        pipeline, _calls = _pipeline_without_mercury(monkeypatch)
+
+        _run(pipeline.process_land(land))
+
+        fresh = m.Expression.get_by_id(expr.id)
+        assert fresh.relevance > 0
+        assert fresh.approved_at is not None
+
+    def test_no_op_after_a_crawl_that_already_wrote_readable(self, fresh_db,
+                                                            monkeypatch):
+        """The crawl already extracts from the same HTML: do not redo the work.
+
+        Without strict alignment every --fullhtml expression would come back
+        with a NEW `readable`, which is the branch that recomputes relevance
+        and replays the OpenRouter gate -- a real bill on a large land.
+
+        `stats['skipped']` is deliberately NOT the assertion here:
+        `_prepare_expression_update` always recomputes `media_additions` and
+        `link_additions` from the final readable, so any page carrying a link
+        or an image is counted as "updated" even when nothing changed. The
+        assertion that means something is `'readable' not in field_updates`.
+        """
+        from mwi.readable_pipeline import MercuryReadablePipeline
+
+        m, core = fresh_db["model"], fresh_db["core"]
+        land, expr = _a07_land(fresh_db)
+        core._extract_content_and_links(A07_HTML, expr, "aiohttp")
+        expr.title = "Un titre de page suffisamment informatif"
+        expr.save()
+        before_readable = str(m.Expression.get_by_id(expr.id).readable)
+        before_media = sorted(str(x.url) for x in
+                              m.Media.select().where(
+                                  m.Media.expression == expr.id))
+
+        captured = []
+        real_prepare = MercuryReadablePipeline._prepare_expression_update
+
+        def spy(self, expression, mercury_result):
+            update = real_prepare(self, expression, mercury_result)
+            captured.append(update)
+            return update
+
+        monkeypatch.setattr(MercuryReadablePipeline,
+                            "_prepare_expression_update", spy)
+
+        pipeline, _calls = _pipeline_without_mercury(monkeypatch)
+        _run(pipeline.process_land(land))
+
+        assert captured, "the expression was never prepared"
+        assert 'readable' not in captured[0].field_updates
+        fresh = m.Expression.get_by_id(expr.id)
+        assert fresh.readable == before_readable
+        assert sorted(str(x.url) for x in m.Media.select().where(
+            m.Media.expression == expr.id)) == before_media
+
+    def test_short_stored_html_falls_back_to_mercury(self, fresh_db,
+                                                     monkeypatch):
+        from datetime import datetime
+        m = fresh_db["model"]
+        land, expr = _a07_land(fresh_db)
+        expr.html = "<html><body><p>trop court</p></body></html>"
+        expr.save()
+        target = m.Expression.create(
+            land=land, domain=expr.domain, url="https://src-a.example/autre",
+            depth=1)
+        m.ExpressionLink.create(source=expr, target=target)
+        m.Media.create(expression=expr, url="https://src-a.example/x.jpg",
+                       type="img", width=800)
+
+        pipeline, calls = _pipeline_without_mercury(monkeypatch)
+        stats = _run(pipeline.process_land(land))
+
+        assert calls == ["https://src-a.example/article"]
+        fresh = m.Expression.get_by_id(expr.id)
+        assert fresh.readable is None
+        assert fresh.readable_at is not None
+        assert stats["updated"] == 0
+        assert m.ExpressionLink.select().where(
+            m.ExpressionLink.source == expr.id).count() == 1
+        assert m.Media.select().where(
+            m.Media.expression == expr.id).count() == 1
+
+    def test_truncated_html_never_shortens_an_existing_readable(
+            self, fresh_db, monkeypatch):
+        """D-14: expression.html is capped by fullhtml_max_size_kb.
+
+        The crawl built `readable` from the FULL response, so re-extracting
+        from a truncated archive can only lose text. A non-empty readable is
+        never replaced by a shorter one; improvements still go through.
+        """
+        m = fresh_db["model"]
+        land, expr = _a07_land(fresh_db)
+        long_readable = "Un paragraphe deja en base. " * 200
+        expr.readable = long_readable
+        expr.save()
+
+        pipeline, _calls = _pipeline_without_mercury(monkeypatch)
+        _run(pipeline.process_land(land))
+
+        assert m.Expression.get_by_id(expr.id).readable == long_readable
