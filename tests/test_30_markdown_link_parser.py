@@ -181,3 +181,49 @@ class TestIsCrawlableHardened:
     ])
     def test_is_crawlable(self, url, expected):
         assert is_crawlable(url) is expected
+
+
+class TestMarkdownImageTokens:
+    """A04 - one reader for image destinations, shared by crawl/consolidate/Mercury.
+
+    Three divergent regexes used to read image URLs (core crawl, core
+    extract_medias, readable_pipeline). The crawl one,
+    ``!\\[.*?\\]\\((.*?)\\)``, stored ``.../paris_(1`` for
+    ``Paris_(1).jpg`` and swallowed CommonMark titles; none of them knew the
+    angle-bracket form, which produced junk rows like
+    ``https://site/<https:/site/i.jpg>`` once urljoin'ed.
+    """
+
+    @pytest.mark.parametrize("md,expected", [
+        pytest.param("![a](https://x.org/i.jpg)", ["https://x.org/i.jpg"],
+                     id="simple"),
+        pytest.param("![a](<https://x.org/i.jpg>)", ["https://x.org/i.jpg"],
+                     id="angle_brackets"),
+        pytest.param('![a](https://x.org/i.jpg "Titre")',
+                     ["https://x.org/i.jpg"], id="title_ignored"),
+        pytest.param("![a](https://x.org/paris_(1).jpg)",
+                     ["https://x.org/paris_(1).jpg"], id="balanced_parens"),
+        pytest.param("![a](/rel/i.png)", ["/rel/i.png"], id="relative_kept_raw"),
+        pytest.param("[![a](https://a.org/i.png)](https://a.org/full.jpg)",
+                     ["https://a.org/i.png"], id="linked_image"),
+        pytest.param("[t](https://x.org/page)", [], id="plain_link_excluded"),
+        pytest.param("<https://x.org/auto>", [], id="autolink_is_not_an_image"),
+        pytest.param("", [], id="empty"),
+        pytest.param(None, [], id="none"),
+    ])
+    def test_image_destination_variants(self, md, expected):
+        assert list(link_context.iter_markdown_image_tokens(md)) == expected
+
+    def test_unclosed_angle_bracket_falls_back_without_overflow(self):
+        """An unmatched '<' must not scan forward to a later <b> tag."""
+        md = "![a](<https://x.org/i.jpg)\n\nplus loin du <b>gras</b> ici"
+        tokens = list(link_context.iter_markdown_image_tokens(md))
+        assert tokens == ["<https://x.org/i.jpg"]
+
+    def test_link_destination_in_angle_brackets_unwrapped(self):
+        assert list(link_context.iter_markdown_link_tokens(
+            "[t](<https://x.org/a>)")) == ["https://x.org/a"]
+
+    def test_image_in_angle_brackets_is_not_a_link(self):
+        assert list(link_context.iter_markdown_link_tokens(
+            "![i](<https://x.org/i.jpg>)")) == []

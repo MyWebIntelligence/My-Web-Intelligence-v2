@@ -17,7 +17,7 @@ Leaf module: it imports nothing from ``core`` or ``model``, so it can never
 write to the database, and it never raises.
 """
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Dict, List, Optional
 from urllib.parse import urljoin
 
 import settings
@@ -130,7 +130,7 @@ def extract_body_links(md_content: Optional[str],
     ``both``. Never raises.
     """
     links: List[BodyLink] = []
-    seen = {}
+    seen: Dict[str, BodyLink] = {}
 
     def _add(url: str, origin: str, raw: Optional[str] = None) -> None:
         key = _key(url)
@@ -167,9 +167,9 @@ def from_urls(urls, origin: str = ORIGIN_RAW) -> List[BodyLink]:
     return links
 
 
-# --------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------  #
 # Structural classification (sprint body-links, T3)                            #
-# --------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------  #
 
 def _thresholds() -> dict:
     """Rule thresholds. Dimensionless ratios and counts only.

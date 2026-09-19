@@ -5,6 +5,162 @@ The format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.
 
 ## [Unreleased]
 
+### BREAKING — read this first if an automation suddenly stops working
+
+Two interface changes ship in this release. Neither was preceded by an
+inventory of the n8n scenarios, cron jobs and shell wrappers that drive
+`mywi.py` (a deliberate call: correct them as they surface). If a pipeline of
+yours goes quiet, the cause is almost certainly one of these two, and this
+entry is here so the diagnosis takes a minute.
+
+- **`--dryrun` (glued) is removed. Use `--dry-run`.** Only
+  `db fix_archive_domains` still documented the glued spelling. Symptom:
+  `unrecognized arguments: --dryrun` and exit code 2.
+- **`--dry-run=FALSE` now means a real run** on `land delete` and
+  `heuristic update`. It used to be read as a simulation on those two commands
+  (`bool("FALSE")` is `True`), so a command that looked like it was applying
+  changes silently did nothing. If you passed `=FALSE` expecting a no-op, it
+  will now act.
+- **The exit code now reflects the outcome.** `0` success, `1` business failure
+  (land not found, nothing to do, a **cancelled confirmation**, an unhandled
+  exception), `2` argparse usage error. Every run used to exit `0`, so a chain
+  like `cmd1 && cmd2` carried on after a step that had failed. Typical symptom
+  of the change: a scenario that "suddenly does nothing" right after a step
+  which had been failing silently for months — look at that step, it is the
+  real bug and it is now visible. `scripts/docker-compose-setup.sh` had its
+  health probe switched from `land list` (which legitimately exits 1 on a
+  brand-new install) to `db migrate`.
+
+### Added — a real perceptual fingerprint on media (migration 016)
+
+`media.image_hash` is a SHA-256 of the downloaded bytes: it answers "is this
+the same FILE?". The code comment and the documentation called it a
+"perceptual hash", which is a different promise — and the one researchers
+acted on: re-encode an image at another compression level and the SHA-256 is
+unrelated, so `media_stats` never surfaced the reuse of a photo across sites.
+
+`media.perceptual_hash` now carries a 64-bit dHash (16 hex characters):
+grayscale, resize to 9x8, one bit per pair of neighbouring pixels. Two images
+are alike when the Hamming distance is small (default threshold 5/64,
+`settings.media_near_duplicate_distance`). No new dependency — it is fifteen
+lines of Pillow.
+
+`land media_stats` now prints two sections, `Exact duplicates (SHA-256)` and
+`Near-duplicates (dHash)`. `--near=N` additionally searches by distance; it is
+opt-in because it is quadratic, and it refuses to run above
+`settings.media_near_duplicate_max` (20 000) rather than churn for hours.
+
+**The column is NULL for every media analysed before this migration** and
+cannot be backfilled — the bytes are not kept. Run `db migrate`, then
+`land reanalyze --name=LAND` (one download per media; use `--limit` in steps).
+
+### Fixed — the user guides are back in the repository
+
+Seven guides had been moved under `.claude/docs/` in June, a directory
+`.gitignore` excludes (`.*/`). `git ls-tree -r HEAD docs/` listed two files
+while both READMEs pointed at guides that nobody cloning the repository — or
+downloading the Zenodo archive — could open: 13 of 17 relative links were dead.
+
+`docs/` now carries `mwi_tutorial.md` / `.ipynb`, `mwi_tutorial_install.md`,
+`mwi_tutorial_crawl.md`, `search_router.md`, `search_router_architecture.md`
+and `searxng_setup.md`. The install link points at `mwi_tutorial_install.md`
+(the old `INSTALL_ZERO_bis.md` no longer exists). Pointers from those guides to
+unpublished files were rewritten, and one false claim was corrected on the way:
+`expression.http_status` reflects the strategy that **delivered** the HTML, not
+the origin server — it has done so since 2026-05-08.
+
+`tests/test_50_doc_links.py` now fails the build if a README links to something
+that does not exist or that lives under a dot-directory.
+
+### Fixed — a paragraph is an occurrence of a page (migration 015)
+
+`paragraph.text_hash` was UNIQUE across the whole database, so the first page
+vectorised **anywhere** owned that text. Consequences, all of them silent:
+the same paragraph on two pages produced one row and the pair never reached
+`embedding similarity` (`pseudolinks` came out empty); generating a second land
+returned `(0, 0)` because another land already owned the text, and
+`embedding reset` on one land moved the occurrence into the other — results
+depended on the order in which lands had been processed. `--minrel` was also
+evaluated on the *owning* page, so a relevance-0 page crawled first could steal
+a paragraph from a relevant one.
+
+The logical key is now `(expression, text_hash)`. The embedding is still
+computed once per `(text_hash, model_name)`: occurrences share the provider
+cost, not the row.
+
+**Migration**: `db migrate` applies `015_paragraph_occurrences`. On databases
+built by migration 003 the uniqueness came from an inline column constraint,
+which SQLite implements as an undroppable autoindex — the table is rebuilt (row
+counts checked before and after, foreign keys verified). **Back up first**:
+`sqlite3 data/mwi.db ".backup data/mwi.db.bak_$(date +%Y%m%d_%H%M%S)"`. Then
+re-run `embedding generate` (no provider call: existing vectors are reused) and
+`embedding similarity`. `land list` will report more paragraphs than before —
+that is the fix, not a duplication.
+
+### Added — `verbatim` similarity method and a `Method` column on pseudolinks
+
+Two pages carrying a rigorously identical paragraph are now reported under
+their own method, `verbatim` (score 1.0), instead of being folded into
+`cosine`/`nli` — verbatim circulation and semantic proximity are different
+objects, and one repeated boilerplate block over n pages would otherwise add
+C(n,2) pairs at 1.0 and drown real proximities. The `pseudolinks` export gains
+a `Method` column, and `--method=verbatim|cosine|cosine_lsh|nli|all` restricts
+the file to one of them. `ParagraphSimilarity` already carried `method` in its
+composite key, so no migration was needed. The page- and domain-level
+aggregations are unchanged and do not count verbatim pairs.
+
+### Fixed — `land readable` fills the body of pages extracted from stored HTML
+
+When `expression.html` was available the pipeline extracted locally (no network,
+no Mercury) but wrote the result to a field it never read back, so the page was
+timestamped as "read", reported as updated because its title had changed, and
+kept an empty body. The local extraction now uses the exact same Trafilatura
+call as the crawl, which also means re-running `land readable` on a
+`--fullhtml` land no longer rewrites every page (and no longer replays the LLM
+gate on each of them).
+
+A non-empty `readable` is now never replaced by a **shorter** one: stored HTML
+is capped by `settings.fullhtml_max_size_kb`, so re-extracting from a truncated
+archive could only lose text. Longer extractions still replace as before.
+
+Affected pages are the ones with stored HTML and an empty `readable`; the README
+(*Fetch Readable Content*) carries the one-query recovery runbook.
+
+### Changed — `land readable` memory is bounded, not just its concurrency
+
+The pipeline held every selected row — `html` blobs included — for the whole
+run. It now freezes the selection as a list of ids and loads one batch at a
+time: measured 39.4 MB → 4.0 MB on 200 pages of 200 KB. No behaviour change.
+
+### Fixed — the simulation flag is honoured, and simulates nothing into the database
+
+- `land delete` and `heuristic update` read the flag through `core.get_dryrun`
+  like every other command. Before, `land delete --dryrun` deleted the land and
+  `heuristic update --dryrun` reassigned domains for real, without even asking
+  for confirmation.
+- `heuristic update --dry-run --html --fetch-missing` no longer goes to the
+  network. A "simulation" used to issue real HTTP requests.
+- `db fix_archive_domains --dry-run` no longer creates `Domain` rows. The
+  `get_or_create` ran before the guard, so a simulation left new domains behind
+  and the next `domain crawl` went out to fetch them. It now prints
+  `Would create new domain: …` and writes nothing.
+
+### Changed — `land delete` refuses a `--maxrel` below 1, and says what it will delete
+
+`--maxrel=0`, a negative value, or a bare `--maxrel` (argparse turns it into 0)
+all fell through to "delete the entire land", because the controller could not
+tell an absent option from a zero. Since `relevance` is NULL or a non-negative
+integer, `relevance < 0` matches nothing — the intent could never have been to
+delete everything. These now print why they are refused and return without
+touching anything, *before* the confirmation prompt.
+
+The confirmation prompt (and the dry-run line) now name the exact scope:
+`the ENTIRE land "X" and all its data (N expression(s))` versus
+`N crawled expression(s) with relevance < R in land "X"`, plus
+`+ N uncrawled orphan(s)` with `--prune-orphans`. Both scopes used to print the
+same sentence. Omitting `--maxrel` still deletes the whole land: that is
+deliberate and unchanged.
+
 ### Changed — Node identity, id mapping, one resolution ladder (sprint body-links, T1)
 
 Neutral on the benchmark by design, and it closes by PROVING that neutrality:

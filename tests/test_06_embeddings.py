@@ -113,20 +113,26 @@ class TestEmbeddingGeneration:
             core.Namespace(name=name, limit=2)
         )
 
-        # Vérifier que seulement 2 expressions ont été traitées
+        # Exactement 2 expressions traitées. Avant A11 les 5 pages portaient
+        # le MEME texte, la déduplication globale n'en gardait qu'un seul
+        # paragraphe et `<= 2` passait sans rien prouver du tout sur --limit.
         paragraphs = model.Paragraph.select().join(model.Expression).where(
             model.Expression.land == land
         )
-        # Chaque expression génère au moins 1 paragraphe
-        # Avec limit=2, on devrait avoir paragraphes de 2 expressions max
         expressions_with_paragraphs = set()
         for p in paragraphs:
             expressions_with_paragraphs.add(p.expression_id)
 
-        assert len(expressions_with_paragraphs) <= 2
+        assert len(expressions_with_paragraphs) == 2
 
     def test_generate_embeddings_deduplication(self, fresh_db, monkeypatch):
-        """Paragraphes dédupliqués par text_hash."""
+        """Un paragraphe est une OCCURRENCE de page, pas un texte global (A11).
+
+        Deux pages portant le même texte donnent deux lignes `Paragraph` pour
+        un seul `text_hash` : la paire redevient visible pour
+        `embedding similarity`. Avant, la seconde page n'existait tout
+        simplement pas dans le corpus de paragraphes.
+        """
         controller = fresh_db["controller"]
         model = fresh_db["model"]
         core = fresh_db["core"]
@@ -161,20 +167,13 @@ class TestEmbeddingGeneration:
             core.Namespace(name=name, limit=None)
         )
 
-        # Vérifier qu'il y a moins de paragraphes que d'expressions
-        # à cause de la déduplication
-        paragraphs = model.Paragraph.select().join(model.Expression).where(
-            model.Expression.land == land
-        )
-        # Note: Le système peut créer plusieurs paragraphes par expression
-        # mais les paragraphes identiques (même text_hash) ne seront pas dupliqués
-        hashes = set()
-        for p in paragraphs:
-            hashes.add(p.text_hash)
+        paragraphs = list(model.Paragraph.select().join(model.Expression)
+                          .where(model.Expression.land == land))
+        hashes = {p.text_hash for p in paragraphs}
 
-        # On devrait avoir moins de hashes uniques que de paragraphes créés x 2 expressions
-        # car le texte est identique
-        assert len(hashes) > 0
+        assert len(paragraphs) == 2
+        assert len(hashes) == 1
+        assert len({p.expression_id for p in paragraphs}) == 2
 
 
 class TestSimilarityCosine:

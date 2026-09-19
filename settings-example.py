@@ -128,6 +128,37 @@ link_profiles = {
     "all": None,
 }
 
+# ─────────────────────────────────────────────────────────────────────────
+# Media fingerprints (sprint-upgrade R02 lot B)
+# ─────────────────────────────────────────────────────────────────────────
+# Two fingerprints, two questions. `media.image_hash` is a SHA-256 of the
+# downloaded bytes: "is this the SAME FILE?". `media.perceptual_hash` is a
+# 64-bit dHash: "is this the SAME IMAGE?" — a photo reprinted elsewhere after
+# a recompression or a resize keeps a close fingerprint and gets an unrelated
+# SHA-256. No extra dependency: the dHash is computed with Pillow.
+#
+# media_near_duplicate_distance: Hamming distance (out of 64) below which two
+# images are considered the same. 5 is conservative; raise it to catch heavier
+# edits (crops, watermarks) at the cost of false positives.
+media_near_duplicate_distance = 5
+# media_near_duplicate_max: `land media_stats --near=N` compares every
+# analysed media with every other one, which is quadratic. Above this many
+# media the search is refused rather than left to run for hours; narrow the
+# scope with --minrel / --depth instead.
+media_near_duplicate_max = 20000
+
+# ─────────────────────────────────────────────────────────────────────────
+# Readable pipeline (Mercury Parser)
+# ─────────────────────────────────────────────────────────────────────────
+# mercury_timeout: wall-clock bound, in seconds, for one `mercury-parser`
+# call during `land readable`. Mercury already bounds header fetching; what
+# this protects against is a body served at a trickle or a frozen Node
+# process holding a batch slot forever. On expiry the process is killed and
+# reaped, the page is marked failed, and the run continues — there is NO
+# second attempt (a page that hangs will hang again; the useful retry is a
+# targeted re-run or the Wayback fallback).
+mercury_timeout = int(os.getenv("MWI_MERCURY_TIMEOUT", "60"))
+
 # Cut Domains
 
 

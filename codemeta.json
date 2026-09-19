@@ -56,7 +56,7 @@
     {
       "@type": "ComputerLanguage",
       "name": "Python",
-      "version": "3.9+"
+      "version": "3.10+"
     }
   ],
   "operatingSystem": [
@@ -65,7 +65,7 @@
     "Windows"
   ],
   "softwareRequirements": [
-    "Python >= 3.9",
+    "Python >= 3.10",
     "aiohttp",
     "beautifulsoup4",
     "nltk",

@@ -8,7 +8,9 @@ from typing import Dict, Iterable, List, Optional
 
 import aiohttp
 
-from mwi.search.models import ProviderStatus, ProviderUsage, SearchResult
+# ProviderUsage is NOT imported here: the public surface goes through
+# mwi/search/__init__.py, which re-exports it from models.
+from mwi.search.models import ProviderStatus, SearchResult
 from mwi.search.providers.base import BaseProvider
 from mwi.search.utils import merge_results
 
@@ -181,7 +183,11 @@ class SearchRouter:
 
         batches: List[List[SearchResult]] = []
         for provider, outcome in zip(providers, settled):
-            if isinstance(outcome, Exception):
+            # BaseException, not Exception: asyncio.CancelledError has
+            # inherited from BaseException since 3.8, so a cancelled task
+            # slipped through this filter and reached merge_results as if it
+            # were a list of results (D01a-1).
+            if isinstance(outcome, BaseException):
                 _LOG.warning(
                     "router: provider %s raised in parallel: %s",
                     provider.name, outcome,

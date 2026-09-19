@@ -1,11 +1,82 @@
 import io
 import hashlib
 import aiohttp
-import json
 import numpy as np
-from PIL import Image, UnidentifiedImageError
+from PIL import Image
 from sklearn.cluster import KMeans
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional
+
+# Perceptual fingerprint geometry (R02 lot B). dHash compares each pixel with
+# its right-hand neighbour, so the resize is one column WIDER than it is tall:
+# 9x8 pixels give 8 comparisons per row over 8 rows = 64 bits = 16 hex chars.
+_DHASH_SIZE = (9, 8)
+_DHASH_BITS = 64
+
+
+def perceptual_hash(image) -> Optional[str]:
+    """Return the 64-bit dHash of `image` as 16 hex characters, or None.
+
+    Answers "is this the SAME IMAGE?" where `image_hash` (SHA-256 of the
+    bytes) answers "is this the SAME FILE?". A photo reprinted by another
+    outlet after a recompression or a resize keeps a very close dHash and gets
+    a completely unrelated SHA-256 — measuring that circulation is the point.
+
+    Method: grayscale, resize to 9x8 with LANCZOS (which averages away
+    compression noise), then one bit per pair of horizontally adjacent pixels,
+    set when the left one is brighter. Relative comparisons, so the
+    fingerprint is insensitive to overall brightness and to the scale.
+
+    No new dependency: `imagehash` was dropped from the project in June 2026
+    as a pip-freeze leftover nothing imported, and this is fifteen lines of
+    Pillow. numpy is available but pointless for 64 comparisons.
+
+    NEVER raises: anything Pillow cannot open — an SVG, a truncated file, a
+    video — returns None, and the caller keeps the media row (with its
+    SHA-256, which is computed before the image is even opened).
+    """
+    try:
+        # Image.Resampling.LANCZOS, not the Image.LANCZOS alias: the alias
+        # is absent from the type stubs. Pillow floor is 10.0.
+        resized = image.convert('L').resize(_DHASH_SIZE,
+                                            Image.Resampling.LANCZOS)
+    except Exception:
+        return None
+
+    try:
+        # tobytes(), not getdata(): in mode 'L' it yields exactly
+        # width * height bytes in row-major order, and getdata() is deprecated
+        # in Pillow 14 (which would put a warning in every test run).
+        pixels = resized.tobytes()
+    except Exception:
+        return None
+
+    width, height = _DHASH_SIZE
+    bits = 0
+    index = 0
+    for row in range(height):
+        offset = row * width
+        for col in range(width - 1):
+            if pixels[offset + col] > pixels[offset + col + 1]:
+                bits |= 1 << index
+            index += 1
+    return '%016x' % bits
+
+
+def hamming_distance(a: Optional[str], b: Optional[str]) -> int:
+    """Number of differing bits between two dHash strings.
+
+    A missing fingerprint is infinitely far from everything (returns
+    _DHASH_BITS + 1): a media that was never analysed must never be reported
+    as a near-duplicate, and every database is in that state until the first
+    re-analysis after migration 016.
+    """
+    if not a or not b:
+        return _DHASH_BITS + 1
+    try:
+        return bin(int(a, 16) ^ int(b, 16)).count('1')
+    except (TypeError, ValueError):
+        return _DHASH_BITS + 1
+
 
 def generer_palette_web_safe():
     """Generate the 216 RGB colors of the Web Safe palette.
@@ -19,6 +90,7 @@ def generer_palette_web_safe():
     niveaux = [0, 51, 102, 153, 204, 255]
     return [(r, g, b) for r in niveaux for g in niveaux for b in niveaux]
 
+
 def distance_rgb(c1, c2):
     """Calculate squared Euclidean distance between two RGB colors.
 
@@ -31,6 +103,7 @@ def distance_rgb(c1, c2):
     """
     return sum((a - b) ** 2 for a, b in zip(c1, c2))
 
+
 def convertir_vers_web_safe(rgb):
     """Convert an RGB color to its nearest Web Safe palette equivalent.
 
@@ -42,6 +115,7 @@ def convertir_vers_web_safe(rgb):
     """
     palette = generer_palette_web_safe()
     return min(palette, key=lambda c: distance_rgb(rgb, c))
+
 
 class MediaAnalyzer:
     """Media analyzer with asynchronous processing capabilities.
@@ -77,7 +151,7 @@ class MediaAnalyzer:
             Downloads image with size limit, extracts properties, dominant
             colors, web-safe colors, and EXIF metadata.
         """
-        result = {
+        result: Dict[str, Any] = {
             'error': None,
             'width': None,
             'height': None,
@@ -88,6 +162,7 @@ class MediaAnalyzer:
             'aspect_ratio': None,
             'exif_data': None,
             'image_hash': None,
+            'perceptual_hash': None,
             'dominant_colors': [],
             'websafe_colors': []
         }
@@ -97,25 +172,35 @@ class MediaAnalyzer:
             async with self.session.get(url) as response:
                 if response.content_length and response.content_length > self.max_size:
                     raise ValueError(f"Taille dépassée ({response.content_length} bytes)")
-                
+
                 content = await response.read()
                 if len(content) > self.max_size:
                     raise ValueError(f"Taille réelle dépassée ({len(content)} bytes)")
 
                 result['file_size'] = len(content)
-                
-                # Hash perceptuel
+
+                # Empreinte CRYPTOGRAPHIQUE des octets, pas perceptuelle.
+                # Elle répond à « est-ce le MÊME FICHIER ? » : ré-encoder la
+                # même image à un autre niveau de compression donne un hash
+                # sans rapport. « Est-ce la MÊME IMAGE ? » est la question de
+                # `perceptual_hash` (dHash), calculée plus bas.
+                # Calculée AVANT Image.open : un média illisible par Pillow
+                # garde donc son image_hash.
                 result['image_hash'] = hashlib.sha256(content).hexdigest()
-                
+
                 # Analyse avec PIL
                 with Image.open(io.BytesIO(content)) as img:
+                    # Empreinte PERCEPTUELLE (dHash) : « est-ce la même
+                    # image ? ». Calculée en premier pour qu'un échec plus
+                    # loin (couleurs, EXIF) ne la fasse pas perdre.
+                    result['perceptual_hash'] = perceptual_hash(img)
                     self._analyze_image_properties(img, result)
                     self._extract_colors(img, result)
                     self._extract_exif(img, result)
 
         except Exception as e:
             result['error'] = str(e)
-        
+
         return result
 
     def _analyze_image_properties(self, img: Image.Image, result: Dict):
@@ -152,7 +237,9 @@ class MediaAnalyzer:
         """
         if img.mode in ('RGBA', 'LA'):
             alpha = img.getchannel('A')
-            return any(pixel < 255 for pixel in alpha.getdata())
+            # tobytes(): one byte per pixel in mode 'A', and unlike
+            # getdata() it is both typed and not deprecated.
+            return any(pixel < 255 for pixel in alpha.tobytes())
         return False
 
     def _extract_colors(self, img: Image.Image, result: Dict[str, Any]):
@@ -172,27 +259,27 @@ class MediaAnalyzer:
             # Réduire la taille pour le traitement
             img = img.resize((100, 100)).convert('RGB')
             pixels = np.array(img).reshape(-1, 3)
-            
+
             # Clustering
             kmeans = KMeans(n_clusters=n_colors, n_init='auto', random_state=42)
             kmeans.fit(pixels)
-            
+
             # Compter les occurrences
             counts = np.bincount(kmeans.labels_)
             total = sum(counts)
-            
+
             # Tri par fréquence
             sorted_colors = sorted(zip(kmeans.cluster_centers_, counts),
-                                 key=lambda x: x[1], reverse=True)
-            
+                                   key=lambda x: x[1], reverse=True)
+
             # Formatage des résultats
             dominant_colors = [{
                 'rgb': tuple(map(int, color)),
                 'percentage': round(count / total * 100, 2)
             } for color, count in sorted_colors]
-            
+
             result['dominant_colors'] = dominant_colors
-            
+
             # Conversion en couleurs web safe
             websafe_palette = {}
             for item in dominant_colors:
@@ -201,7 +288,7 @@ class MediaAnalyzer:
                 if websafe_hex not in websafe_palette:
                     websafe_palette[websafe_hex] = 0
                 websafe_palette[websafe_hex] += item['percentage']
-            
+
             result['websafe_colors'] = websafe_palette
 
         except Exception as e:

@@ -19,13 +19,28 @@ from peewee import (
     FloatField
 )
 
-DB = SqliteDatabase(path.join(settings.data_location, 'mwi.db'), pragmas={
+# The single pragma set. `mwi/cli.py` carried its own copy for the `--db`
+# switch, so every change had to be made in two files or the two paths
+# silently diverged.
+SQLITE_PRAGMAS = {
     'journal_mode': 'wal',
     'cache_size': -1 * 512000,
     'foreign_keys': 1,
-    'ignore_check_constrains': 0,
-    'synchronous': 0
-})
+    # `ignore_check_constrains` (no final 't') is NOT a SQLite pragma: an
+    # unknown name is silently ignored, so the line read as configuration
+    # while doing nothing at all. The value stays 0, which is the default.
+    'ignore_check_constraints': 0,
+    # NORMAL (1), not OFF (0). Under WAL, NORMAL is the documented minimum:
+    # OFF leaves the file open to corruption on a power loss or an OS crash,
+    # and this database usually lives inside a cloud-sync mount. Measured on
+    # APFS (2026-09-19): 20 000 batched inserts 0.59 -> 0.69 s, 2 000
+    # individual commits 0.19 -> 0.32 s — +65 us per save(), against the
+    # 50-5000 ms of the network fetch that precedes it.
+    'synchronous': 1,
+}
+
+DB = SqliteDatabase(path.join(settings.data_location, 'mwi.db'),
+                    pragmas=SQLITE_PRAGMAS)
 
 
 class BaseModel(Model):
@@ -345,7 +360,7 @@ class Media(BaseModel):
 
     Represents media files (images, videos, audio) extracted from expressions.
     Includes detailed analysis metadata such as dimensions, colors, EXIF data,
-    and perceptual hashing for duplicate detection.
+    and two fingerprints for duplicate detection.
 
     Attributes:
         expression (ForeignKeyField): Reference to the parent Expression.
@@ -366,7 +381,13 @@ class Media(BaseModel):
             nullable.
         aspect_ratio (FloatField): Width/height ratio, nullable.
         exif_data (TextField): JSON string of EXIF metadata, nullable.
-        image_hash (CharField): Perceptual hash for duplicate detection.
+        image_hash (CharField): SHA-256 of the downloaded bytes — EXACT
+            duplicate detection (same file). Not a perceptual hash;
+            see `perceptual_hash` for near-duplicate detection.
+        perceptual_hash (CharField): 64-bit dHash, 16 hex chars, nullable.
+            NEAR-duplicate detection: the same image recompressed or resized
+            keeps a close fingerprint. NULL for every media analysed before
+            migration 016.
             Maximum 64 characters, nullable.
         content_tags (TextField): JSON string of content tags, nullable.
         nsfw_score (FloatField): Not-safe-for-work score if analyzed, nullable.
@@ -379,7 +400,8 @@ class Media(BaseModel):
     Notes:
         JSON fields (dominant_colors, exif_data, content_tags, websafe_colors)
         should be serialized/deserialized using helper methods.
-        The image_hash field uses perceptual hashing for similarity detection.
+        image_hash is a SHA-256 of the bytes (exact duplicates);
+        perceptual_hash is a dHash (near duplicates).
         Multiple indexes optimize queries on dimensions, size, hash, and analysis date.
     """
     expression = ForeignKeyField(Expression, backref='medias', on_delete='CASCADE')
@@ -401,6 +423,13 @@ class Media(BaseModel):
     # Métadonnées avancées
     exif_data = TextField(null=True)
     image_hash = CharField(max_length=64, null=True)
+    # dHash 64 bits, 16 caractères hexadécimaux. `image_hash` dit « même
+    # FICHIER » (SHA-256 des octets) ; celui-ci dit « même IMAGE » — une photo
+    # reprise après recompression ou redimensionnement garde une empreinte très
+    # proche (distance de Hamming faible) et un SHA-256 sans rapport.
+    # NULL sur tout média analysé avant la migration 016 : `land reanalyze`
+    # remplit la colonne (un GET par média).
+    perceptual_hash = CharField(max_length=16, null=True, index=True)
 
     # Analyse de contenu
     content_tags = TextField(null=True)
@@ -425,8 +454,9 @@ class Media(BaseModel):
             (('image_hash',), False),
             (('analyzed_at',), False),
         )
-    
-    def is_conforming(self, min_width: int = 0, min_height: int = 0, max_file_size: int = 0) -> bool:
+
+    def is_conforming(self, min_width: int = 0, min_height: int = 0,
+                      max_file_size: int = 0) -> bool:
         """Check if media meets specified dimension and size criteria.
 
         Args:
@@ -536,7 +566,15 @@ class Paragraph(BaseModel):
         para_index (IntegerField): Sequential index of the paragraph within the expression.
             Indexed for ordering.
         text (TextField): The actual paragraph text content.
-        text_hash (CharField): SHA-256 hash of the text for deduplication.
+        text_hash (CharField): SHA-256 hash of the text. Unique PER
+            EXPRESSION, never globally (A11/D-1): a paragraph is an
+            OCCURRENCE on a page, not a globally-owned string. The global
+            UNIQUE made the first page vectorised anywhere in the database own
+            that text, so the same paragraph on two pages produced one row,
+            the pair was invisible to `embedding similarity`, and results
+            depended on the order in which lands had been processed. The
+            embedding is still computed once per (text_hash, model_name):
+            occurrences share the cost, not the row.
             Maximum 64 characters, unique, indexed.
         created_at (DateTimeField): Timestamp when the paragraph was created.
             Automatically set to current datetime on creation.
@@ -551,7 +589,10 @@ class Paragraph(BaseModel):
     domain = ForeignKeyField(Domain, backref='paragraphs', on_delete='CASCADE', index=True)
     para_index = IntegerField(index=True, help_text="Ordre du paragraphe dans l'expression")
     text = TextField()
-    text_hash = CharField(max_length=64, unique=True, index=True, help_text="SHA-256 du texte pour déduplication")
+    text_hash = CharField(
+        max_length=64,
+        index=True,
+        help_text="SHA-256 du texte ; UNIQUE par (expression, text_hash), pas globalement")
     created_at = DateTimeField(default=datetime.datetime.now)
 
     class Meta:
@@ -559,8 +600,13 @@ class Paragraph(BaseModel):
 
         Attributes:
             table_name (str): Custom table name 'paragraph'.
+            indexes: unique on (expression, text_hash) -- one occurrence per
+                page, several pages may carry the same text.
         """
         table_name = 'paragraph'
+        indexes = (
+            (('expression', 'text_hash'), True),
+        )
 
 
 class ParagraphEmbedding(BaseModel):

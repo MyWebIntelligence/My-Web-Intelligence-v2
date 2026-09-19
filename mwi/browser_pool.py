@@ -24,12 +24,12 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Any, Optional
 
 import settings
 
 try:
-    from playwright.async_api import async_playwright  # type: ignore
+    from playwright.async_api import async_playwright
     PLAYWRIGHT_AVAILABLE = True
 except ImportError:
     async_playwright = None  # type: ignore
@@ -43,8 +43,9 @@ class BrowserPool:
 
     def __init__(self, max_concurrent: Optional[int] = None,
                  user_agent: Optional[str] = None):
-        self._playwright = None
-        self._browser = None
+        # Optional[Any]: Playwright objects, only after _ensure_started().
+        self._playwright: Optional[Any] = None
+        self._browser: Optional[Any] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._lock = asyncio.Lock()
         self._max_concurrent = max_concurrent if max_concurrent is not None else int(
@@ -77,7 +78,8 @@ class BrowserPool:
         async with self._lock:
             if self._browser is not None:
                 return
-            self._playwright = await async_playwright().start()  # type: ignore
+            self._playwright = await async_playwright().start()
+            assert self._playwright is not None
             self._browser = await self._playwright.chromium.launch(headless=True)
             self._loop = asyncio.get_running_loop()
 
@@ -123,8 +125,11 @@ class BrowserPool:
         and the page is closed when the context exits, even on error.
         """
         await self._ensure_started()
+        # _ensure_started() guarantees it; the assert is what tells the type
+        # checker so, instead of an ignore marker.
+        assert self._browser is not None
         async with self._semaphore:
-            context = await self._browser.new_context(  # type: ignore[union-attr]
+            context = await self._browser.new_context(
                 user_agent=self._user_agent or None,
             )
             page = await context.new_page()

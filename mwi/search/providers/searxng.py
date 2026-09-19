@@ -22,10 +22,10 @@ def _resolve_base_url() -> str:
     if env:
         return env.rstrip("/")
     try:
-        import settings  # type: ignore
+        import settings
         url = getattr(settings, "SEARXNG_BASE_URL", None)
         if url:
-            return url.rstrip("/")
+            return str(url).rstrip("/")
     except ImportError:
         pass
     return "http://localhost:8888"

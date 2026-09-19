@@ -537,6 +537,10 @@ def run_search(request: SearchRequest) -> List[SearchResult]:
                     gl=gl,
                 ))
                 if use_date_filter:
+                    # use_date_filter is exactly `bool(window_start and
+                    # window_end)`; the asserts restate it so the checker can
+                    # see it too, rather than hiding it behind an ignore.
+                    assert window_start is not None and window_end is not None
                     params.update(provider.build_date_filter_params(window_start, window_end))
 
                 payload = _http_get(params)

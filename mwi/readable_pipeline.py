@@ -11,15 +11,22 @@ for media and link extraction from markdown content.
 import asyncio
 import json
 import logging
+import shutil
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass, field
 from enum import Enum
 
 import aiohttp
+from peewee import IntegrityError
 
 from . import model
 from .core import get_land_dictionary, prefer_earlier_datetime
+
+# Wall-clock bound for a single Mercury Parser call, in seconds. Mercury 2.2.1
+# already bounds header fetching (10 s per page, 26 pages max); what is left
+# unbounded is a body served at a trickle, or a frozen Node process.
+DEFAULT_MERCURY_TIMEOUT = 60
 
 
 class MergeStrategy(Enum):
@@ -119,7 +126,8 @@ class MercuryReadablePipeline:
                  batch_size: int = 10,
                  max_retries: int = 3,
                  llm_enabled: bool = False,
-                 issue_mode: Optional[bool] = None):
+                 issue_mode: Optional[bool] = None,
+                 timeout: Optional[float] = None):
         """Initialize the Mercury Parser readable pipeline.
 
         Args:
@@ -131,6 +139,9 @@ class MercuryReadablePipeline:
             issue_mode: Forwarded to the OpenRouter gate. None (default) lets the
                 gate fall back to settings.openrouter_issue_mode; True/False
                 override per run (--issuecrawl).
+            timeout: Wall-clock bound for one Mercury call, in seconds. None
+                (default) reads settings.mercury_timeout, then falls back to
+                DEFAULT_MERCURY_TIMEOUT.
 
         Notes:
             Statistics are tracked in self.stats dictionary including processed count,
@@ -140,6 +151,11 @@ class MercuryReadablePipeline:
         self.merge_strategy = merge_strategy
         self.batch_size = batch_size
         self.max_retries = max_retries
+        import settings
+        # No float() cast: a settings.py holding None must not break callers
+        # that never asked for a timeout.
+        self.timeout = timeout if timeout is not None else getattr(
+            settings, 'mercury_timeout', DEFAULT_MERCURY_TIMEOUT)
         self.logger = logging.getLogger(__name__)
         self.llm_enabled = llm_enabled
         self.issue_mode = issue_mode
@@ -152,9 +168,9 @@ class MercuryReadablePipeline:
         }
 
     async def process_land(self,
-                          land: model.Land,
-                          limit: Optional[int] = None,
-                          depth: Optional[int] = None) -> Dict[str, Any]:
+                           land: model.Land,
+                           limit: Optional[int] = None,
+                           depth: Optional[int] = None) -> Dict[str, Any]:
         """Point d'entrée principal du pipeline.
 
         Main entry point for the pipeline processing.
@@ -180,13 +196,16 @@ class MercuryReadablePipeline:
         # Récupération du dictionnaire du land pour le calcul de pertinence
         dictionary = get_land_dictionary(land)
 
-        # Récupération des expressions à traiter
-        expressions = self._get_expressions_to_process(land, limit, depth)
+        # O02: the selection is frozen as a list of IDS, and rows are loaded
+        # one batch at a time. Holding the full models kept every `html` blob
+        # (up to fullhtml_max_size_kb each) resident for the whole run.
+        # At most two batches are alive at any moment.
+        ids = self._get_expressions_to_process(land, limit, depth)
 
         # Traitement par batch
-        total_expressions = len(expressions)
+        total_expressions = len(ids)
         for i in range(0, total_expressions, self.batch_size):
-            batch = expressions[i:i + self.batch_size]
+            batch = self._load_batch(ids[i:i + self.batch_size])
             batch_num = (i // self.batch_size) + 1
             total_batches = (total_expressions + self.batch_size - 1) // self.batch_size
 
@@ -198,25 +217,32 @@ class MercuryReadablePipeline:
     def _get_expressions_to_process(self,
                                     land: model.Land,
                                     limit: Optional[int],
-                                    depth: Optional[int]) -> List[model.Expression]:
-        """Récupère les expressions à traiter selon les critères.
+                                    depth: Optional[int]) -> List[int]:
+        """Récupère les IDS des expressions à traiter selon les critères.
 
-        Retrieve expressions to process based on filtering criteria.
+        Retrieve the ids of the expressions to process.
 
         Args:
             land: The land object to retrieve expressions from.
-            limit: Maximum number of expressions to retrieve (None for unlimited).
+            limit: Maximum number of expressions to retrieve (None/0 for unlimited).
             depth: Filter expressions by specific depth level (None for all depths).
 
         Returns:
-            List of Expression objects that match the criteria, ordered by fetch date
-            and depth, with never-processed expressions prioritized.
+            List of Expression ids matching the criteria, ordered by fetch date
+            then depth then id, with never-processed expressions prioritized.
 
         Notes:
             Only returns expressions that have been fetched (fetched_at not null) but
             not yet processed through the readable pipeline (readable_at is null).
+
+            IDS, not models (O02): the rows carry `html` blobs of up to
+            fullhtml_max_size_kb each, and the caller used to hold every one of
+            them for the whole run. Freezing the id list also keeps the
+            selection stable while the run rewrites `readable_at` — the very
+            column this WHERE clause filters on, so a LIMIT/OFFSET walk would
+            skip rows exactly like A02 did on the crawl.
         """
-        query = model.Expression.select().where(
+        query = model.Expression.select(model.Expression.id).where(
             (model.Expression.land == land) &
             (model.Expression.fetched_at.is_null(False)) &
             (model.Expression.readable_at.is_null(True))
@@ -226,16 +252,28 @@ class MercuryReadablePipeline:
         if depth is not None:
             query = query.where(model.Expression.depth == depth)
 
-        # Ordre par priorité : d'abord celles jamais traitées, puis par date
+        # Ordre par priorité : d'abord celles jamais traitées, puis par date.
+        # `id` closes the ordering so two runs on the same data agree.
         query = query.order_by(
             model.Expression.fetched_at.asc(nulls='first'),
-            model.Expression.depth.asc()
+            model.Expression.depth.asc(),
+            model.Expression.id.asc()
         )
 
         if limit:
             query = query.limit(limit)
 
-        return list(query)
+        return [row[0] for row in query.tuples().iterator()]
+
+    def _load_batch(self, ids: List[int]) -> List[model.Expression]:
+        """Load one batch of expressions, in the order of `ids`.
+
+        A KeyError here would mean a row vanished between the id scan and the
+        load; it is left to raise rather than silently shrink the batch.
+        """
+        by_id = {e.id: e for e in model.Expression.select().where(
+            model.Expression.id.in_(ids))}
+        return [by_id[i] for i in ids]
 
     async def _process_batch(self,
                              expressions: List[model.Expression],
@@ -316,7 +354,9 @@ class MercuryReadablePipeline:
                 mercury_result = await self._extract_with_mercury(str(expression.url))
 
             if mercury_result.error:
-                self.logger.warning(f"Mercury extraction failed for {expression.url}: {mercury_result.error}")
+                self.logger.warning(
+                    f"Mercury extraction failed for {expression.url}: "
+                    f"{mercury_result.error}")
                 setattr(expression, 'readable_at', datetime.now())
                 expression.save()
                 print(f"🕒 Marked readable attempt (failure) for {expression.url}")
@@ -326,9 +366,12 @@ class MercuryReadablePipeline:
             update = self._prepare_expression_update(expression, mercury_result)
 
             # Application des mises à jour (même si aucune modification pour timestamp)
-            self._apply_updates(expression, update, dictionary)
-            
-            if not update.field_updates and not update.media_additions and not update.link_additions:
+            await self._apply_updates(expression, update, dictionary)
+
+            if (
+                    not update.field_updates
+                    and not update.media_additions
+                    and not update.link_additions):
                 self.logger.debug(f"No content updates needed for {expression.url}")
                 self.stats['skipped'] += 1
                 print(f"⏩ Skipped URL (no changes): {expression.url}")
@@ -380,7 +423,8 @@ class MercuryReadablePipeline:
         wayback_result = await self._run_mercury(snapshot_url)
         if wayback_result.error:
             self.logger.warning(
-                f"Mercury failed on Wayback snapshot {snapshot_url} for {url}: {wayback_result.error}"
+                f"Mercury failed on Wayback snapshot {snapshot_url} for {url}: "
+                f"{wayback_result.error}"
             )
             print(
                 f"❌ Mercury failed on Wayback snapshot {snapshot_url}: {wayback_result.error}"
@@ -410,6 +454,21 @@ class MercuryReadablePipeline:
 
         Returns:
             MercuryResult-compatible object, or None if extraction fails.
+
+        Notes:
+            The Trafilatura call is deliberately IDENTICAL to the crawl's
+            markdown leg (``core._extract_content_and_links``): markdown
+            output, links and images included, and neither ``favor_recall``
+            (that is the link frontier, not the text frontier) nor
+            ``favor_precision``. Two paths extracting the same HTML must not
+            drift apart — when they do, every --fullhtml expression comes back
+            "updated" at each `land readable` and replays the LLM gate.
+
+            ``markdown=`` matters (A07): ``_prepare_expression_update`` reads
+            ``MercuryResult.markdown``, and the content->markdown fallback only
+            exists inside ``_run_mercury``. Filling ``content`` alone dated the
+            expression `readable_at`, reported "Updated: 1" because the title
+            had changed, and left the body empty.
         """
         try:
             import trafilatura
@@ -419,8 +478,9 @@ class MercuryReadablePipeline:
                     html,
                     url=url,
                     include_links=True,
-                    output_format='txt',
-                    favor_precision=True,
+                    include_comments=False,
+                    include_images=True,
+                    output_format='markdown',
                 )
             )
             if extracted and len(extracted.strip()) > 100:
@@ -432,6 +492,7 @@ class MercuryReadablePipeline:
                     author=meta.author if meta else None,
                     date_published=str(meta.date) if meta and meta.date else None,
                     content=extracted,
+                    markdown=extracted,
                     word_count=len(extracted.split()),
                     error=None,
                 )
@@ -451,8 +512,12 @@ class MercuryReadablePipeline:
             MercuryResult object populated with extracted data or error information.
 
         Notes:
-            - Executes Mercury Parser as a subprocess with markdown and media extraction
+            - Executes Mercury Parser as an argv subprocess (never through a
+              shell): crawled URLs are untrusted input and a shell would expand
+              $(...), backticks or a quote break before looking the command up
             - Implements exponential backoff retry logic (max_retries attempts)
+            - A run exceeding self.timeout is killed, reaped and NOT retried
+              (a page that hangs will hang again; Wayback is the useful retry)
             - Parses JSON output and populates all MercuryResult fields
             - Sets extraction_timestamp to track when extraction occurred
             - Returns result with error field populated if all attempts fail
@@ -462,13 +527,31 @@ class MercuryReadablePipeline:
 
         for attempt in range(self.max_retries):
             try:
-                proc = await asyncio.create_subprocess_shell(
-                    f'{self.mercury_path} "{url}" --format=markdown --extract-media --extract-links',
+                # which() resolves npm shims (.cmd wrappers on Windows); when
+                # it finds nothing we still pass the raw path so the failure is
+                # a plain FileNotFoundError in result.error.
+                argv = [shutil.which(self.mercury_path) or self.mercury_path,
+                        url,
+                        '--format=markdown',
+                        '--extract-media',
+                        '--extract-links']
+                proc = await asyncio.create_subprocess_exec(
+                    *argv,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE
                 )
 
-                stdout, stderr = await proc.communicate()
+                try:
+                    stdout, stderr = await asyncio.wait_for(
+                        proc.communicate(), timeout=self.timeout)
+                except asyncio.TimeoutError:
+                    try:
+                        proc.kill()
+                    except ProcessLookupError:
+                        pass
+                    await proc.wait()
+                    result.error = f"Mercury timed out after {self.timeout:g}s"
+                    break
 
                 if proc.returncode != 0:
                     error_msg = stderr.decode() if stderr else "Unknown error"
@@ -551,7 +634,8 @@ class MercuryReadablePipeline:
                     async with session.get(base_url, params=query) as response:
                         if response.status != 200:
                             self.logger.debug(
-                                f"Wayback lookup HTTP {response.status} for {url} with params {query}"
+                                f"Wayback lookup HTTP {response.status} for {url} with params "
+                                f"{query}"
                             )
                             continue
                         try:
@@ -668,6 +752,17 @@ class MercuryReadablePipeline:
             'published_at': self._parse_date(mercury_result.date_published)
         }
 
+        # D-14: a non-empty readable is NEVER replaced by a shorter one.
+        # expression.html is capped by settings.fullhtml_max_size_kb, so a
+        # re-extraction from a truncated archive can only lose text — while
+        # the crawl built the current readable from the full response.
+        # Deterministic rule, testable without knowing whether a given
+        # archive was truncated. Improvements (longer text) still pass.
+        current_readable = getattr(expression, 'readable', None) or ''
+        new_readable = mercury_result.markdown or ''
+        if current_readable and len(new_readable) < len(current_readable):
+            field_mapping['readable'] = None
+
         # Application de la stratégie de fusion pour chaque champ
         for field_name, mercury_value in field_mapping.items():
             if mercury_value is None:
@@ -687,8 +782,10 @@ class MercuryReadablePipeline:
             readable_final = getattr(expression, 'readable', None)
 
         # Extraction des médias et liens à partir du markdown final
-        update.media_additions = self._extract_media_from_markdown(readable_final, str(expression.url))
-        update.link_additions = self._extract_links_from_markdown(readable_final, str(expression.url))
+        update.media_additions = self._extract_media_from_markdown(
+            readable_final, str(expression.url))
+        update.link_additions = self._extract_links_from_markdown(
+            readable_final, str(expression.url))
 
         return update
 
@@ -712,7 +809,8 @@ class MercuryReadablePipeline:
             Merge logic:
             - If current value is empty: use Mercury value
             - If Mercury value is empty: keep current value
-            - If both have values: apply strategy (MERCURY_PRIORITY, PRESERVE_EXISTING, or SMART_MERGE)
+            - If both have values: apply strategy (MERCURY_PRIORITY,
+              PRESERVE_EXISTING, or SMART_MERGE)
             - SMART_MERGE uses field-specific logic (see _smart_merge method)
         """
         # Si la base est vide, on prend Mercury
@@ -782,7 +880,8 @@ class MercuryReadablePipeline:
             # Par défaut, Mercury a priorité pour les autres champs
             return mercury_value
 
-    def _extract_media_from_markdown(self, markdown: Optional[str], base_url: str) -> List[Dict[str, Any]]:
+    def _extract_media_from_markdown(
+            self, markdown: Optional[str], base_url: str) -> List[Dict[str, Any]]:
         """Extrait les médias (images, vidéos) à partir du markdown final.
 
         Extract media items (images, videos) from markdown content.
@@ -799,27 +898,32 @@ class MercuryReadablePipeline:
             - Converts relative URLs to absolute using base_url
             - Currently only extracts images (video extraction can be added)
             - Empty or None markdown returns empty list
+            - Shares the single markdown image reader with the crawl and
+              consolidate paths (A04): three divergent regexes lived here,
+              in core.extract_medias and in the crawl, each with its own
+              corruption mode (truncated `Paris_(1).jpg`, chevrons kept).
         """
-        import re
         from urllib.parse import urljoin
+
+        from .link_context import iter_markdown_image_tokens
 
         if not markdown:
             return []
 
         media = []
-        # Images: ![alt](url "title")
-        img_pattern = r'!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)'
-        for match in re.finditer(img_pattern, markdown):
-            alt, url, title = match.groups()
-            url = urljoin(base_url, url)
-            media.append({'type': 'img', 'url': url, 'alt': alt or '', 'title': title or ''})
+        for raw in iter_markdown_image_tokens(markdown):
+            # urljoin, not core.resolve_url: this path keeps the URL case,
+            # which is why reconciliation compares in lowercase on both sides.
+            media.append({'type': 'img', 'url': urljoin(base_url, raw),
+                          'alt': '', 'title': ''})
 
         # Vidéos (liens markdown ou HTML <video> tags, à adapter si besoin)
         # Ici, on ne traite que les images pour le markdown standard
 
         return media
 
-    def _extract_links_from_markdown(self, markdown: Optional[str], base_url: str) -> List[Dict[str, Any]]:
+    def _extract_links_from_markdown(
+            self, markdown: Optional[str], base_url: str) -> List[Dict[str, Any]]:
         """Extrait les liens à partir du markdown final.
 
         Extract hyperlinks from markdown content.
@@ -863,10 +967,10 @@ class MercuryReadablePipeline:
 
         return links
 
-    def _apply_updates(self,
-                       expression: model.Expression,
-                       update: ExpressionUpdate,
-                       dictionary) -> None:
+    async def _apply_updates(self,
+                             expression: model.Expression,
+                             update: ExpressionUpdate,
+                             dictionary) -> None:
         """Applique les mises à jour à la base de données.
 
         Apply all updates to the expression in the database.
@@ -904,9 +1008,18 @@ class MercuryReadablePipeline:
             try:
                 import settings
                 relevance = self._calculate_relevance(dictionary, expression)
-                if self.llm_enabled and getattr(settings, 'openrouter_enabled', False) and settings.openrouter_api_key and settings.openrouter_model:
-                    from .llm_openrouter import is_relevant_via_openrouter
-                    verdict = is_relevant_via_openrouter(expression.land, expression, issue_mode=self.issue_mode)
+                if (
+                        self.llm_enabled
+                        and getattr(settings, 'openrouter_enabled', False)
+                        and settings.openrouter_api_key
+                        and settings.openrouter_model):
+                    # O01: awaited, off the loop. The await sits BEFORE
+                    # the transaction opened by _persist_updates — never hold
+                    # a write transaction across a network call.
+                    from .llm_openrouter import is_relevant_via_openrouter_async
+                    verdict = await is_relevant_via_openrouter_async(
+                        expression.land, expression,
+                        issue_mode=self.issue_mode)
                     if verdict is False:
                         relevance = 0
             except Exception as e:
@@ -917,19 +1030,51 @@ class MercuryReadablePipeline:
             if relevance and relevance > 0:
                 setattr(expression, 'approved_at', datetime.now())
 
+        # ---- Mutations : une transaction courte par expression (A03bis) ----
+        # Avant : save() puis DELETE des médias puis DELETE/recréation des
+        # liens, trois étapes non protégées. Un échec après les DELETE laissait
+        # une page datée `readable_at` sans liens ni médias. La préparation
+        # (gate LLM incluse) est terminée à ce point : rien de réseau ne reste
+        # à cheval sur la transaction.
+        with model.DB.atomic():
+            self._persist_updates(expression, update)
+
+    def _persist_updates(self,
+                         expression: model.Expression,
+                         update: ExpressionUpdate) -> None:
+        """Apply the prepared updates. Called inside a transaction (A03bis)."""
         # Sauvegarde de l'expression
         expression.save()
 
-        # Suppression des anciens médias AVANT ajout des nouveaux (cohérence stricte)
-        model.Media.delete().where(model.Media.expression == expression).execute()
-
-        # Ajout des nouveaux médias
+        # Réconciliation des médias par URL (A04). Le purge-puis-recrée
+        # d'avant tournait à CHAQUE `land readable`, y compris sans aucune
+        # mise à jour et sous preserve_existing : les douze colonnes
+        # d'enrichissement (dimensions, EXIF, empreintes, couleurs) repartaient
+        # à NULL et l'id de la ligne changeait, ce qui casse les jointures
+        # externes sur mediacsv.id. Comparaison en minuscules des deux côtés :
+        # ce chemin stocke urljoin (casse préservée), le crawl stocke
+        # resolve_url (minuscule).
+        existing = {str(m.url).lower(): m.id for m in
+                    model.Media.select(model.Media.id, model.Media.url)
+                    .where(model.Media.expression == expression)}
+        keep = set()
         for media_data in update.media_additions:
+            key = str(media_data['url']).lower()
+            if key in keep:
+                continue  # dédoublonnage intra-lot
+            keep.add(key)
+            if key in existing:
+                continue
             model.Media.create(
                 expression=expression,
                 url=media_data['url'],
                 type=media_data['type']
             )
+
+        stale = [mid for url, mid in existing.items() if url not in keep]
+        for start in range(0, len(stale), 500):
+            model.Media.delete().where(
+                model.Media.id.in_(stale[start:start + 500])).execute()
 
         # Ajout des nouveaux liens
         self._update_expression_links(expression, update.link_additions)
@@ -1003,8 +1148,8 @@ class MercuryReadablePipeline:
                         kind_rule=kind_rule,
                         origin=body_links.ORIGIN_MD
                     )
-                except:
-                    pass
+                except IntegrityError:
+                    pass  # arête déjà présente (clé composite source/target)
 
     def _calculate_relevance(self, dictionary, expression: model.Expression) -> int:
         """Calcule la pertinence selon le dictionnaire du land.
@@ -1051,7 +1196,10 @@ class MercuryReadablePipeline:
                 except ValueError:
                     continue
             return None
-        except:
+        except TypeError:
+            # Narrow (D01a): strptime raises TypeError when date_str is not a
+            # string. ValueError is already handled per-format above, and a
+            # bare except here would swallow KeyboardInterrupt too.
             return None
 
     def _resolve_url(self, url: str, base_url: str) -> str:
@@ -1147,16 +1295,16 @@ class MercuryReadablePipeline:
             'skipped': self.stats['skipped'],
             'wayback_used': self.stats['wayback_used'],
             'success_rate': (self.stats['updated'] / self.stats['processed'] * 100)
-                           if self.stats['processed'] > 0 else 0
+            if self.stats['processed'] > 0 else 0
         }
 
 
 async def run_readable_pipeline(land: model.Land,
-                              limit: Optional[int] = None,
-                              depth: Optional[int] = None,
-                              merge_strategy: str = 'smart_merge',
-                              llm_enabled: bool = False,
-                              issue_mode: Optional[bool] = None) -> Tuple[int, int]:
+                                limit: Optional[int] = None,
+                                depth: Optional[int] = None,
+                                merge_strategy: str = 'smart_merge',
+                                llm_enabled: bool = False,
+                                issue_mode: Optional[bool] = None) -> Tuple[int, int]:
     """Point d'entrée pour le contrôleur.
 
     Entry point for the readable pipeline controller.
@@ -1203,7 +1351,9 @@ async def run_readable_pipeline(land: model.Land,
     try:
         stats = await pipeline.process_land(land, limit, depth)
         print(f"✅ Completed processing {stats['processed']} expressions")
-        print(f"✔️ Updated: {stats['updated']}, Errors: {stats['errors']}, Skipped: {stats['skipped']}")
+        print(
+            f"✔️ Updated: {stats['updated']}, Errors: {stats['errors']}, Skipped: "
+            f"{stats['skipped']}")
         if stats.get('wayback_used'):
             print(f"📼 Wayback snapshots used: {stats['wayback_used']}")
         return stats['processed'], stats['errors']

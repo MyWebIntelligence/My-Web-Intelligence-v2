@@ -62,7 +62,7 @@ chose qui sépare les deux, ce qui vaut contrôle de cohérence.
 
 ## 3. Corrections apportées à la carte de sprint
 
-Cinq prémisses chiffrées de `.claude/project/sprint-body-links.md` étaient
+Cinq prémisses chiffrées du plan de sprint interne (non publié) étaient
 fausses. Elles ont été re-mesurées avant d'écrire du code.
 
 1. **Le rappel affiché était biaisé.** L'échantillon de codage est stratifié

@@ -5,7 +5,7 @@ Single entry point for all URL canonicalization. Configurable via
 `normalize_url` twice yields the same string).
 
 Normalization stages (each opt-in via the rules dict):
-  1. remove_anchor          — strip the #fragment
+  1. remove_anchor          — strip the  #fragment
   2. unwrap_archive         — web.archive.org / ghostarchive.org snapshots
                               collapse to their original target (recursively
                               when nested)
@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import fnmatch
 import re
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
 
 import settings
@@ -259,7 +259,7 @@ def _host_tracker_patterns(netloc: str, by_host) -> list:
     host = (netloc or '').rsplit('@', 1)[-1].split(':')[0].lower()
     if not host:
         return []
-    out = []
+    out: List[str] = []
     for key, patterns in by_host.items():
         key = (key or '').lower()
         if key and (host == key or host.endswith('.' + key)):

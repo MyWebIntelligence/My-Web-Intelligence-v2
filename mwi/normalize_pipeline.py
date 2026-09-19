@@ -35,7 +35,7 @@ idempotent, kept as defense in depth.
 
 from __future__ import annotations
 
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from . import core, model
 from .url_normalizer import normalize_url
@@ -155,6 +155,9 @@ def _resolve_chains(
     resolved = []
     for dup_id in direct:
         seen = {dup_id}
+        # Optional[int]: the cycle guard below sets it to None to signal
+        # "drop this chain", which is exactly what the checker flagged.
+        canon_id: Optional[int]
         canon_id, canon_url = direct[dup_id]
         while canon_id in dup_ids:
             if canon_id in seen:  # cycle

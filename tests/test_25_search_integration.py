@@ -78,12 +78,24 @@ class _FailingProvider(BaseProvider):
 # Scenario 1 — SearXNG real (skipped offline)
 # ---------------------------------------------------------------------------
 
-@pytest.mark.skipif(
-    not _searxng_reachable(),
-    reason="SEARXNG_BASE_URL not reachable — start docker/searxng/",
-)
+@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_searxng_real_round_trip():
+    """Live round-trip against a real SearXNG instance.
+
+    A13: the reachability probe is evaluated INSIDE the test, never as the
+    argument of `skipif`. A `skipif` argument is evaluated at COLLECTION time,
+    so `make test` opened a TCP socket just to build the test list — and, port
+    8888 being Jupyter's default while this project ships notebooks, a foreign
+    service answering there turned `make test` RED (the probe succeeded, the
+    request returned 404/500, `last_status` came back ERROR and the assertion
+    below failed).
+
+    Marked `integration` so `make test` deselects it and `make test-integration`
+    finally SELECTS it — under the old shape it was in neither.
+    """
+    if not _searxng_reachable():
+        pytest.skip("SEARXNG_BASE_URL not reachable — start docker/searxng/")
     p = SearxngProvider()
     async with aiohttp.ClientSession() as session:
         results = await p.search(session, "humanités numériques", num=5)

@@ -50,9 +50,15 @@ Feature requests are welcome! Please open an issue with:
 
 5. **Run code quality checks**:
    ```bash
-   flake8 mwi/
-   mypy mwi/
+   make lint        # blocking in CI
+   make lint-all    # informational
+   make typecheck   # informational
    ```
+
+   `make lint` is exactly what CI blocks on (the flake8 bug class: syntax errors,
+undefined names, impossible comparisons). `make lint-all` (full flake8) and
+`make typecheck` (mypy) are informational — they report a measured debt that is
+being paid down, and they do not fail the build.
 
 6. **Commit your changes** with a clear commit message:
    ```
@@ -81,7 +87,8 @@ Feature requests are welcome! Please open an issue with:
 ### Testing
 
 - Write tests for new functionality
-- Ensure existing tests pass before submitting PR (832 tests passing, 3 skipped, on `master`)
+- Ensure existing tests pass before submitting PR: `make test` must stay green on `master`
+  (the reference count and its command live in `CLAUDE.md` §4.1 — the only place they do)
 - Target >85% code coverage for new code
 - Use pytest fixtures from `tests/conftest.py`
 - If you touch link extraction or classification, also run the offline
@@ -91,7 +98,7 @@ Feature requests are welcome! Please open an issue with:
   and `unittest.mock.patch` at the call site for the other boundaries
   (`requests`, `trafilatura`, subprocess) — see existing tests `17–25` as examples.
 - New tests must follow the `tests/test_NN_topic.py` flat layout and
-  numerical ordering (next free slot: `test_39_*.py`)
+  numerical ordering (next free slot: `test_51_*.py`)
 
 ## Development Setup
 
@@ -190,7 +197,26 @@ tests/
 ├── test_35_body_links.py             # sprint body-links — extraction + classification
 ├── test_36_link_kind.py              # sprint body-links — `kind` column
 ├── test_37_link_profile_export.py    # sprint body-links — `--link-profile`
-└── test_38_normalize_pipeline.py     # sprint body-links — normalize + mapping
+├── test_38_normalize_pipeline.py     # sprint body-links — normalize + mapping
+├── test_39_mercury_subprocess.py     # sprint-upgrade — argv exec + timeout
+├── test_40_perceptual_hash.py        # sprint-upgrade — dHash, migration 016
+├── test_41_batch_pagination.py       # sprint-upgrade — keyset paging, one session
+├── test_42_consolidate_atomic.py     # sprint-upgrade — atomicity + media reconcile
+├── test_43_dryrun_guard.py           # sprint-upgrade — one simulation flag
+├── test_44_readable_batching.py      # sprint-upgrade — ids then per-batch loading
+├── test_45_exit_code.py              # sprint-upgrade — process exit codes
+├── test_46_paragraph_occurrences.py  # sprint-upgrade — one occurrence per page
+├── test_47_ci_workflow.py            # sprint-upgrade — CI contract
+├── test_49_export_determinism.py     # sprint-upgrade — total ordering of exports
+└── test_50_doc_links.py              # sprint-upgrade — README links resolve
+
+docs/                                 # Versioned user guides. The list of them
+                                      # is the README (Tutorials / Installation /
+                                      # Search Router sections). Never link a
+                                      # public document to a dot-directory:
+                                      # `.gitignore` excludes them, so the file
+                                      # would not exist for anyone who clones
+                                      # the repository or downloads the archive.
 ```
 
 **Mock HTTP for new tests**: prefer `aioresponses` (already used by tests

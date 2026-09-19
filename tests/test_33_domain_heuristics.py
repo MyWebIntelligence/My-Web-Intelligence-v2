@@ -615,3 +615,95 @@ class TestHeuristicUpdateController:
         ret = controller.HeuristicController.update(
             core.Namespace(html=True, fetch_missing=True, limit=5))
         assert ret == 1 and calls["n"] == 1
+
+
+class TestHeuristicLandOption:
+    """A14 - `heuristic update` reads --land, and must REFUSE --name (D-11).
+
+    README, README_fr and Pipelines all documented `heuristic update
+    --name=LAND` for months. The controller only ever read `args.land`, with
+    no fallback, so `--name` was silently ignored and the command fell into
+    its "every land" mode: a typo in one option rewrote `Expression.domain`
+    across the WHOLE database, outside any dry run.
+
+    Amar ruled against an alias (D-11): a misspelled option must stop, not
+    "work anyway". The runbooks are corrected in the same lot.
+    """
+
+    def _two_lands(self, fresh_db):
+        m = fresh_db["model"]
+        controller = fresh_db["controller"]
+        core = fresh_db["core"]
+        made = {}
+        for name in ("heur_a", "heur_b"):
+            controller.LandController.create(
+                core.Namespace(name=name, desc="d", lang=["fr"]))
+            land = m.Land.get(m.Land.name == name)
+            yt, _ = m.Domain.get_or_create(name="youtube.com")
+            made[name] = m.Expression.create(
+                land=land, domain=yt, depth=0,
+                url="https://youtube.com/@chaine_%s/videos" % name)
+        return made
+
+    def _domain_ids(self, fresh_db):
+        m = fresh_db["model"]
+        return {e.id: e.domain_id for e in m.Expression.select()}
+
+    def test_name_option_is_refused_and_writes_nothing(self, fresh_db, capsys):
+        controller = fresh_db["controller"]
+        core = fresh_db["core"]
+        self._two_lands(fresh_db)
+        before = self._domain_ids(fresh_db)
+
+        ret = controller.HeuristicController.update(
+            core.Namespace(name="heur_a", land=None))
+
+        assert ret == 0
+        # The decisive assertion: the return code alone proves nothing.
+        assert self._domain_ids(fresh_db) == before
+        assert "--land" in capsys.readouterr().out
+
+    def test_land_option_still_works(self, fresh_db):
+        m = fresh_db["model"]
+        controller = fresh_db["controller"]
+        core = fresh_db["core"]
+        made = self._two_lands(fresh_db)
+        untouched = m.Expression.get_by_id(made["heur_b"].id).domain_id
+
+        ret = controller.HeuristicController.update(
+            core.Namespace(land="heur_a"))
+
+        assert ret == 1
+        assert m.Expression.get_by_id(made["heur_a"].id).domain_id != untouched
+        assert m.Expression.get_by_id(made["heur_b"].id).domain_id == untouched
+
+    def test_land_wins_when_both_are_given(self, fresh_db):
+        """A previous command in a script often leaves --name set."""
+        m = fresh_db["model"]
+        controller = fresh_db["controller"]
+        core = fresh_db["core"]
+        made = self._two_lands(fresh_db)
+        before_b = m.Expression.get_by_id(made["heur_b"].id).domain_id
+
+        ret = controller.HeuristicController.update(
+            core.Namespace(land="heur_a", name="heur_b"))
+
+        assert ret == 1
+        assert m.Expression.get_by_id(made["heur_a"].id).domain_id != before_b
+        assert m.Expression.get_by_id(made["heur_b"].id).domain_id == before_b
+
+    def test_no_land_and_no_name_keeps_the_rebaseline_mode(self, fresh_db):
+        """Running over every land stays available as a deliberate choice."""
+        m = fresh_db["model"]
+        controller = fresh_db["controller"]
+        core = fresh_db["core"]
+        made = self._two_lands(fresh_db)
+
+        ret = controller.HeuristicController.update(
+            core.Namespace(land=None, name=None))
+
+        assert ret == 1
+        for expr in made.values():
+            assert "youtube.com/@" in str(
+                m.Domain.get_by_id(
+                    m.Expression.get_by_id(expr.id).domain_id).name)

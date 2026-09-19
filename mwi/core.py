@@ -14,16 +14,16 @@ from argparse import Namespace
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from datetime import date, datetime, timedelta
 from os import path
-from typing import Callable, Dict, List, Optional, Union
+from typing import Callable, Dict, List, Literal, Optional, Union
 from urllib.parse import urlparse, urljoin, quote, unquote
 
-import aiohttp # type: ignore
-import nltk # type: ignore
+import aiohttp
+import nltk
 import requests
 from bs4 import BeautifulSoup
-from nltk.tokenize import word_tokenize # type: ignore
+from nltk.tokenize import word_tokenize
 from peewee import IntegrityError, JOIN
-import trafilatura # type: ignore
+import trafilatura
 try:
     from playwright.async_api import async_playwright  # noqa: F401  (availability probe)
     PLAYWRIGHT_AVAILABLE = True
@@ -100,6 +100,7 @@ def _cleanup_nltk_resource(resource: str) -> bool:
                 pass
     return removed
 
+
 def _ensure_nltk_tokenizers() -> bool:
     """Ensure required NLTK tokenizers are available with resilient SSL and local cache.
 
@@ -126,11 +127,19 @@ def _ensure_nltk_tokenizers() -> bool:
 
     # Harden SSL on platforms with broken cert stores (notably some Windows/macOS setups)
     try:
-        import ssl  # type: ignore
-        import certifi  # type: ignore
+        import ssl
+        import certifi
         os.environ.setdefault('SSL_CERT_FILE', certifi.where())
         # Ensure urllib uses certifi's CA bundle
-        ssl._create_default_https_context = lambda: ssl.create_default_context(cafile=certifi.where())  # type: ignore[attr-defined]
+        # Monkeypatching a private stdlib slot whose declared type is the
+        # original function, not a zero-argument callable. Correct at
+        # runtime (urllib calls it with no argument); the two ignores
+        # carry their codes rather than rewrite a working workaround.
+
+        def _certifi_default_context(*args, **kwargs):
+            return ssl.create_default_context(cafile=certifi.where())
+
+        ssl._create_default_https_context = _certifi_default_context
     except Exception:
         # If certifi/ssl tweak fails, we still attempt standard downloads
         pass
@@ -151,9 +160,11 @@ def _ensure_nltk_tokenizers() -> bool:
                 ok = False
     return ok
 
+
 _NLTK_OK = _ensure_nltk_tokenizers()
 if not _NLTK_OK:
     print("Warning: NLTK 'punkt'/'punkt_tab' not available; using a simple tokenizer fallback.")
+
 
 def _simple_word_tokenize(text: str) -> List[str]:
     """Provide a simple unicode-aware fallback tokenizer.
@@ -249,7 +260,8 @@ async def extract_dynamic_medias(url: str, expression: model.Expression) -> list
 
                         # Check if this is a valid media type
                         if media_type == 'img':
-                            IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg")
+                            IMAGE_EXTENSIONS = (
+                                ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg")
                             if resolved_url.lower().endswith(IMAGE_EXTENSIONS):
                                 dynamic_medias.append({
                                     'url': resolved_url,
@@ -277,7 +289,8 @@ async def extract_dynamic_medias(url: str, expression: model.Expression) -> list
                         src = await element.get_attribute(attr)
                         if src:
                             resolved_url = resolve_url(url, src)
-                            IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg")
+                            IMAGE_EXTENSIONS = (
+                                ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg")
                             if resolved_url.lower().endswith(IMAGE_EXTENSIONS):
                                 dynamic_medias.append({
                                     'url': resolved_url,
@@ -286,23 +299,23 @@ async def extract_dynamic_medias(url: str, expression: model.Expression) -> list
                             break  # Stop at first found attribute
 
         print(f"Dynamic media extraction found {len(dynamic_medias)} media items for {url}")
-        
+
         # Save found media to database
         for media_info in dynamic_medias:
             # Check if media doesn't already exist in database
             if not model.Media.select().where(
-                (model.Media.expression == expression) & 
+                (model.Media.expression == expression) &
                 (model.Media.url == media_info['url'])
             ).exists():
                 media = model.Media.create(
-                    expression=expression, 
-                    url=media_info['url'], 
+                    expression=expression,
+                    url=media_info['url'],
                     type=media_info['type']
                 )
                 media.save()
-        
+
         return [media['url'] for media in dynamic_medias]
-        
+
     except Exception as e:
         print(f"Error during dynamic media extraction for {url}: {e}")
         return []
@@ -330,7 +343,7 @@ def resolve_url(base_url: str, relative_url: str) -> str:
         # If already absolute, return as is (but lowercase for consistency)
         if relative_url.startswith(('http://', 'https://')):
             return relative_url.lower()
-        
+
         # Use urljoin to properly resolve relative URLs
         resolved_url = urljoin(base_url, relative_url)
         return resolved_url.lower()
@@ -407,12 +420,20 @@ def split_arg(arg: str) -> list:
 
 
 def get_dryrun(args: Namespace) -> bool:
-    """Read the dry-run flag whichever spelling was used.
+    """Read the dry-run flag whichever ATTRIBUTE carries it.
 
-    Two flags coexist in the CLI (sprint-multilang, D-5): `--dryrun`
-    (store_true, dest `dryrun`) and `--dry-run` (str 'TRUE', dest
-    `dry_run`). This helper accepts both so every command honours
-    either spelling.
+    The command line has exactly one spelling since 2026-09 (decision
+    D-15): `--dry-run` (str 'TRUE', dest `dry_run`). The glued `--dryrun`
+    was removed from the parser and argparse now rejects it.
+
+    This helper nevertheless still accepts a `dryrun` attribute, and that
+    is deliberate: controllers are called DIRECTLY with a Namespace all
+    over the test suite (test_27, test_02, test_33, test_38, legacy), so
+    dropping the tolerance would break those callers without buying the
+    user anything. Do not "clean it up".
+
+    Also note `--dry-run=FALSE` must stay a real run: a plain
+    `bool(args.dry_run)` is wrong, bool("FALSE") is True.
 
     Returns:
         bool: True when a dry run was requested.
@@ -535,7 +556,9 @@ def parse_serp_result_date(value: Optional[str]) -> Optional[datetime]:
     if lowered in {'yesterday'}:
         return datetime.now() - timedelta(days=1)
 
-    relative_match = re.match(r'(?i)^(?:about\s+)?(\d+)\s+(minute|hour|day|week|month|year)s?\s+ago$', normalized)
+    relative_match = re.match(
+        r'(?i)^(?:about\s+)?(\d+)\s+(minute|hour|day|week|month|year)s?\s+ago$',
+        normalized)
     if relative_match:
         amount = int(relative_match.group(1))
         unit = relative_match.group(2).lower()
@@ -632,9 +655,12 @@ def fetch_seorank_for_url(url: str, api_key: str) -> Optional[dict]:
 
             if response.status_code != 200:
                 if attempt < max_retries:
-                    print(f"[seorank] Status {response.status_code} for {url} (attempt {attempt}/{max_retries})")
+                    print(f"[seorank] Status {response.status_code} for {url} "
+                          f"(attempt {attempt}/{max_retries})")
                 else:
-                    print(f"[seorank] Failed with status {response.status_code} for {url} after {max_retries} attempts")
+                    print(
+                        f"[seorank] Failed with status {response.status_code} for {url} after "
+                        f"{max_retries} attempts")
                     return None
             else:
                 # Success - parse JSON
@@ -642,13 +668,17 @@ def fetch_seorank_for_url(url: str, api_key: str) -> Optional[dict]:
                     return response.json()
                 except ValueError as exc:
                     snippet = response.text[:120].replace('\n', ' ')
-                    print(f"[seorank] JSON decoding failed for {url}: {exc} (body preview: {snippet})")
+                    print(
+                        f"[seorank] JSON decoding failed for {url}: {exc} "
+                        f"(body preview: {snippet})")
                     return None
 
         except requests.Timeout as exc:
             if attempt < max_retries:
                 wait_time = backoff_multiplier ** (attempt - 1)
-                print(f"[seorank] Timeout for {url} (attempt {attempt}/{max_retries}), retrying in {wait_time:.1f}s...")
+                print(
+                    f"[seorank] Timeout for {url} (attempt {attempt}/{max_retries}), retrying in "
+                    f"{wait_time:.1f}s...")
                 time.sleep(wait_time)
             else:
                 print(f"[seorank] Timeout for {url} after {max_retries} attempts: {exc}")
@@ -657,7 +687,9 @@ def fetch_seorank_for_url(url: str, api_key: str) -> Optional[dict]:
         except requests.RequestException as exc:
             if attempt < max_retries:
                 wait_time = backoff_multiplier ** (attempt - 1)
-                print(f"[seorank] HTTP error for {url} (attempt {attempt}/{max_retries}): {exc}, retrying in {wait_time:.1f}s...")
+                print(
+                    f"[seorank] HTTP error for {url} (attempt {attempt}/{max_retries}): {exc}, "
+                    f"retrying in {wait_time:.1f}s...")
                 time.sleep(wait_time)
             else:
                 print(f"[seorank] HTTP error for {url} after {max_retries} attempts: {exc}")
@@ -766,7 +798,8 @@ def update_seorank_for_land(
                 eta_str = f"{eta_seconds/3600:.1f}h"
 
             success_rate = (updated / processed * 100) if processed > 0 else 0
-            print(f"[seorank] Progress: {processed}/{total_count} ({processed/total_count*100:.1f}%) | "
+            print(f"[seorank] Progress: {processed}/{total_count} "
+                  f"({processed/total_count*100:.1f}%) | "
                   f"Success: {updated} | Failed: {failed} | Success rate: {success_rate:.1f}% | "
                   f"ETA: {eta_str}")
 
@@ -777,14 +810,14 @@ def update_seorank_for_land(
     total_time = time.time() - start_time
     success_rate = (updated / processed * 100) if processed > 0 else 0
 
-    print(f"\n[seorank] ===== SEO Rank Enrichment Complete =====")
+    print("\n[seorank] ===== SEO Rank Enrichment Complete =====")
     print(f"[seorank] Land: {land.name}")
     print(f"[seorank] Total processed: {processed}")
     print(f"[seorank] Successful: {updated} ({success_rate:.1f}%)")
     print(f"[seorank] Failed: {failed} ({100-success_rate:.1f}%)")
     print(f"[seorank] Total time: {total_time/60:.1f} minutes ({total_time/3600:.2f} hours)")
     print(f"[seorank] Average time per URL: {total_time/processed:.2f}s")
-    print(f"[seorank] ==========================================\n")
+    print("[seorank] ==========================================\n")
 
     return processed, updated
 
@@ -833,7 +866,7 @@ def stem_word(word: str, lang: str = 'fr') -> str:
     if name is None:
         return word.lower()
     if name not in _stemmers:
-        from nltk.stem.snowball import SnowballStemmer  # type: ignore
+        from nltk.stem.snowball import SnowballStemmer
         _stemmers[name] = SnowballStemmer(name)
     return str(_stemmers[name].stem(word.lower()))
 
@@ -941,7 +974,8 @@ def _timeout_handler(signum, frame):
     raise TimeoutException("Operation timed out")
 
 
-def _fetch_url_with_retry_and_timeout(url: str, timeout: int = 10, max_retries: int = 3, backoff_delays: List[int] = None) -> Optional[str]:
+def _fetch_url_with_retry_and_timeout(url: str, timeout: int = 10, max_retries: int = 3,
+                                      backoff_delays: Optional[List[int]] = None) -> Optional[str]:
     """Fetch URL with timeout and retry logic using exponential backoff.
 
     Uses signal.alarm() on Unix/macOS for proper timeout enforcement, and
@@ -985,9 +1019,13 @@ def _fetch_url_with_retry_and_timeout(url: str, timeout: int = 10, max_retries: 
                         return result
 
         except TimeoutException:
-            print(f"  Attempt {attempt + 1}/{max_retries} timed out after {timeout}s for {url}", flush=True)
+            print(
+                f"  Attempt {attempt + 1}/{max_retries} timed out after {timeout}s for {url}",
+                flush=True)
         except FuturesTimeoutError:
-            print(f"  Attempt {attempt + 1}/{max_retries} timed out after {timeout}s for {url}", flush=True)
+            print(
+                f"  Attempt {attempt + 1}/{max_retries} timed out after {timeout}s for {url}",
+                flush=True)
         except Exception as e:
             print(f"  Attempt {attempt + 1}/{max_retries} failed for {url}: {e}", flush=True)
 
@@ -1026,7 +1064,7 @@ def crawl_domains(limit: int = 0, http: Optional[str] = None):
     domains_query = model.Domain.select()
     if limit > 0:
         domains_query = domains_query.limit(limit)
-    if http is not None: # If http is specified, we are likely recrawling specific statuses
+    if http is not None:  # If http is specified, we are likely recrawling specific statuses
         if str(http).strip().upper() == 'ERR':
             # Match every failure status (sprint-multilang, D-2): the real
             # values are prefixed codes (ERR_TRAFI, ERR_ARCHIVE, ERR_UNKNOWN,
@@ -1036,7 +1074,7 @@ def crawl_domains(limit: int = 0, http: Optional[str] = None):
                 (model.Domain.http_status.in_(['000', 'ARC_NO_HTML', 'REQ_NO_HTML'])))
         else:
             domains_query = domains_query.where(model.Domain.http_status == http)
-    else: # Default: crawl domains not yet fetched
+    else:  # Default: crawl domains not yet fetched
         domains_query = domains_query.where(model.Domain.fetched_at.is_null())
 
     processed_count = 0
@@ -1057,25 +1095,35 @@ def crawl_domains(limit: int = 0, http: Optional[str] = None):
         print(f"Attempting Trafilatura for {domain.name} ({domain_url_https})")
         try:
             # Use retry and timeout wrapper to prevent infinite blocking
-            downloaded = _fetch_url_with_retry_and_timeout(domain_url_https, timeout=settings.default_timeout)
-            if not downloaded: # Try HTTP if HTTPS failed
-                 downloaded = _fetch_url_with_retry_and_timeout(domain_url_http, timeout=settings.default_timeout)
+            downloaded = _fetch_url_with_retry_and_timeout(
+                domain_url_https, timeout=settings.default_timeout)
+            if not downloaded:  # Try HTTP if HTTPS failed
+                downloaded = _fetch_url_with_retry_and_timeout(
+                    domain_url_http, timeout=settings.default_timeout)
 
             if downloaded:
                 html_content = downloaded
-                # fetch_url doesn't directly give status or final url, assume 200 if content received
+                # fetch_url doesn't directly give status or final url,
+                # assume 200 if content received
                 # For effective_url, we can try to get it from metadata later or use the input.
                 # For now, let's assume the input URL that worked.
                 # We need to determine if HTTPS or HTTP was successful for effective_url
                 try:
                     # A bit of a hack: check if https version gives content
                     # This is imperfect as trafilatura might have its own redirect logic
-                    requests.get(domain_url_https, timeout=2, allow_redirects=False).raise_for_status()
+                    requests.get(
+                        domain_url_https,
+                        timeout=2,
+                        allow_redirects=False).raise_for_status()
                     effective_url = domain_url_https
-                except:
+                except requests.RequestException:
+                    # Narrow, not bare (D01a-3): this is only a probe to pick
+                    # between the https and http form. A bare except also
+                    # caught KeyboardInterrupt, so Ctrl-C on a long
+                    # `domain crawl` did nothing visible.
                     effective_url = domain_url_http
 
-                final_status_code = "200" # Assume success if trafilatura returned content
+                final_status_code = "200"  # Assume success if trafilatura returned content
                 source_method = "TRAFILATURA"
                 print(f"Trafilatura success for {domain.name} (URL: {effective_url})")
             else:
@@ -1093,9 +1141,10 @@ def crawl_domains(limit: int = 0, http: Optional[str] = None):
                 archive_response = requests.get(archive_data_url, timeout=settings.default_timeout)
                 archive_response.raise_for_status()
                 archive_data = archive_response.json()
-                
+
                 archived_snapshot = archive_data.get('archived_snapshots', {}).get('closest', {})
-                if archived_snapshot and archived_snapshot.get('available') and archived_snapshot.get('url'):
+                if archived_snapshot and archived_snapshot.get(
+                        'available') and archived_snapshot.get('url'):
                     effective_url = archived_snapshot['url']
                     print(f"Found archived URL: {effective_url}")
                     archived_content_response = requests.get(
@@ -1103,21 +1152,30 @@ def crawl_domains(limit: int = 0, http: Optional[str] = None):
                         headers={"User-Agent": settings.user_agent},
                         timeout=settings.default_timeout
                     )
-                    # We don't use raise_for_status() here as archive.org might return non-200 for the page itself
-                    # but still provide content. The status code of the *archived page* is what matters.
-                    final_status_code = str(archived_snapshot.get('status', '200')) # Use archived status
-                    
-                    if 'text/html' in archived_content_response.headers.get('Content-Type', '').lower():
+                    # We don't use raise_for_status() here as archive.org might
+                    # return non-200 for the page itself
+                    # but still provide content. The status code of the *archived page* is
+                    # what matters.
+                    final_status_code = str(
+                        archived_snapshot.get(
+                            'status', '200'))  # Use archived status
+
+                    if 'text/html' in archived_content_response.headers.get(
+                            'Content-Type', '').lower():
                         html_content = archived_content_response.text
                         source_method = "ARCHIVE_ORG"
-                        print(f"Archive.org success for {domain.name} (Status: {final_status_code})")
+                        print(
+                            f"Archive.org success for {domain.name} (Status: {final_status_code})")
                     else:
-                        print(f"Archive.org content for {domain.name} not HTML: {archived_content_response.headers.get('Content-Type')}")
-                        if not final_status_code or final_status_code == '200': # If status was ok but not html
+                        print(
+                            f"Archive.org content for {domain.name} not HTML: "
+                            f"{archived_content_response.headers.get('Content-Type')}")
+                        # If status was ok but not html
+                        if not final_status_code or final_status_code == '200':
                             final_status_code = "ARC_NO_HTML"
                 else:
                     print(f"No suitable archive found for {domain.name}")
-                    final_status_code = "ERR_ARCHIVE_NF" # Not Found
+                    final_status_code = "ERR_ARCHIVE_NF"  # Not Found
             except requests.exceptions.Timeout:
                 print(f"Archive.org timeout for {domain.name}")
                 final_status_code = "ERR_ARCHIVE_TO"
@@ -1138,48 +1196,61 @@ def crawl_domains(limit: int = 0, http: Optional[str] = None):
                         current_url_to_try,
                         headers={"User-Agent": settings.user_agent},
                         timeout=settings.default_timeout,
-                        allow_redirects=True # Allow redirects to find the final page
+                        allow_redirects=True  # Allow redirects to find the final page
                     )
                     final_status_code = str(response.status_code)
-                    effective_url = response.url # URL after redirects
+                    effective_url = response.url  # URL after redirects
 
-                    if response.ok and 'text/html' in response.headers.get('Content-Type', '').lower():
+                    if response.ok and 'text/html' in response.headers.get(
+                            'Content-Type', '').lower():
                         html_content = response.text
                         source_method = "REQUESTS"
-                        print(f"Direct request success for {domain.name} (URL: {effective_url}, Status: {final_status_code})")
-                        break # Success, no need to try other URL
+                        print(
+                            f"Direct request success for {domain.name} (URL: {effective_url}, "
+                            f"Status: {final_status_code})")
+                        break  # Success, no need to try other URL
                     else:
-                        print(f"Direct request for {current_url_to_try} failed or not HTML. Status: {final_status_code}, Content-Type: {response.headers.get('Content-Type')}")
-                        if response.ok and not ('text/html' in response.headers.get('Content-Type', '').lower()):
-                             final_status_code = "REQ_NO_HTML" # Mark as non-HTML success
+                        print(
+                            f"Direct request for {current_url_to_try} failed or not HTML. Status: "
+                            f"{final_status_code}, Content-Type: "
+                            f"{response.headers.get('Content-Type')}")
+                        if response.ok and not (
+                                'text/html' in response.headers.get('Content-Type', '').lower()):
+                            final_status_code = "REQ_NO_HTML"  # Mark as non-HTML success
                 except requests.exceptions.Timeout:
                     print(f"Direct request timeout for {current_url_to_try}")
                     final_status_code = "000"
                 except requests.exceptions.RequestException as e_req:
                     print(f"Direct request exception for {current_url_to_try}: {e_req}")
                     final_status_code = "000"
-                except Exception as e_direct: # Catch any other unexpected errors
+                except Exception as e_direct:  # Catch any other unexpected errors
                     print(f"Direct request general exception for {current_url_to_try}: {e_direct}")
                     final_status_code = "ERR_UNKNOWN"
-                if not html_content and not final_status_code: # If all attempts failed without setting a status
+                # If all attempts failed without setting a status
+                if not html_content and not final_status_code:
                     final_status_code = "ERR_ALL_FAILED"
-
 
         domain.fetched_at = model.datetime.datetime.now()
         domain.http_status = str(final_status_code) if final_status_code else "ERR_NO_STATUS"
 
         if html_content and source_method:
             try:
-                process_domain_content(domain, html_content, effective_url or domain_url_https, source_method)
+                process_domain_content(
+                    domain,
+                    html_content,
+                    effective_url or domain_url_https,
+                    source_method)
                 print(f"Domain {domain.name} processed successfully via {source_method}.")
                 processed_count += 1
             except Exception as e_proc:
                 print(f"Error processing content for domain {domain.name}: {e_proc}")
-                domain.http_status = "ERR_PROCESS" # Mark as processing error
+                domain.http_status = "ERR_PROCESS"  # Mark as processing error
         else:
-            print(f"Failed to fetch HTML for domain {domain.name} after all attempts. Final status: {domain.http_status}")
+            print(
+                f"Failed to fetch HTML for domain {domain.name} after all attempts. Final status: "
+                f"{domain.http_status}")
             # Ensure some basic info if all fails
-            domain.title = None # Set to None as per the initial request
+            domain.title = None  # Set to None as per the initial request
 
         try:
             domain.save()
@@ -1190,7 +1261,8 @@ def crawl_domains(limit: int = 0, http: Optional[str] = None):
     return processed_count
 
 
-def process_domain_content(domain: model.Domain, html_content: str, effective_url: str, source_method: str):
+def process_domain_content(domain: model.Domain, html_content: str,
+                           effective_url: str, source_method: str):
     """Process and extract metadata from domain HTML content.
 
     This function extracts title, description, and keywords from HTML content
@@ -1220,7 +1292,7 @@ def process_domain_content(domain: model.Domain, html_content: str, effective_ur
     trafi_title = None
     trafi_description = None
     trafi_keywords_list = None
-    
+
     try:
         # Ensure html_content is not None or empty before passing to trafilatura
         if html_content:
@@ -1228,38 +1300,45 @@ def process_domain_content(domain: model.Domain, html_content: str, effective_ur
             if meta_object:
                 trafi_title = meta_object.title
                 trafi_description = meta_object.description
-                if meta_object.tags: # Trafilatura uses 'tags'
-                     trafi_keywords_list = meta_object.tags
+                if meta_object.tags:  # Trafilatura uses 'tags'
+                    trafi_keywords_list = meta_object.tags
         else:
-            print(f"HTML content is empty for {domain.name} ({effective_url}), skipping trafilatura metadata.")
-            
+            print(
+                f"HTML content is empty for {domain.name} ({effective_url}), skipping trafilatura "
+                f"metadata.")
+
     except Exception as e_t_meta:
-        print(f"Error during trafilatura.extract_metadata for {domain.name} ({effective_url}): {e_t_meta}")
+        print(
+            f"Error during trafilatura.extract_metadata for {domain.name} ({effective_url}): "
+            f"{e_t_meta}")
 
     # 3. Combine results
-    # Prioritize Trafilatura if available, then BS, then existing (if any, though usually None at this stage for domain)
+    # Prioritize Trafilatura if available, then BS, then existing (if any,
+    # though usually None at this stage for domain)
     final_title = trafi_title or bs_title
     final_description = trafi_description or bs_description
-    
+
     final_keywords_str = None
     if trafi_keywords_list:
         final_keywords_str = ", ".join(trafi_keywords_list)
-    elif bs_keywords: # Only use bs_keywords if trafilatura didn't provide any
+    elif bs_keywords:  # Only use bs_keywords if trafilatura didn't provide any
         final_keywords_str = bs_keywords
-    
+
     print(f"Metadata from '{source_method}' for {domain.name} (URL: {effective_url}):\n"
           f"  BS: title={bool(bs_title)}, desc={bool(bs_description)}, keyw={bool(bs_keywords)}\n"
-          f"  Trafi: title={bool(trafi_title)}, desc={bool(trafi_description)}, tags={bool(trafi_keywords_list)}")
+          f"  Trafi: title={bool(trafi_title)}, desc={bool(trafi_description)}, "
+          f"tags={bool(trafi_keywords_list)}")
 
-    domain.title = str(final_title).strip() if final_title else None # type: ignore
-    domain.description = str(final_description).strip() if final_description else None # type: ignore
-    domain.keywords = str(final_keywords_str).strip() if final_keywords_str else None # type: ignore
-    
+    domain.title = str(final_title).strip() if final_title else None
+    domain.description = str(final_description).strip() if final_description else None
+    domain.keywords = str(final_keywords_str).strip() if final_keywords_str else None
+
     # Fallback title if still nothing
     domain.title = domain.title or f"Website: {domain.name}"
-    
+
     print(f"Final domain metadata for {domain.name}: title='{(domain.title or '')[:50]}...', "
-          f"description='{(domain.description or '')[:50]}...', keywords='{(domain.keywords or '')[:50]}...'")
+          f"description='{(domain.description or '')[:50]}...', "
+          f"keywords='{(domain.keywords or '')[:50]}...'")
 
 
 def get_meta_content(soup: BeautifulSoup, name: str) -> str:
@@ -1281,8 +1360,8 @@ def get_meta_content(soup: BeautifulSoup, name: str) -> str:
         - Logs found content to console for debugging (first 30 chars).
     """
     tag = soup.find('meta', attrs={'name': name})
-    if tag and tag.has_attr('content'): # type: ignore
-        content = tag['content'] # type: ignore
+    if tag and tag.has_attr('content'):
+        content = tag['content']
         if isinstance(content, str):
             print(f"Found meta content for {name}: {content[:30]}...")
             return content.strip()
@@ -1313,18 +1392,20 @@ def extract_metadata(url: str) -> dict:
         # Ensure URL has a protocol
         if not url.startswith(('http://', 'https://')):
             url = 'https://' + url
-            
+
         print(f"Extracting metadata from {url}")
         response = requests.get(url, headers={"User-Agent": settings.user_agent}, timeout=5)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
-        
+
         title = get_title(soup)
         description = get_description(soup)
         keywords = get_keywords(soup)
-        
-        print(f"Extracted metadata: title={bool(title)}, description={bool(description)}, keywords={bool(keywords)}")
-        
+
+        print(
+            f"Extracted metadata: title={bool(title)}, description={bool(description)}, "
+            f"keywords={bool(keywords)}")
+
         return {
             'title': title,
             'description': description,
@@ -1355,29 +1436,29 @@ def get_title(soup: BeautifulSoup) -> str:
     """
     # Open Graph title (highest priority)
     og_title = soup.find('meta', attrs={'property': 'og:title'})
-    if og_title and og_title.has_attr('content'): # type: ignore
-        content = og_title['content'] # type: ignore
+    if og_title and og_title.has_attr('content'):
+        content = og_title['content']
         if isinstance(content, str):
             return content.strip()
-    
+
     # Twitter title
     twitter_title = soup.find('meta', attrs={'name': 'twitter:title'})
-    if twitter_title and twitter_title.has_attr('content'): # type: ignore
-        content = twitter_title['content'] # type: ignore
+    if twitter_title and twitter_title.has_attr('content'):
+        content = twitter_title['content']
         if isinstance(content, str):
             return content.strip()
-    
+
     # Schema.org title
     schema_title = soup.find('meta', attrs={'itemprop': 'title'})
-    if schema_title and schema_title.has_attr('content'): # type: ignore
-        content = schema_title['content'] # type: ignore
+    if schema_title and schema_title.has_attr('content'):
+        content = schema_title['content']
         if isinstance(content, str):
             return content.strip()
-    
+
     # Standard HTML title (lowest priority)
     if soup.title and soup.title.string:
         return soup.title.string.strip()
-    
+
     return ""
 
 
@@ -1403,32 +1484,32 @@ def get_description(soup: BeautifulSoup) -> str:
     """
     # Standard meta description
     meta_desc = soup.find('meta', attrs={'name': 'description'})
-    if meta_desc and meta_desc.has_attr('content'): # type: ignore
-        content = meta_desc['content'] # type: ignore
+    if meta_desc and meta_desc.has_attr('content'):
+        content = meta_desc['content']
         if isinstance(content, str):
             return content.strip()
-    
+
     # Open Graph description
     og_desc = soup.find('meta', attrs={'property': 'og:description'})
-    if og_desc and og_desc.has_attr('content'): # type: ignore
-        content = og_desc['content'] # type: ignore
+    if og_desc and og_desc.has_attr('content'):
+        content = og_desc['content']
         if isinstance(content, str):
             return content.strip()
-    
+
     # Twitter description
     twitter_desc = soup.find('meta', attrs={'name': 'twitter:description'})
-    if twitter_desc and twitter_desc.has_attr('content'): # type: ignore
-        content = twitter_desc['content'] # type: ignore
+    if twitter_desc and twitter_desc.has_attr('content'):
+        content = twitter_desc['content']
         if isinstance(content, str):
             return content.strip()
-    
+
     # Schema.org description
     schema_desc = soup.find('meta', attrs={'itemprop': 'description'})
-    if schema_desc and schema_desc.has_attr('content'): # type: ignore
-        content = schema_desc['content'] # type: ignore
+    if schema_desc and schema_desc.has_attr('content'):
+        content = schema_desc['content']
         if isinstance(content, str):
             return content.strip()
-    
+
     return ""
 
 
@@ -1453,29 +1534,34 @@ def get_keywords(soup: BeautifulSoup) -> str:
     """
     # Standard meta keywords
     meta_keywords = soup.find('meta', attrs={'name': 'keywords'})
-    if meta_keywords and meta_keywords.has_attr('content'): # type: ignore
-        content = meta_keywords['content'] # type: ignore
+    if meta_keywords and meta_keywords.has_attr('content'):
+        content = meta_keywords['content']
         if isinstance(content, str):
             return content.strip()
-    
+
     # Open Graph keywords (rare but check)
     og_keywords = soup.find('meta', attrs={'property': 'og:keywords'})
-    if og_keywords and og_keywords.has_attr('content'): # type: ignore
-        content = og_keywords['content'] # type: ignore
+    if og_keywords and og_keywords.has_attr('content'):
+        content = og_keywords['content']
         if isinstance(content, str):
             return content.strip()
-    
+
     # Twitter keywords (rare but check)
     twitter_keywords = soup.find('meta', attrs={'name': 'twitter:keywords'})
-    if twitter_keywords and twitter_keywords.has_attr('content'): # type: ignore
-        content = twitter_keywords['content'] # type: ignore
+    if twitter_keywords and twitter_keywords.has_attr('content'):
+        content = twitter_keywords['content']
         if isinstance(content, str):
             return content.strip()
-    
+
     return ""
 
 
-async def crawl_land(land: model.Land, limit: int = 0, http: Optional[str] = None, depth: Optional[int] = None, store_html: bool = False, retry_status: Optional[list] = None, issue_mode: Optional[bool] = None) -> tuple:
+async def crawl_land(land: model.Land, limit: int = 0,
+                     http: Optional[str] = None,
+                     depth: Optional[int] = None,
+                     store_html: bool = False,
+                     retry_status: Optional[list] = None,
+                     issue_mode: Optional[bool] = None) -> tuple:
     """Asynchronously crawl all expressions in a land.
 
     This function orchestrates the crawling process for a land, processing
@@ -1503,7 +1589,7 @@ async def crawl_land(land: model.Land, limit: int = 0, http: Optional[str] = Non
         - Updates expression metadata, content, relevance, and links.
         - Handles different event loop policies for Windows vs Unix.
     """
-    print(f"Crawling land {land.id}") # type: ignore
+    print(f"Crawling land {land.id}")
     dictionary = get_land_dictionary(land)
 
     total_processed = 0
@@ -1537,47 +1623,62 @@ async def crawl_land(land: model.Land, limit: int = 0, http: Optional[str] = Non
                             .order_by(model.Expression.depth))
             depths_to_process = [d.depth for d in depths_query]
 
-        for current_depth in depths_to_process:
-            print(f"Processing depth {current_depth}")
+        # O04: ONE session (and one connector) per crawl_land call, not one
+        # per batch. The connector bounds concurrency to parallel_connections
+        # exactly as before; what is gained is keep-alive (15 s) and the DNS
+        # cache (TTL 10 s) surviving between consecutive batches and depths.
+        # No timeout= here: AiohttpStrategy sets it per request. Closing stays
+        # guaranteed by `async with` on every exit path of this coroutine
+        # (normal return, --limit early return, per-expression exception,
+        # hard exception in the body).
+        connector = aiohttp.TCPConnector(limit=settings.parallel_connections, ssl=False)
+        async with aiohttp.ClientSession(connector=connector, max_field_size=16384) as session:
+            for current_depth in depths_to_process:
+                print(f"Processing depth {current_depth}")
 
-            expressions = model.Expression.select().where(
-                *_base_filter(),
-                model.Expression.depth == current_depth,
-            )
+                expressions = model.Expression.select().where(
+                    *_base_filter(),
+                    model.Expression.depth == current_depth,
+                )
 
-            expression_count = expressions.count()
-            if expression_count == 0:
-                continue
+                batch_size = settings.parallel_connections
+                # Keyset pagination by id, never OFFSET: the workers rewrite
+                # the very columns _base_filter() selects on (fetched_at,
+                # http_status), so each processed row leaves the result set
+                # and an OFFSET would skip exactly as many rows as were just
+                # handled (A02: 30 rows in batches of 10 => 20 processed).
+                # `last_id` restarts at 0 for each depth, because a depth-1
+                # row can carry a lower id than the last depth-0 row (typical
+                # after `land addurl` on an already crawled land).
+                last_id = 0
+                batch_number = 0
 
-            batch_size = settings.parallel_connections
-            batch_count = -(-expression_count // batch_size)
-            last_batch_size = expression_count % batch_size
-            current_offset = 0
+                while True:
+                    # Enforce the global --limit on attempts (not successes)
+                    if limit > 0:
+                        remaining = max(0, limit - total_attempted)
+                        if remaining == 0:
+                            return total_processed, total_errors
+                        effective_batch_limit = min(batch_size, remaining)
+                    else:
+                        effective_batch_limit = batch_size
 
-            for current_batch in range(batch_count):
-                print(f"Batch {current_batch + 1}/{batch_count} for depth {current_depth}")
-                # Determine base batch limit from remaining rows in this depth
-                batch_limit = last_batch_size if (current_batch + 1 == batch_count and last_batch_size != 0) else batch_size
-                # Enforce the global --limit on attempts (not only successes)
-                if limit > 0:
-                    remaining = max(0, limit - total_attempted)
-                    if remaining == 0:
-                        return total_processed, total_errors
-                    effective_batch_limit = min(batch_limit, remaining)
-                else:
-                    effective_batch_limit = batch_limit
+                    current_batch_expressions = list(
+                        expressions
+                        .where(model.Expression.id > last_id)
+                        .order_by(model.Expression.id)
+                        .limit(effective_batch_limit))
+                    attempted_in_batch = len(current_batch_expressions)
 
-                current_expressions_query = expressions.limit(effective_batch_limit).offset(current_offset)
-                current_batch_expressions = list(current_expressions_query)
-                attempted_in_batch = len(current_batch_expressions)
+                    if attempted_in_batch == 0:
+                        break
 
-                if attempted_in_batch == 0:
-                    break
+                    batch_number += 1
+                    print(f"Batch {batch_number} for depth {current_depth}")
 
-                connector = aiohttp.TCPConnector(limit=settings.parallel_connections, ssl=False)
-                async with aiohttp.ClientSession(connector=connector, max_field_size=16384) as session:
                     tasks = [
-                        crawl_expression_with_media_analysis(expr, dictionary, session, store_html=store_html, issue_mode=issue_mode)
+                        crawl_expression_with_media_analysis(
+                            expr, dictionary, session, store_html=store_html, issue_mode=issue_mode)
                         for expr in current_batch_expressions
                     ]
                     # return_exceptions=True: a single expression raising
@@ -1588,17 +1689,14 @@ async def crawl_land(land: model.Land, limit: int = 0, http: Optional[str] = Non
                     processed_in_batch = 0
                     for expr, res in zip(current_batch_expressions, results):
                         if isinstance(res, Exception):
-                            print(f"Error crawling #{expr.id} ({expr.url}): {res}")  # type: ignore
+                            print(f"Error crawling #{expr.id} ({expr.url}): {res}")
                         elif res:
                             processed_in_batch += 1
                     total_processed += processed_in_batch
                     total_errors += (attempted_in_batch - processed_in_batch)
                     total_attempted += attempted_in_batch
 
-                current_offset += attempted_in_batch
-
-                if limit > 0 and total_attempted >= limit:
-                    return total_processed, total_errors
+                    last_id = current_batch_expressions[-1].id
 
         return total_processed, total_errors
     finally:
@@ -1612,6 +1710,7 @@ async def crawl_land(land: model.Land, limit: int = 0, http: Optional[str] = Non
                 BrowserPool.reset()
         except Exception as e:
             print(f"BrowserPool shutdown warning: {e}")
+
 
 def _extract_content_and_links(raw_html, expression, source_method: str = "aiohttp"):
     """Run Trafilatura then BeautifulSoup on ``raw_html`` and persist medias.
@@ -1668,7 +1767,7 @@ def _extract_content_and_links(raw_html, expression, source_method: str = "aioht
                 content += "\n\n" + "\n".join(media_lines)
             if soup_readable is not None:
                 extract_medias(soup_readable, expression)
-            img_md_links = re.findall(r'!\[.*?\]\((.*?)\)', content)
+            img_md_links = list(link_context.iter_markdown_image_tokens(content))
             for img_url in img_md_links:
                 resolved_img_url = resolve_url(str(expression.url), img_url)
                 if not model.Media.select().where(
@@ -1680,7 +1779,7 @@ def _extract_content_and_links(raw_html, expression, source_method: str = "aioht
             # above are images and bracketed markers, never hyperlinks.
             links = body_links.extract_body_links(
                 extracted_content, readable_html, page_url, soup=soup_readable)
-            expression.readable = content # type: ignore
+            expression.readable = content
             if source_method == "archive_org":
                 print(f"Archive.org + Trafilatura succeeded for {expression.url}")
             else:
@@ -1703,7 +1802,7 @@ def _extract_content_and_links(raw_html, expression, source_method: str = "aioht
                         for h in hrefs if isinstance(h, str) and h]
                 links = body_links.from_urls(
                     [u for u in urls if is_crawlable(u)])
-                expression.readable = content # type: ignore
+                expression.readable = content
                 print(f"BeautifulSoup fallback succeeded for {expression.url}")
         except Exception as e:
             print(f"BeautifulSoup fallback failed for {expression.url}: {e}")
@@ -1711,7 +1810,10 @@ def _extract_content_and_links(raw_html, expression, source_method: str = "aioht
     return content, links
 
 
-async def crawl_expression_with_media_analysis(expression: model.Expression, dictionary, session: aiohttp.ClientSession, store_html: bool = False, issue_mode: Optional[bool] = None):
+async def crawl_expression_with_media_analysis(
+        expression: model.Expression, dictionary,
+        session: aiohttp.ClientSession, store_html: bool = False,
+        issue_mode: Optional[bool] = None):
     """Crawl and process an expression with integrated media analysis.
 
     This function fetches an expression's URL, extracts content using Trafilatura,
@@ -1734,13 +1836,13 @@ async def crawl_expression_with_media_analysis(expression: model.Expression, dic
         - Automatically calls analyze_media() for media extraction and analysis.
         - Sets fetched_at timestamp on the expression.
     """
-    print(f"Crawling expression #{expression.id} with media analysis: {expression.url}") # type: ignore
-    expression.fetched_at = model.datetime.datetime.now() # type: ignore
+    print(f"Crawling expression #{expression.id} with media analysis: {expression.url}")
+    expression.fetched_at = model.datetime.datetime.now()
 
     # Step 1+3 (fetch + URL-based fallbacks): delegated to mwi.fetcher
     fetch_result = await fetch_html(str(expression.url), session=session)
-    expression.http_status = fetch_result.status_code # type: ignore
-    expression.fetch_method = fetch_result.method_used # type: ignore
+    expression.http_status = fetch_result.status_code
+    expression.fetch_method = fetch_result.method_used
     raw_html = fetch_result.html
 
     # Persist raw HTML *before* extraction — invariant set by sprint-html
@@ -1750,7 +1852,7 @@ async def crawl_expression_with_media_analysis(expression: model.Expression, dic
     # Sprint E: truncate at settings.fullhtml_max_size_kb (default 5 MB)
     # to protect the SQLite WAL cache from pathological oversized pages.
     if store_html and raw_html:
-        expression.html = _maybe_truncate_html(raw_html)  # type: ignore
+        expression.html = _maybe_truncate_html(raw_html)
 
     # Step 2: extract content from whichever raw_html we got (live or archived)
     content, links = _extract_content_and_links(
@@ -1758,57 +1860,76 @@ async def crawl_expression_with_media_analysis(expression: model.Expression, dic
     )
 
     if not content and fetch_result.html is None:
-        print(f"All extraction methods failed for {expression.url}. Final status: {expression.http_status}")
+        print(
+            f"All extraction methods failed for {expression.url}. Final status: "
+            f"{expression.http_status}")
 
     # Step 4: post-processing (language, relevance, links, media) when content available
     if content:
         soup = BeautifulSoup(raw_html if raw_html else content, 'html.parser')
-        expression.title = str(get_title(soup) or expression.url) # type: ignore
-        expression.description = str(get_description(soup)) if get_description(soup) else None # type: ignore
-        expression.keywords = str(get_keywords(soup)) if get_keywords(soup) else None # type: ignore
+        expression.title = str(get_title(soup) or expression.url)
+        expression.description = str(get_description(soup)) if get_description(soup) else None
+        expression.keywords = str(get_keywords(soup)) if get_keywords(soup) else None
         html_lang = str(soup.html.get('lang', '')) if soup.html else ''
-        expression.lang = detect_content_language(content, html_lang)  # type: ignore
+        expression.lang = detect_content_language(content, html_lang)
         # Check language compatibility BEFORE any relevance calculation
-        if expression.lang and not is_language_compatible(expression.lang, expression.land.lang):  # type: ignore
-            expression.relevance = 0  # type: ignore
-            print(f"Language mismatch for expression #{expression.id}: lang='{expression.lang}' not in land langs='{expression.land.lang}'")  # type: ignore
+        if expression.lang and not is_language_compatible(expression.lang, expression.land.lang):
+            expression.relevance = 0
+            print(
+                f"Language mismatch for expression #{expression.id}: lang='{expression.lang}' not "
+                f"in land langs='{expression.land.lang}'")
         else:
             # Compute relevance with OpenRouter gate when enabled
             try:
-                from .llm_openrouter import is_relevant_via_openrouter  # local import to avoid overhead when disabled
-                if getattr(settings, 'openrouter_enabled', False) and settings.openrouter_api_key and settings.openrouter_model:
-                    verdict = is_relevant_via_openrouter(expression.land, expression, issue_mode=issue_mode)  # type: ignore
+                # O01: the async variant — the gate is a synchronous
+                # requests.post and this is a coroutine running next to
+                # `parallel_connections` siblings.
+                from .llm_openrouter import is_relevant_via_openrouter_async
+                if getattr(settings, 'openrouter_enabled',
+                           False) and settings.openrouter_api_key and settings.openrouter_model:
+                    verdict = await is_relevant_via_openrouter_async(
+                        expression.land, expression, issue_mode=issue_mode)
                     if verdict is False:
-                        expression.relevance = 0  # type: ignore
+                        expression.relevance = 0
                     else:
-                        expression.relevance = expression_relevance(dictionary, expression)  # type: ignore
+                        expression.relevance = expression_relevance(dictionary, expression)
                 else:
-                    expression.relevance = expression_relevance(dictionary, expression)  # type: ignore
+                    expression.relevance = expression_relevance(dictionary, expression)
             except Exception as e:
                 print(f"OpenRouter gate error for {expression.url}: {e}")
-                expression.relevance = expression_relevance(dictionary, expression)  # type: ignore
-        expression.readable_at = model.datetime.datetime.now() # type: ignore
-        if expression.relevance is not None and expression.relevance > 0: # type: ignore
-            expression.approved_at = model.datetime.datetime.now() # type: ignore
-        model.ExpressionLink.delete().where(model.ExpressionLink.source == expression.id).execute() # type: ignore
+                expression.relevance = expression_relevance(dictionary, expression)
+        expression.readable_at = model.datetime.datetime.now()
+        if expression.relevance is not None and expression.relevance > 0:
+            expression.approved_at = model.datetime.datetime.now()
+        model.ExpressionLink.delete().where(model.ExpressionLink.source == expression.id).execute()
 
         # Extract dynamic media using headless browser (only for approved expressions)
-        if (expression.relevance is not None and expression.relevance > 0 and # type: ignore
-            settings.dynamic_media_extraction and PLAYWRIGHT_AVAILABLE):
+        if (expression.relevance is not None and expression.relevance > 0 and
+                settings.dynamic_media_extraction and PLAYWRIGHT_AVAILABLE):
             try:
-                print(f"Attempting dynamic media extraction for #{expression.id}") # type: ignore
+                print(f"Attempting dynamic media extraction for #{expression.id}")
                 dynamic_media_urls = await extract_dynamic_medias(str(expression.url), expression)
                 if dynamic_media_urls:
-                    print(f"Dynamic extraction found {len(dynamic_media_urls)} additional media items for #{expression.id}") # type: ignore
+                    print(
+                        f"Dynamic extraction found {len(dynamic_media_urls)} additional media "
+                        f"items for #{expression.id}")
                 else:
-                    print(f"No dynamic media found for #{expression.id}") # type: ignore
+                    print(f"No dynamic media found for #{expression.id}")
             except Exception as e:
-                print(f"Dynamic media extraction failed for #{expression.id}: {e}") # type: ignore
-        elif expression.relevance is not None and expression.relevance > 0 and settings.dynamic_media_extraction and not PLAYWRIGHT_AVAILABLE: # type: ignore
-            print(f"Dynamic media extraction requested but Playwright not available for #{expression.id}") # type: ignore
+                print(f"Dynamic media extraction failed for #{expression.id}: {e}")
+        elif (expression.relevance is not None
+              and expression.relevance > 0
+              and settings.dynamic_media_extraction
+              and not PLAYWRIGHT_AVAILABLE):
+            print(
+                f"Dynamic media extraction requested but Playwright not available for "
+                f"#{expression.id}")
 
-        if expression.relevance is not None and expression.relevance > 0 and expression.depth is not None and expression.depth < 3 and links: # type: ignore
-            print(f"Linking {len(links)} expressions to #{expression.id}") # type: ignore
+        if (
+                expression.relevance is not None and expression.relevance > 0
+                and expression.depth is not None and expression.depth < 3
+                and links):
+            print(f"Linking {len(links)} expressions to #{expression.id}")
             # sprint link-context: locate each link in the raw DOM (soup reused, no re-parse)
             # rank=dom_rank: when a URL appears both in the menu and in the
             # body, keep the body occurrence (sprint body-links T3).
@@ -1822,7 +1943,7 @@ async def crawl_expression_with_media_analysis(expression: model.Expression, dic
                     content, link.raw or link.url)
                 if ctx is None and info is not None:
                     ctx = info.block_text
-                link_expression(expression.land, expression, link.url, # type: ignore
+                link_expression(expression.land, expression, link.url,
                                 context=ctx,
                                 dom=info.dom if info else None,
                                 dom_html=info.dom_html if info else None,
@@ -1833,9 +1954,12 @@ async def crawl_expression_with_media_analysis(expression: model.Expression, dic
     else:
         if fetch_result.html is not None:
             # We had HTML but extraction yielded nothing usable
-            print(f"All extraction methods failed for {expression.url}. Final status: {expression.http_status}")
+            print(
+                f"All extraction methods failed for {expression.url}. Final status: "
+                f"{expression.http_status}")
         expression.save()
         return 0
+
 
 async def consolidate_land(
     land: model.Land,
@@ -1867,6 +1991,18 @@ async def consolidate_land(
         - With llm_revalidate=True, re-runs the OpenRouter gate (issue_mode
           honoured, None => settings.openrouter_issue_mode) and refreshes
           validllm/validmodel before applying the verdict.
+        - Atomic per expression (A03): each expression is first prepared
+          (LLM gate, relevance, extraction, link rows) with NO relational
+          mutation, then mutated inside a single short transaction. A lock,
+          a disk eviction or a Ctrl-C therefore leaves that expression
+          exactly as it was instead of stripping its links and medias.
+          Two consequences worth knowing: an LLM verdict obtained for an
+          expression whose mutation then fails is NOT persisted (replay the
+          call), and `is_relevant_via_openrouter` must stay write-free --
+          never add a save() to it, it runs outside the transaction.
+          Target expressions created while resolving links (add_expression)
+          stay in phase 1, in autocommit: creating them inside the
+          transaction would leave phantom ids in url_index on rollback.
         - Deletes and recreates all expression links from content.
         - Resolves URL variants (http/https, www, trailing slash) onto the
           EXISTING corpus expression via the 3-key ladder (sprint
@@ -1876,7 +2012,7 @@ async def consolidate_land(
         - Useful for repairing data after manual content edits or dictionary updates.
         - Does not re-fetch URLs; works with existing content in the database.
     """
-    print(f"Consolidating land {land.id}") # type: ignore
+    print(f"Consolidating land {land.id}")
     dictionary = get_land_dictionary(land)
 
     # Select expressions to process
@@ -1889,8 +2025,6 @@ async def consolidate_land(
     )
     if depth is not None:
         query = query.where(model.Expression.depth == depth)
-    if limit > 0:
-        query = query.limit(limit)
     if min_relevance > 0:
         query = query.where(model.Expression.relevance >= min_relevance)
 
@@ -1905,48 +2039,66 @@ async def consolidate_land(
         .where(model.Expression.land == land).tuples())
 
     batch_size = settings.parallel_connections
-    expression_count = query.count()
-    batch_count = -(-expression_count // batch_size)
-    last_batch_size = expression_count % batch_size
-    current_offset = 0
+    # Keyset pagination by id, never OFFSET: the loop rewrites `relevance`,
+    # which the min_relevance filter selects on, so each recomputed row can
+    # leave the result set and an OFFSET would skip its neighbours (A02).
+    # --limit keeps its meaning: a cap on attempts, not on successes.
+    last_id = 0
+    attempted = 0
+    batch_number = 0
 
-    for current_batch in range(batch_count):
-        print(f"Consolidation batch {current_batch + 1}/{batch_count}")
-        batch_limit = last_batch_size if (current_batch + 1 == batch_count and last_batch_size != 0) else batch_size
-        current_expressions = query.limit(batch_limit).offset(current_offset)
+    while True:
+        eff = batch_size if limit <= 0 else min(batch_size, limit - attempted)
+        if eff <= 0:
+            break
+        current_expressions = list(
+            query
+            .where(model.Expression.id > last_id)
+            .order_by(model.Expression.id)
+            .limit(eff))
+        if not current_expressions:
+            break
+
+        batch_number += 1
+        print(f"Consolidation batch {batch_number}")
 
         for expr in current_expressions:
             try:
-                # 1. Supprimer anciens liens et médias
-                model.ExpressionLink.delete().where(model.ExpressionLink.source == expr.id).execute()
-                model.Media.delete().where(model.Media.expression == expr.id).execute()
+                # ---- PHASE 1 : réseau + CPU, AUCUNE mutation de relation ----
+                # A03 : rien n'est supprimé ni écrit avant que tout le
+                # travail faillible soit fait. Le DELETE ouvrait la boucle et
+                # un verrou SQLite, une éviction disque ou un Ctrl-C laissait
+                # l'expression sans liens ni médias, readable intact.
 
-                # 2. Re-validation LLM optionnelle (--llm=true), puis recalcul
+                # 1. Re-validation LLM optionnelle (--llm=true), puis recalcul
                 #    lexical, puis respect du verdict LLM existant.
+                #    En mémoire seulement : le save() a lieu en phase 2.
                 if (llm_revalidate and expr.readable and
-                        len(str(expr.readable)) >= getattr(settings, 'openrouter_readable_min_chars', 0)):
+                        len(str(expr.readable)) >= getattr(
+                            settings, 'openrouter_readable_min_chars', 0)):
+                    # O01 exclusion: consolidate_land IS a coroutine, but
+                    # its loop is sequential — no sibling to starve — and
+                    # test_32 patches this synchronous façade.
                     from .llm_openrouter import is_relevant_via_openrouter
                     verdict = is_relevant_via_openrouter(land, expr, issue_mode=issue_mode)
                     if verdict is True:
-                        expr.validllm = 'oui'  # type: ignore
-                        expr.validmodel = settings.openrouter_model  # type: ignore
+                        expr.validllm = 'oui'
+                        expr.validmodel = settings.openrouter_model
                     elif verdict is False:
-                        expr.validllm = 'non'  # type: ignore
-                        expr.validmodel = settings.openrouter_model  # type: ignore
+                        expr.validllm = 'non'
+                        expr.validmodel = settings.openrouter_model
                     # verdict None (désactivé/budget/erreur) : ne pas toucher validllm
                 try:
-                    new_rel = expression_relevance(dictionary, expr)  # type: ignore
+                    new_rel = expression_relevance(dictionary, expr)
                 except Exception as e:
                     print(f"Error recalculating relevance for {expr.url}: {e}")
-                    new_rel = expr.relevance or 0  # type: ignore
+                    new_rel = expr.relevance or 0
                 # Respecter le verdict LLM : ne pas ressusciter une page rejetée
                 # ('non' => 0). Traçabilité scientifique.
                 if getattr(expr, 'validllm', None) == 'non':
                     new_rel = 0
-                expr.relevance = new_rel  # type: ignore
-                expr.save()
 
-                # 3. Extraire les liens sortants du contenu lisible
+                # 2. Extraire les liens sortants du contenu lisible
                 # sprint body-links T2: quand le HTML brut est stocké
                 # (--fullhtml), on rejoue Trafilatura en sortie HTML pour
                 # récupérer les citations que la sérialisation markdown perd.
@@ -1981,13 +2133,14 @@ async def consolidate_land(
                             known.add(extra.key)
                 nb_links = len(links)
 
-                # 4. Ajouter les documents manquants et recréer les liens
+                # 3. Préparer les arêtes — sans en créer aucune.
                 # sprint link-context: backfill context/dom/dom_html depuis le
                 # HTML stocké (--fullhtml) quand il est disponible
                 dom_map = link_context.extract_link_dom_map(
                     stored_html, str(expr.url),
                     rank=body_links.dom_rank) if stored_html else {}
                 body_links.resolve(links, dom_map)
+                rows: List[dict] = []
                 for link in links:
                     url = link.url
                     # variant-proof: resolve onto an existing corpus fiche
@@ -1997,10 +2150,15 @@ async def consolidate_land(
                     if target_id is None:
                         if not is_crawlable(url):
                             continue
-                        target_expr = add_expression(land, url, expr.depth + 1 if expr.depth is not None else 1)
+                        # add_expression / add_to_url_index restent en phase 1,
+                        # en autocommit : créer ces fiches dans la transaction
+                        # laisserait des ids fantômes dans url_index au
+                        # rollback (foreign_keys=1).
+                        target_expr = add_expression(
+                            land, url, expr.depth + 1 if expr.depth is not None else 1)
                         if not target_expr:
                             continue
-                        target_id = target_expr.id  # type: ignore
+                        target_id = target_expr.id
                         link_context.add_to_url_index(
                             url_index, target_id, str(target_expr.url))
                     if target_id == expr.id:
@@ -2010,42 +2168,63 @@ async def consolidate_land(
                         expr.readable, link.raw or url)
                     if ctx is None and info is not None:
                         ctx = info.block_text
-                    try:
-                        model.ExpressionLink.create(
-                            source_id=expr.id, # type: ignore
-                            target_id=target_id,
-                            context=ctx,
-                            dom=info.dom if info else None,
-                            dom_html=info.dom_html if info else None,
-                            kind=link.kind,
-                            kind_rule=link.kind_rule,
-                            origin=link.origin)
-                    except IntegrityError:
-                        pass
+                    rows.append(dict(
+                        source_id=expr.id,
+                        target_id=target_id,
+                        context=ctx,
+                        dom=info.dom if info else None,
+                        dom_html=info.dom_html if info else None,
+                        kind=link.kind,
+                        kind_rule=link.kind_rule,
+                        origin=link.origin))
 
-                # 5. Extraire et recréer les médias
-                nb_media = 0
-                if expr.readable:
-                    soup = BeautifulSoup(expr.readable, 'html.parser')
-                    extract_medias(soup, expr)
+                # ---- PHASE 2 : mutations, transaction courte par expression ----
+                with model.DB.atomic():
+                    model.ExpressionLink.delete().where(
+                        model.ExpressionLink.source == expr.id).execute()
+                    expr.relevance = new_rel
+                    expr.save()
+                    for row in rows:
+                        try:
+                            model.ExpressionLink.create(**row)
+                        except IntegrityError:
+                            pass
+
+                    # A04: reconcile medias by URL instead of purge-and-recreate.
+                    # The old DELETE threw away the twelve enrichment columns
+                    # (dimensions, EXIF, hashes, colours) on every run and
+                    # changed the row id, which breaks external joins on
+                    # mediacsv.id. `extract_medias` receives the readable
+                    # STRING, not a soup: str(soup) escapes '&' into '&amp;'
+                    # and corrupted every query-string media URL.
+                    seen_media = (extract_medias(expr.readable, expr)
+                                  if expr.readable else set())
+                    stale = [m.id for m in
+                             model.Media.select(model.Media.id, model.Media.url)
+                             .where(model.Media.expression == expr.id)
+                             if str(m.url).lower() not in seen_media]
+                    for start in range(0, len(stale), 500):
+                        model.Media.delete().where(
+                            model.Media.id.in_(stale[start:start + 500])).execute()
                     nb_media = model.Media.select().where(model.Media.expression == expr.id).count()
 
-                print(f"Expression #{expr.id}: {nb_links} liens extraits, {nb_media} médias extraits.")
+                print(
+                    f"Expression #{expr.id}: {nb_links} liens extraits, "
+                    f"{nb_media} médias extraits.")
 
                 total_processed += 1
             except Exception as e:
                 print(f"Error consolidating expression {expr.id}: {e}")
                 total_errors += 1
 
-        current_offset += batch_size
-
-        if limit > 0 and total_processed >= limit:
-            return total_processed, total_errors
+        attempted += len(current_expressions)
+        last_id = current_expressions[-1].id
 
     return total_processed, total_errors
 
 
-async def crawl_expression(expression: model.Expression, dictionary, session: aiohttp.ClientSession, store_html: bool = False, issue_mode: Optional[bool] = None):
+async def crawl_expression(expression: model.Expression, dictionary, session: aiohttp.ClientSession,
+                           store_html: bool = False, issue_mode: Optional[bool] = None):
     """Crawl and process an expression using a multi-stage fallback pipeline.
 
     This function fetches and processes web content through a sophisticated pipeline
@@ -2068,17 +2247,17 @@ async def crawl_expression(expression: model.Expression, dictionary, session: ai
         - Sets fetched_at timestamp on the expression.
         - Deprecated in favor of crawl_expression_with_media_analysis.
     """
-    print(f"Crawling expression #{expression.id}: {expression.url}") # type: ignore
-    expression.fetched_at = model.datetime.datetime.now() # type: ignore
+    print(f"Crawling expression #{expression.id}: {expression.url}")
+    expression.fetched_at = model.datetime.datetime.now()
 
     fetch_result = await fetch_html(str(expression.url), session=session)
-    expression.http_status = fetch_result.status_code # type: ignore
-    expression.fetch_method = fetch_result.method_used # type: ignore
+    expression.http_status = fetch_result.status_code
+    expression.fetch_method = fetch_result.method_used
     raw_html = fetch_result.html
 
     # Persist raw HTML *before* extraction (sprint-html Sprint A + E)
     if store_html and raw_html:
-        expression.html = _maybe_truncate_html(raw_html)  # type: ignore
+        expression.html = _maybe_truncate_html(raw_html)
 
     content, links = _extract_content_and_links(
         raw_html, expression, source_method=fetch_result.method_used,
@@ -2086,49 +2265,63 @@ async def crawl_expression(expression: model.Expression, dictionary, session: ai
 
     if content:
         soup = BeautifulSoup(raw_html if raw_html else content, 'html.parser')
-        expression.title = str(get_title(soup) or expression.url) # type: ignore
-        expression.description = str(get_description(soup)) if get_description(soup) else None # type: ignore
-        expression.keywords = str(get_keywords(soup)) if get_keywords(soup) else None # type: ignore
+        expression.title = str(get_title(soup) or expression.url)
+        expression.description = str(get_description(soup)) if get_description(soup) else None
+        expression.keywords = str(get_keywords(soup)) if get_keywords(soup) else None
         html_lang = str(soup.html.get('lang', '')) if soup.html else ''
-        expression.lang = detect_content_language(content, html_lang)  # type: ignore
-        if expression.lang and not is_language_compatible(expression.lang, expression.land.lang):  # type: ignore
-            expression.relevance = 0  # type: ignore
-            print(f"Language mismatch for expression #{expression.id}: lang='{expression.lang}' not in land langs='{expression.land.lang}'")  # type: ignore
+        expression.lang = detect_content_language(content, html_lang)
+        if expression.lang and not is_language_compatible(expression.lang, expression.land.lang):
+            expression.relevance = 0
+            print(
+                f"Language mismatch for expression #{expression.id}: lang='{expression.lang}' not "
+                f"in land langs='{expression.land.lang}'")
         else:
             try:
-                from .llm_openrouter import is_relevant_via_openrouter
-                if getattr(settings, 'openrouter_enabled', False) and settings.openrouter_api_key and settings.openrouter_model:
-                    verdict = is_relevant_via_openrouter(expression.land, expression, issue_mode=issue_mode)  # type: ignore
+                from .llm_openrouter import is_relevant_via_openrouter_async
+                if getattr(settings, 'openrouter_enabled',
+                           False) and settings.openrouter_api_key and settings.openrouter_model:
+                    verdict = await is_relevant_via_openrouter_async(
+                        expression.land, expression, issue_mode=issue_mode)
                     if verdict is False:
-                        expression.relevance = 0  # type: ignore
+                        expression.relevance = 0
                     else:
-                        expression.relevance = expression_relevance(dictionary, expression)  # type: ignore
+                        expression.relevance = expression_relevance(dictionary, expression)
                 else:
-                    expression.relevance = expression_relevance(dictionary, expression)  # type: ignore
+                    expression.relevance = expression_relevance(dictionary, expression)
             except Exception as e:
                 print(f"OpenRouter gate error for {expression.url}: {e}")
-                expression.relevance = expression_relevance(dictionary, expression)  # type: ignore
-        expression.readable_at = model.datetime.datetime.now() # type: ignore
-        if expression.relevance is not None and expression.relevance > 0: # type: ignore
-            expression.approved_at = model.datetime.datetime.now() # type: ignore
-        model.ExpressionLink.delete().where(model.ExpressionLink.source == expression.id).execute() # type: ignore
+                expression.relevance = expression_relevance(dictionary, expression)
+        expression.readable_at = model.datetime.datetime.now()
+        if expression.relevance is not None and expression.relevance > 0:
+            expression.approved_at = model.datetime.datetime.now()
+        model.ExpressionLink.delete().where(model.ExpressionLink.source == expression.id).execute()
 
-        if (expression.relevance is not None and expression.relevance > 0 and # type: ignore
-            settings.dynamic_media_extraction and PLAYWRIGHT_AVAILABLE):
+        if (expression.relevance is not None and expression.relevance > 0 and
+                settings.dynamic_media_extraction and PLAYWRIGHT_AVAILABLE):
             try:
-                print(f"Attempting dynamic media extraction for #{expression.id}") # type: ignore
+                print(f"Attempting dynamic media extraction for #{expression.id}")
                 dynamic_media_urls = await extract_dynamic_medias(str(expression.url), expression)
                 if dynamic_media_urls:
-                    print(f"Dynamic extraction found {len(dynamic_media_urls)} additional media items for #{expression.id}") # type: ignore
+                    print(
+                        f"Dynamic extraction found {len(dynamic_media_urls)} additional media "
+                        f"items for #{expression.id}")
                 else:
-                    print(f"No dynamic media found for #{expression.id}") # type: ignore
+                    print(f"No dynamic media found for #{expression.id}")
             except Exception as e:
-                print(f"Dynamic media extraction failed for #{expression.id}: {e}") # type: ignore
-        elif expression.relevance is not None and expression.relevance > 0 and settings.dynamic_media_extraction and not PLAYWRIGHT_AVAILABLE: # type: ignore
-            print(f"Dynamic media extraction requested but Playwright not available for #{expression.id}") # type: ignore
+                print(f"Dynamic media extraction failed for #{expression.id}: {e}")
+        elif (expression.relevance is not None
+              and expression.relevance > 0
+              and settings.dynamic_media_extraction
+              and not PLAYWRIGHT_AVAILABLE):
+            print(
+                f"Dynamic media extraction requested but Playwright not available for "
+                f"#{expression.id}")
 
-        if expression.relevance is not None and expression.relevance > 0 and expression.depth is not None and expression.depth < 3 and links: # type: ignore
-            print(f"Linking {len(links)} expressions to #{expression.id}") # type: ignore
+        if (
+                expression.relevance is not None and expression.relevance > 0
+                and expression.depth is not None and expression.depth < 3
+                and links):
+            print(f"Linking {len(links)} expressions to #{expression.id}")
             # sprint link-context: locate each link in the raw DOM (soup reused, no re-parse)
             # rank=dom_rank: when a URL appears both in the menu and in the
             # body, keep the body occurrence (sprint body-links T3).
@@ -2142,7 +2335,7 @@ async def crawl_expression(expression: model.Expression, dictionary, session: ai
                     content, link.raw or link.url)
                 if ctx is None and info is not None:
                     ctx = info.block_text
-                link_expression(expression.land, expression, link.url, # type: ignore
+                link_expression(expression.land, expression, link.url,
                                 context=ctx,
                                 dom=info.dom if info else None,
                                 dom_html=info.dom_html if info else None,
@@ -2151,9 +2344,12 @@ async def crawl_expression(expression: model.Expression, dictionary, session: ai
         expression.save()
         return 1
     else:
-        print(f"All extraction methods failed for {expression.url}. Final status: {expression.http_status}")
+        print(
+            f"All extraction methods failed for {expression.url}. Final status: "
+            f"{expression.http_status}")
         expression.save()
         return 0
+
 
 async def analyze_media(expression: model.Expression, session: aiohttp.ClientSession) -> list:
     """Analyze and extract detailed metadata for media associated with an expression.
@@ -2171,7 +2367,8 @@ async def analyze_media(expression: model.Expression, session: aiohttp.ClientSes
     Notes:
         - Uses MediaAnalyzer for comprehensive media analysis.
         - Extracts metadata like dimensions, colors, format, EXIF data, etc.
-        - Calculates perceptual hashes for duplicate detection.
+        - Computes both fingerprints: image_hash (SHA-256, exact file)
+          and perceptual_hash (dHash, same image recompressed).
         - Updates Media database records with analysis results.
         - Requires settings.media_analysis to be enabled.
         - Returns empty list if no media is found or analysis fails.
@@ -2210,6 +2407,7 @@ async def analyze_media(expression: model.Expression, session: aiohttp.ClientSes
                 media.aspect_ratio = analysis_result.get('aspect_ratio')
                 media.exif_data = json.dumps(analysis_result.get('exif_data', {}))
                 media.image_hash = analysis_result.get('image_hash')
+                media.perceptual_hash = analysis_result.get('perceptual_hash')
                 media.content_tags = json.dumps(analysis_result.get('content_tags', []))
                 media.nsfw_score = analysis_result.get('nsfw_score')
                 media.analyzed_at = model.datetime.datetime.now()
@@ -2251,7 +2449,8 @@ def extract_md_links(md_content: str, base_url: Optional[str] = None):
     return link_context.extract_markdown_links(md_content or "", base_url)
 
 
-def add_expression(land: model.Land, url: str, depth=0) -> Union[model.Expression, bool]:
+def add_expression(land: model.Land, url: str,
+                   depth=0) -> Union[model.Expression, Literal[False]]:
     """Add a new expression (URL) to a land or retrieve existing one.
 
     This function creates a new expression in the database if it doesn't exist,
@@ -2421,8 +2620,8 @@ def _meta_url(soup: BeautifulSoup, key: str) -> str:
     """Return a meta tag's content by property= (og:) or name= (twitter:)."""
     tag = soup.find('meta', attrs={'property': key}) \
         or soup.find('meta', attrs={'name': key})
-    if tag and tag.has_attr('content'):  # type: ignore
-        content = tag['content']  # type: ignore
+    if tag and tag.has_attr('content'):
+        content = tag['content']
         if isinstance(content, str):
             return content.strip()
     return ""
@@ -2471,8 +2670,8 @@ def _ldjson_url(soup: BeautifulSoup, base_url: str, keys) -> Optional[str]:
 
 def _sig_canonical(soup: BeautifulSoup, base_url: str) -> Optional[str]:
     link = soup.find('link', attrs={'rel': 'canonical'})
-    if link and link.has_attr('href'):  # type: ignore
-        href = link['href']  # type: ignore
+    if link and link.has_attr('href'):
+        href = link['href']
         if isinstance(href, str) and href.strip():
             return urljoin(base_url, href.strip())
     return None
@@ -2488,8 +2687,8 @@ def _sig_og_url(soup: BeautifulSoup, base_url: str) -> Optional[str]:
 
 def _sig_rel_author(soup: BeautifulSoup, base_url: str) -> Optional[str]:
     a = soup.find('a', attrs={'rel': 'author'})
-    if a and a.has_attr('href'):  # type: ignore
-        href = a['href']  # type: ignore
+    if a and a.has_attr('href'):
+        href = a['href']
         if isinstance(href, str) and href.strip():
             return urljoin(base_url, href.strip())
     return None
@@ -2511,13 +2710,15 @@ def _sig_itemprop_author(soup: BeautifulSoup, base_url: str) -> Optional[str]:
     Person block. Reads the nested ``itemprop="url"`` href, falling back to the
     author element's own ``href`` (``<a itemprop="author" href=…>`` sites).
     """
-    author = soup.find(attrs={'itemprop': 'author'})
+    # attrs= as a positional-ish kwarg confuses the overloads; the call is
+    # the documented one.
+    author = soup.find(attrs={'itemprop': 'author'})  # type: ignore[call-overload]
     if author is None:
         return None
-    link = author.find(attrs={'itemprop': 'url'})  # type: ignore
+    link = author.find(attrs={'itemprop': 'url'})
     for node in (link, author):
-        if node is not None and node.has_attr('href'):  # type: ignore
-            href = node['href']  # type: ignore
+        if node is not None and node.has_attr('href'):
+            href = node['href']
             if isinstance(href, str) and href.strip():
                 return urljoin(base_url, href.strip())
     return None
@@ -2684,14 +2885,14 @@ def link_expression(land: model.Land, source_expression: model.Expression, url: 
         - Returns False if target URL is not crawlable.
         - Builds the directed graph structure for land crawling.
     """
-    target_expression = add_expression(land, url, source_expression.depth + 1) # type: ignore
+    target_expression = add_expression(land, url, source_expression.depth + 1)
     if target_expression:
-        if target_expression.id == source_expression.id: # type: ignore
+        if target_expression.id == source_expression.id:
             return False  # self-citation (permalink/variant) -> no self-loop
         try:
             model.ExpressionLink.create(
-                source_id=source_expression.id, # type: ignore
-                target_id=target_expression.id, # type: ignore
+                source_id=source_expression.id,
+                target_id=target_expression.id,
                 context=context,
                 dom=dom,
                 dom_html=dom_html,
@@ -2702,6 +2903,11 @@ def link_expression(land: model.Land, source_expression: model.Expression, url: 
         except IntegrityError:
             pass
     return False
+
+
+# An IPv6 literal host, with an optional zone id and port: the only form
+# in which square brackets are legal in a netloc (RFC 3986 §3.2.2).
+_IPV6_HOST = re.compile(r"^\[[0-9A-Fa-f:.]+(?:%25[^\]]+)?\](?::\d+)?$")
 
 
 def is_crawlable(url: str):
@@ -2726,10 +2932,19 @@ def is_crawlable(url: str):
     try:
         if not url or not url.startswith(('http://', 'https://')):
             return False
+        parsed = urlparse(url)
+        # A bracketed host is only legal as an IPv6 literal. Python >= 3.11
+        # raises ValueError while parsing "https://[domain]/x"; 3.9 returns
+        # hostname='domain' without complaining. Reject it explicitly so the
+        # verdict is the same on every supported interpreter instead of being
+        # borrowed from whichever stdlib happens to be installed.
+        host = parsed.netloc.rsplit('@', 1)[-1]
+        if ('[' in host or ']' in host) and not _IPV6_HOST.match(host):
+            return False
         # Test the extension on the PATH only (not the whole URL): a query
         # string or fragment must not smuggle a binary past the filter
         # (…/doc.pdf?dl=1) nor make an editorial URL look binary (…/article#x).
-        path = urlparse(url).path.lower()
+        path = parsed.path.lower()
         exclude_ext = ('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.svg',
                        '.ico', '.pdf', '.txt', '.csv', '.xls', '.xlsx', '.doc',
                        '.docx', '.ppt', '.pptx', '.zip', '.mp4', '.webm',
@@ -2739,7 +2954,7 @@ def is_crawlable(url: str):
         return False
 
 
-def extract_medias(content, expression: model.Expression):
+def extract_medias(content, expression: model.Expression) -> set:
     """Extract media references from HTML or Markdown content and save to database.
 
     This function identifies and extracts image, video, and audio URLs from content,
@@ -2748,6 +2963,15 @@ def extract_medias(content, expression: model.Expression):
     Args:
         content: Either a BeautifulSoup object or string containing HTML/Markdown.
         expression: The Expression database object to associate media with.
+
+    Returns:
+        set: every media URL referenced by ``content``, resolved and
+        lowercased -- INCLUDING the ones the extension gate refused to
+        create a row for. Callers use it to reconcile: a Media row whose URL
+        is absent from this set is the only one that has really vanished.
+        Lowercase on both sides because the crawl stores resolve_url output
+        (lowercased) while the Mercury path stores urljoin output (case
+        preserved), and `/wp-content/IMG.jpg` must not be recreated forever.
 
     Notes:
         - Supports HTML <img>, <video>, and <audio> tags.
@@ -2759,7 +2983,7 @@ def extract_medias(content, expression: model.Expression):
         - Validates file extensions before creating media records.
         - Prevents duplicate media entries for the same expression and URL.
     """
-    print(f"Extracting media from #{expression.id}") # type: ignore
+    print(f"Extracting media from #{expression.id}")
 
     IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg")
 
@@ -2772,26 +2996,35 @@ def extract_medias(content, expression: model.Expression):
         return any(path_only.endswith(ext) for ext in extensions)
 
     raw_representation = str(content)
-    soup = content if hasattr(content, 'find_all') else BeautifulSoup(raw_representation, 'html.parser')
+    soup = content if hasattr(
+        content, 'find_all') else BeautifulSoup(
+        raw_representation, 'html.parser')
 
     collected_urls = {
-        media.url for media in
+        str(media.url).lower() for media in
         model.Media.select(model.Media.url).where(model.Media.expression == expression)
     }
+    seen: set = set()
 
     def register_media(raw_url: str, media_type: str):
         if not raw_url:
             return
         clean_url = raw_url.strip()
 
+        resolved_url = resolve_url(str(expression.url), clean_url)
+        key = resolved_url.lower()
+        # Recorded BEFORE the extension gate: an existing row for an
+        # extension-less media (…/img.php) is still referenced by the page,
+        # so reconciliation must not treat it as vanished.
+        seen.add(key)
+
         if media_type == 'img' and not has_allowed_extension(clean_url, IMAGE_EXTENSIONS):
             return
 
-        resolved_url = resolve_url(str(expression.url), clean_url)
-        if resolved_url in collected_urls:
+        if key in collected_urls:
             return
 
-        collected_urls.add(resolved_url)
+        collected_urls.add(key)
         if not model.Media.select().where(
             (model.Media.expression == expression) &
             (model.Media.url == resolved_url)
@@ -2801,30 +3034,43 @@ def extract_medias(content, expression: model.Expression):
 
     for tag in ['img', 'video', 'audio']:
         for element in soup.find_all(tag):
+            # BeautifulSoup 4.13 types attribute access as
+            # `str | AttributeValueList | None` (a multi-valued attribute such
+            # as class comes back as a list). str() is the honest narrowing
+            # here: these attributes are single-valued in HTML, and a stray
+            # list would have been stringified by the old code anyway.
             primary_src = element.get('src')
             if primary_src:
-                register_media(primary_src, tag)
+                register_media(str(primary_src), tag)
 
             if tag == 'img':
                 srcset = element.get('srcset')
                 if srcset:
-                    for candidate in srcset.split(','):
+                    for candidate in str(srcset).split(','):
                         candidate_url = candidate.strip().split(' ')[0]
                         register_media(candidate_url, 'img')
             if tag in ('video', 'audio'):
                 for source in element.find_all('source'):
-                    register_media(source.get('src'), tag)
+                    src = source.get('src')
+                    if src:
+                        register_media(str(src), tag)
 
     markdown_text = raw_representation if raw_representation else soup.get_text(separator='\n')
 
-    for match in re.findall(r'!\[[^\]]*\]\(([^)]+)\)', markdown_text):
-        register_media(match, 'img')
+    # One shared reader (A04): balanced parentheses, CommonMark title dropped,
+    # <url> unwrapped. The previous regex truncated `Paris_(1).jpg` and kept
+    # the chevrons of `<...>` destinations.
+    for token in link_context.iter_markdown_image_tokens(markdown_text):
+        register_media(token, 'img')
 
-    for label, url in re.findall(r'\[(IMAGE|VIDEO|AUDIO):\s*([^\]]+)\]', markdown_text, flags=re.IGNORECASE):
+    for label, url in re.findall(r'\[(IMAGE|VIDEO|AUDIO):\s*([^\]]+)\]',
+                                 markdown_text, flags=re.IGNORECASE):
         media_type = label.lower()
         if media_type == 'image':
             media_type = 'img'
         register_media(url, media_type)
+
+    return seen
 
 
 def get_readable(content):
@@ -2931,7 +3177,7 @@ def land_relevance(land: model.Land):
     if row_count > 0:
         print(f"Updating relevances for {row_count} expressions, it may take some time.")
         for expression in select:
-            expression.relevance = expression_relevance(words, expression) # type: ignore
+            expression.relevance = expression_relevance(words, expression)
             expression.save()
 
 
@@ -2942,8 +3188,9 @@ def _resolve_text_lang(expression: model.Expression) -> str:
     belongs to the land's accepted languages, otherwise the land's primary
     language. Always returns a base ISO 639-1 code (e.g. 'en', never 'en-US').
     """
-    land_langs = [l.strip().lower() for l in
-                  str(expression.land.lang or 'fr').split(',') if l.strip()]
+    land_langs = [code.strip().lower() for code in
+                  str(expression.land.lang or 'fr').split(',')
+                  if code.strip()]
     expr_lang = str(expression.lang or '').split('-')[0].strip().lower()
     if expr_lang:
         for land_lang in land_langs:
@@ -2984,7 +3231,7 @@ def expression_relevance(dictionary, expression: model.Expression) -> int:
     punkt_lang = _PUNKT_LANGS.get(text_lang)
 
     def get_relevance(text, weight) -> list:
-        if not isinstance(text, str): # Ensure text is a string
+        if not isinstance(text, str):  # Ensure text is a string
             text = str(text)
         if _NLTK_OK and punkt_lang:
             tokens = word_tokenize(text, language=punkt_lang)
@@ -2992,11 +3239,12 @@ def expression_relevance(dictionary, expression: model.Expression) -> int:
             tokens = _simple_word_tokenize(text)
         stems = [stem_word(w, text_lang) for w in tokens]
         stemmed_text = " ".join(stems)
-        return [sum(weight for _ in re.finditer(r'\b%s\b' % re.escape(lemma), stemmed_text)) for lemma in lemmas]
+        return [sum(weight for _ in re.finditer(r'\b%s\b' % re.escape(lemma), stemmed_text))
+                for lemma in lemmas]
 
     try:
-        title_relevance = get_relevance(expression.title, 10) # type: ignore
-        content_relevance = get_relevance(expression.readable, 1) # type: ignore
+        title_relevance = get_relevance(expression.title, 10)
+        content_relevance = get_relevance(expression.readable, 1)
     except Exception as e:
         print(f"Error computing relevance: {e}")
         pass
@@ -3004,7 +3252,8 @@ def expression_relevance(dictionary, expression: model.Expression) -> int:
 
 
 def export_land(land: model.Land, export_type: str, minimum_relevance: int,
-                fullhtml: bool = False, link_profile: Optional[str] = None):
+                fullhtml: bool = False, link_profile: Optional[str] = None,
+                method: Optional[str] = None):
     """Export land data to a file in the specified format.
 
     This function creates an export file containing land data filtered by
@@ -3016,6 +3265,8 @@ def export_land(land: model.Land, export_type: str, minimum_relevance: int,
         minimum_relevance: Minimum relevance score filter for expressions.
         fullhtml: When True and export_type == 'nodelinkcsv', also emit the
             raw-HTML link network files (*fullhtml.csv). Ignored otherwise.
+        method: For pseudolinks, restrict the export to one similarity method
+            ('cosine', 'verbatim', 'nli', 'cosine_lsh'). None exports all.
 
     Notes:
         - Output filename includes land name, export type, and timestamp.
@@ -3029,9 +3280,10 @@ def export_land(land: model.Land, export_type: str, minimum_relevance: int,
     """
     date_tag = model.datetime.datetime.now().strftime("%Y%m%d%H%M%S")
     filename = path.join(settings.data_location, 'export_land_%s_%s_%s') \
-               % (land.name, export_type, date_tag)
+        % (land.name, export_type, date_tag)
     export = Export(export_type, land, minimum_relevance, fullhtml=fullhtml,
-                    link_profile=link_profile or DEFAULT_LINK_PROFILE)
+                    link_profile=link_profile or DEFAULT_LINK_PROFILE,
+                    method=method)
     count = export.write(export_type, filename)
     if count > 0:
         print("Successfully exported %s records to %s" % (count, filename))
@@ -3059,7 +3311,7 @@ def export_tags(land: model.Land, export_type: str, minimum_relevance: int):
     """
     date_tag = model.datetime.datetime.now().strftime("%Y%m%d%H%M%S")
     filename = path.join(settings.data_location, 'export_tags_%s_%s_%s.csv') \
-               % (land.name, export_type, date_tag)
+        % (land.name, export_type, date_tag)
     export = Export(export_type, land, minimum_relevance)
     res = export.export_tags(filename)
     if res == 1:
@@ -3299,6 +3551,7 @@ def delete_media(land: model.Land, max_width: int = 0, max_height: int = 0, max_
     expressions = model.Expression.select().where(model.Land == land)
     model.Media.delete().where(model.Media.expression << expressions)
 
+
 async def medianalyse_land(land: model.Land,
                            depth: Optional[int] = None,
                            minrel: Optional[int] = None) -> dict:
@@ -3320,15 +3573,16 @@ async def medianalyse_land(land: model.Land,
     Notes:
         - Processes media from all expressions in the land asynchronously.
         - Uses MediaAnalyzer for comprehensive media analysis.
-        - Extracts dimensions, colors, format, EXIF data, perceptual hashes.
+        - Extracts dimensions, colors, format, EXIF data, and both
+          fingerprints (image_hash SHA-256, perceptual_hash dHash).
         - Updates Media database records with analysis results.
         - Respects media filtering settings (min dimensions, max file size).
         - Returns statistics about the analysis process.
     """
     from .media_analyzer import MediaAnalyzer
-    
+
     processed_count = 0
-    
+
     async with aiohttp.ClientSession() as session:
         analyzer = MediaAnalyzer(session, {
             'user_agent': settings.user_agent,
@@ -3342,7 +3596,7 @@ async def medianalyse_land(land: model.Land,
             'extract_exif': settings.media_extract_exif,
             'n_dominant_colors': settings.media_n_dominant_colors
         })
-        
+
         medias = model.Media.select().join(model.Expression).where(model.Expression.land == land)
         if depth is not None:
             medias = medias.where(model.Expression.depth <= depth)
@@ -3352,11 +3606,11 @@ async def medianalyse_land(land: model.Land,
         for media in medias:
             print(f'Analyse de {media.url}')
             result = await analyzer.analyze_image(media.url)
-            
+
             for field, value in result.items():
                 if hasattr(media, field):
                     setattr(media, field, value)
-            
+
             media.analyzed_at = model.datetime.datetime.now()
             media.save()
             processed_count += 1

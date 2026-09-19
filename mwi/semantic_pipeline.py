@@ -15,9 +15,18 @@ from typing import List, Tuple, Dict, Optional, Callable, Set
 
 import settings
 from . import model
+from .embedding_pipeline import METHOD_VERBATIM
+
+# Cached PRAGMA result for paragraph_similarity.score_raw, declared at
+# module level instead of being created on first use inside the
+# function: a `global` that only ever exists after a try/NameError is
+# invisible to every reader and to the type checker alike.
+_PS_HAS_SCORE_RAW: Optional[bool] = None
+_WARNED_NO_SCORE_RAW: bool = False
 
 
-def _load_vectors_for_land(land: model.Land, minrel: Optional[int] = None) -> List[Tuple[int, int, List[float], str]]:
+def _load_vectors_for_land(
+        land: model.Land, minrel: Optional[int] = None) -> List[Tuple[int, int, List[float], str]]:
     """Load paragraph embeddings and metadata for a land.
 
     Args:
@@ -39,7 +48,9 @@ def _load_vectors_for_land(land: model.Land, minrel: Optional[int] = None) -> Li
             )
             .join(model.Expression)
             .switch(model.Paragraph)
-            .join(model.ParagraphEmbedding, on=(model.ParagraphEmbedding.paragraph == model.Paragraph.id))
+            .join(model.ParagraphEmbedding,
+                  on=(model.ParagraphEmbedding.paragraph
+                      == model.Paragraph.id))
             .where(model.Expression.land == land)
             )
     if isinstance(minrel, int) and minrel > 0:
@@ -48,13 +59,13 @@ def _load_vectors_for_land(land: model.Land, minrel: Optional[int] = None) -> Li
     data: List[Tuple[int, int, List[float], str]] = []
     for r in rows.iterator():
         try:
-            vec = json.loads(r.paragraphembedding.embedding)  # type: ignore[attr-defined]
+            vec = json.loads(r.paragraphembedding.embedding)
             # normalize to unit length for cosine/IP indexing
             n = math.sqrt(sum(x * x for x in vec)) or 1.0
             vec = [x / n for x in vec]
         except Exception:
             continue
-        data.append((r.id, r.expression.id, vec, r.text))  # type: ignore[attr-defined]
+        data.append((r.id, r.expression.id, vec, r.text))
     return data
 
 
@@ -187,7 +198,7 @@ def _try_faiss(dim: int, vectors: List[List[float]]) -> Optional[SimilarityIndex
         cosine similarity. Requires the faiss library to be installed.
     """
     try:
-        import faiss  # type: ignore
+        import faiss
     except Exception:
         return None
     # Use IP on normalized vectors = cosine
@@ -229,9 +240,12 @@ def _try_faiss(dim: int, vectors: List[List[float]]) -> Optional[SimilarityIndex
                 Tuple of (indices, scores) where indices are the positions of
                 the k nearest neighbors and scores are their similarity scores.
             """
-            D, I = self.index.search(np.array([vector], dtype='float32'), top_k)
-            ids = I[0].tolist()
-            scores = D[0].tolist()
+            # dists / idx, not D / I: `I` is unreadable next to `l` and
+            # `1`, and the names now say what FAISS returns.
+            dists, idx = self.index.search(
+                np.array([vector], dtype='float32'), top_k)
+            ids = idx[0].tolist()
+            scores = dists[0].tolist()
             return ids, scores
 
     return _FaissIndex()
@@ -281,8 +295,10 @@ def _get_nli_predictor() -> Callable[[List[Tuple[str, str]]], List[Tuple[int, fl
     # Try sentence-transformers CrossEncoder first, unless preference skips it
     if backend_pref in ('auto', 'st', 'crossencoder'):
         try:
-            from sentence_transformers import CrossEncoder  # type: ignore
-            print(f"Loading NLI CrossEncoder model: {name} (first run may download weights)…", flush=True)
+            from sentence_transformers import CrossEncoder
+            print(
+                f"Loading NLI CrossEncoder model: {name} (first run may download weights)…",
+                flush=True)
             ce = CrossEncoder(name, num_labels=3)
 
             def _predict_ce(pairs: List[Tuple[str, str]]) -> List[Tuple[int, float]]:
@@ -297,8 +313,9 @@ def _get_nli_predictor() -> Callable[[List[Tuple[str, str]]], List[Tuple[int, fl
                 """
                 probs = ce.predict(pairs, apply_softmax=True)  # shape [N,3]
                 out: List[Tuple[int, float]] = []
-                if hasattr(ce, 'model') and hasattr(ce.model, 'config') and hasattr(ce.model.config, 'id2label'):
-                    id2label = ce.model.config.id2label  # type: ignore[attr-defined]
+                if hasattr(ce, 'model') and hasattr(
+                        ce.model, 'config') and hasattr(ce.model.config, 'id2label'):
+                    id2label = ce.model.config.id2label
                 else:
                     id2label = {0: 'entailment', 1: 'contradiction', 2: 'neutral'}
                 import numpy as np
@@ -323,8 +340,8 @@ def _get_nli_predictor() -> Callable[[List[Tuple[str, str]]], List[Tuple[int, fl
 
     # Try transformers AutoModel
     try:
-        from transformers import AutoTokenizer, AutoModelForSequenceClassification  # type: ignore
-        from transformers.utils import logging as hf_logging  # type: ignore
+        from transformers import AutoTokenizer, AutoModelForSequenceClassification
+        from transformers.utils import logging as hf_logging
         import torch  # type: ignore
         # Environment safety knobs for macOS / BLAS / tokenizers
         try:
@@ -339,11 +356,17 @@ def _get_nli_predictor() -> Callable[[List[Tuple[str, str]]], List[Tuple[int, fl
             try:
                 import sentencepiece  # type: ignore  # noqa: F401
             except Exception:
-                fallback = getattr(settings, 'nli_fallback_model_name', 'typeform/distilbert-base-uncased-mnli')
-                print(f"SentencePiece manquant pour le modèle '{name}'. Bascule automatique vers '{fallback}'.", flush=True)
+                fallback = getattr(settings, 'nli_fallback_model_name',
+                                   'typeform/distilbert-base-uncased-mnli')
+                print(
+                    f"SentencePiece manquant pour le modèle '{name}'. Bascule automatique vers "
+                    f"'{fallback}'.",
+                    flush=True)
                 name = fallback
 
-        print(f"Loading NLI transformers model: {name} (first run may download weights)…", flush=True)
+        print(
+            f"Loading NLI transformers model: {name} (first run may download weights)…",
+            flush=True)
         # Force slow tokenizer to avoid Rust tokenizers segfaults on some macOS setups
         tok = AutoTokenizer.from_pretrained(name, use_fast=False)
         mdl = AutoModelForSequenceClassification.from_pretrained(name)
@@ -475,56 +498,78 @@ def run_semantic_similarity(
     if not data:
         return 0
     pid_list = [pid for pid, _, _, _ in data]
-    expr_list = [eid for _, eid, _, _ in data]
-    text_list = [txt for _, _, _, txt in data]
     vec_list = [vec for _, _, vec, _ in data]
     dim = len(vec_list[0])
     top_k = int(top_k or settings.similarity_top_k)
     chosen_backend = (backend or settings.similarity_backend)
     print(
-        f"\n🚀 Starting NLI semantic similarity: land={land.name}, paragraphs={len(pid_list)}, top_k={top_k}, minrel={minrel or 0}, backend={chosen_backend}",
+        f"\n🚀 Starting NLI semantic similarity: land={land.name}, "
+        f"paragraphs={len(pid_list)}, top_k={top_k}, "
+        f"minrel={minrel or 0}, backend={chosen_backend}",
         flush=True,
     )
     idx = _get_index(chosen_backend, dim, vec_list)
     print("🔎 ANN index ready.", flush=True)
 
-    # Remove existing 'nli' similarities for these paragraphs to avoid duplicates
+    # Remove existing 'nli' similarities for these paragraphs to avoid
+    # duplicates. The verbatim rows produced by this same run go with them.
     if pid_list:
         (model.ParagraphSimilarity
          .delete()
          .where((model.ParagraphSimilarity.source_paragraph.in_(pid_list)) &
-                (model.ParagraphSimilarity.method == 'nli'))
+                (model.ParagraphSimilarity.method.in_(['nli',
+                                                       METHOD_VERBATIM])))
          ).execute()
 
     # Build candidate pairs (i<j to avoid duplicates)
     pairs_idx: List[Tuple[int, int]] = []
+    verbatim_rows: List[Dict] = []
     seen: Set[Tuple[int, int]] = set()
-    for i, (pid_i, expr_i, vec_i, _) in enumerate(data):
+    for i, (pid_i, expr_i, vec_i, text_i) in enumerate(data):
         neighbor_ids, _ = idx.query(vec_i, top_k + 1)  # includes self at rank 0
         added = 0
         for nbr in neighbor_ids:
             if nbr == i:
                 continue
-            pid_j, expr_j, _, _ = data[nbr]
+            pid_j, expr_j, _, text_j = data[nbr]
             if expr_i == expr_j:
                 continue
             a, b = (pid_i, pid_j) if pid_i < pid_j else (pid_j, pid_i)
             if a == b:
                 continue
             if (a, b) not in seen:
-                pairs_idx.append((a, b))
                 seen.add((a, b))
+                if text_i == text_j:
+                    # D-2: rigorously identical text. Feeding it to the
+                    # Cross-Encoder buys a trivial entailment at full price,
+                    # and folding it into 'nli' would hide what it really is.
+                    verbatim_rows.append({
+                        'source_paragraph': a,
+                        'target_paragraph': b,
+                        'score': 1.0,
+                        'score_raw': 1.0,
+                        'method': METHOD_VERBATIM,
+                    })
+                    continue
+                pairs_idx.append((a, b))
                 added += 1
                 if added >= top_k:
                     break
         if (i + 1) % 500 == 0:
-            print(f"  • Recall progress: {i + 1}/{len(data)} paragraphs, candidate pairs={len(pairs_idx)}", flush=True)
+            print(
+                f"  • Recall progress: {i + 1}/{len(data)} paragraphs, candidate "
+                f"pairs={len(pairs_idx)}",
+                flush=True)
         if max_pairs and len(pairs_idx) >= max_pairs:
             break
 
+    if verbatim_rows:
+        _flush_similarities(verbatim_rows)
+        print(f"📎 Verbatim pairs (identical text, not scored): "
+              f"{len(verbatim_rows)}", flush=True)
     print(f"📌 Candidate pairs ready: {len(pairs_idx)}", flush=True)
     if not pairs_idx:
-        return 0
+        return len(verbatim_rows)
 
     # Prepare texts for NLI
     text_by_pid: Dict[int, str] = {pid: text for pid, _, _, text in data}
@@ -564,7 +609,10 @@ def run_semantic_similarity(
                 remain = max(0, total_pairs - processed)
                 eta = remain / pps if pps > 0 else float('inf')
                 pct = 100.0 * processed / max(1, total_pairs)
-                print(f"  • NLI progress: {processed}/{total_pairs} ({pct:.1f}%), {pps:.1f} pairs/s, ETA {eta:.0f}s", flush=True)
+                print(
+                    f"  • NLI progress: {processed}/{total_pairs} "
+                    f"({pct:.1f}%), {pps:.1f} pairs/s, ETA {eta:.0f}s",
+                    flush=True)
             else:
                 print(f"  • NLI progress: {processed}/{total_pairs}", flush=True)
             last_report = processed
@@ -575,8 +623,10 @@ def run_semantic_similarity(
     # Final summary
     dt = time.time() - t0
     if total > 0 and dt > 0:
-        print(f"✅ NLI scoring complete: {total} pairs, {dt:.1f}s, {total/dt:.1f} pairs/s", flush=True)
-    return total
+        print(
+            f"✅ NLI scoring complete: {total} pairs, {dt:.1f}s, {total/dt:.1f} pairs/s",
+            flush=True)
+    return total + len(verbatim_rows)
 
 
 def _flush_similarities(rows: List[Dict]):
@@ -601,16 +651,12 @@ def _flush_similarities(rows: List[Dict]):
     # Backward-compat: older DBs may miss 'score_raw'. If so, drop it on insert.
     # Cache the check to avoid repeated PRAGMA calls.
     global _PS_HAS_SCORE_RAW, _WARNED_NO_SCORE_RAW
-    try:
-        _PS_HAS_SCORE_RAW
-    except NameError:
-        _PS_HAS_SCORE_RAW = None  # type: ignore
-        _WARNED_NO_SCORE_RAW = False  # type: ignore
 
     if _PS_HAS_SCORE_RAW is None:
         try:
-            cols = [row[1] for row in model.DB.execute_sql('PRAGMA table_info(paragraph_similarity)').fetchall()]
-            _PS_HAS_SCORE_RAW = ('score_raw' in cols)  # type: ignore
+            cols = [row[1] for row in model.DB.execute_sql(
+                'PRAGMA table_info(paragraph_similarity)').fetchall()]
+            _PS_HAS_SCORE_RAW = ('score_raw' in cols)
         except Exception:
             _PS_HAS_SCORE_RAW = True  # safe default: assume present
 
@@ -619,8 +665,11 @@ def _flush_similarities(rows: List[Dict]):
         # Drop the unsupported key
         ins_rows = [{k: v for k, v in r.items() if k != 'score_raw'} for r in rows]
         if not _WARNED_NO_SCORE_RAW:
-            print("[warning] paragraph_similarity.score_raw missing; run 'python mywi.py db migrate' to add it. Inserting without confidence.", flush=True)
-            _WARNED_NO_SCORE_RAW = True  # type: ignore
+            print(
+                "[warning] paragraph_similarity.score_raw missing; run 'python mywi.py db migrate' "
+                "to add it. Inserting without confidence.",
+                flush=True)
+            _WARNED_NO_SCORE_RAW = True
 
     with model.DB.atomic():
         try:

@@ -34,6 +34,11 @@ class MigrationManager:
     def apply_migration(self, version):
         module_path = os.path.join(self.migrations_dir, f'{version}.py')
         spec = importlib.util.spec_from_file_location(version, module_path)
+        # A malformed migration file yields spec=None (or a spec with no
+        # loader). Assert it out loud instead of failing later with an opaque
+        # AttributeError in the middle of a schema change.
+        assert spec is not None and spec.loader is not None, (
+            "cannot load migration %s" % module_path)
         migration_module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(migration_module)
         
