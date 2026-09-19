@@ -390,7 +390,9 @@ def build_pcit_prompt(ev: dict, project_meta: dict) -> str:
 class _Budget:
     """Compteur d'appels + plafond (0 = pas de limite, convention MWI).
 
-    Thread-safe : les 8 appels d'une arête tournent en parallèle (code_one_edge).
+    Thread-safe : ``code_links`` code jusqu'à ``max_workers`` arêtes en
+    parallèle ; les juges d'une même arête, eux, sont séquentiels
+    (``code_one_edge``).
     """
     def __init__(self, max_calls: int = 0):
         self.calls = 0
@@ -613,7 +615,7 @@ def _indet_aggregate(n_judges: int) -> dict:
 def code_one_edge(ev: dict, judges: List[str], project_meta: dict,
                   budget: Optional[_Budget] = None, retries: int = 3
                   ) -> Tuple[List[Optional[dict]], List[Optional[dict]], dict]:
-    """Code UNE arête : chemin INDET (aucun appel API) sinon 4 juges × 2 prompts,
+    """Code UNE arête : chemin INDET (aucun appel API) sinon N_JUDGES juges × 2 prompts,
     en **séquentiel** (la concurrence vit au niveau arête dans ``code_links``, pour
     ne pas imbriquer les pools). Retourne ``(loc_verdicts, cit_verdicts, agg)``."""
     n = len(judges)
@@ -853,7 +855,12 @@ def code_links(csv_path: str, out_path: str, *, judges: List[str], project_meta:
       partiel valide.
     - ``resume=True`` : reprend un CSV partiel existant (skip des (Source,Target)
       déjà codés, append sans ré-écrire l'en-tête) — le run complet dure ~heures.
-    - Les 8 appels d'une arête tournent en parallèle (``max_workers``, défaut 2·juges).
+    - Les ARÊTES sont codées en parallèle (``max_workers``, défaut 16) ; à
+      l'intérieur d'une arête les 2·N_JUDGES appels (6 pour le panel de
+      record) sont SÉQUENTIELS. Le profil de charge vu par OpenRouter est
+      donc de ``max_workers`` appels en vol — pas 6, pas 8 : les deux
+      anciennes formulations sous-estimaient la charge d'un facteur 2,7 et
+      se contredisaient l'une l'autre.
 
     Écrit : ``out_path`` (CSV §6), ``out_path``+``.manifest.json``,
     ``out_path``+``.stats.txt``. Retourne le nombre total d'arêtes dans le CSV.
@@ -907,11 +914,23 @@ def code_links(csv_path: str, out_path: str, *, judges: List[str], project_meta:
     # --- Phase B : codage LLM CONCURRENT (W arêtes en vol) + écriture au fil de l'eau.
     workers = max_workers or 16
     total = len(to_code)                                 # INDET non écrites (cf. infra)
-    append = bool(existing)
+    # On n'ajoute à la suite QUE si l'en-tête du fichier est déjà celui qu'on
+    # s'apprête à écrire. Une reprise sur un CSV v1 (49 colonnes) ajoutait des
+    # lignes ordonnées v2 sous l'en-tête v1 : interrompu avant la réécriture
+    # finale, le fichier mélangeait les deux, et le `--resume` suivant relisait
+    # `count_in_body` comme `Weight`. Sinon on réécrit : `existing` est déjà
+    # passé par `to_v2`, donc les lignes v1 relues ressortent en v2.
+    first: List[str] = []
+    if os.path.exists(out_path):
+        with open(out_path, newline="", encoding="utf-8") as hf:
+            first = next(csv.reader(hf), [])
+    append = bool(existing) and first == header
     f = open(out_path, "a" if append else "w", newline="", encoding="utf-8")
-    writer = csv.DictWriter(f, fieldnames=header, quoting=csv.QUOTE_MINIMAL)
+    writer = csv.DictWriter(f, fieldnames=header, quoting=csv.QUOTE_MINIMAL,
+                            extrasaction="ignore")
     if not append:
         writer.writeheader()
+        writer.writerows(existing)
         f.flush()
     written = 0
 
