@@ -2025,7 +2025,7 @@ class EmbeddingController:
             key = getattr(settings, 'embed_openai_api_key', '')
             print(
                 f"OpenAI key: {'set' if key else 'MISSING'}; "
-                f"base={getattr(settings,'embed_openai_base_url','')}")
+                f"base={getattr(settings, 'embed_openai_base_url', '')}")
             if not key:
                 ok = False
                 suggestions.append(
@@ -2034,7 +2034,7 @@ class EmbeddingController:
             key = getattr(settings, 'embed_mistral_api_key', '')
             print(
                 f"Mistral key: {'set' if key else 'MISSING'}; "
-                f"base={getattr(settings,'embed_mistral_base_url','')}")
+                f"base={getattr(settings, 'embed_mistral_base_url', '')}")
             if not key:
                 ok = False
                 suggestions.append("Set settings.embed_mistral_api_key or switch provider.")
@@ -2042,7 +2042,7 @@ class EmbeddingController:
             key = getattr(settings, 'embed_gemini_api_key', '')
             print(
                 f"Gemini key: {'set' if key else 'MISSING'}; "
-                f"base={getattr(settings,'embed_gemini_base_url','')}")
+                f"base={getattr(settings, 'embed_gemini_base_url', '')}")
             if not key:
                 ok = False
                 suggestions.append("Set settings.embed_gemini_api_key or switch provider.")
@@ -2050,14 +2050,14 @@ class EmbeddingController:
             key = getattr(settings, 'embed_hf_api_key', '')
             print(
                 f"HF key: {'set' if key else 'MISSING'}; "
-                f"base={getattr(settings,'embed_hf_base_url','')}")
+                f"base={getattr(settings, 'embed_hf_base_url', '')}")
             if not key:
                 ok = False
                 suggestions.append(
                     "Set settings.embed_hf_api_key (create a token at "
                     "huggingface.co/settings/tokens).")
         elif prov == 'ollama':
-            print(f"Ollama base: {getattr(settings,'embed_ollama_base_url','')}")
+            print(f"Ollama base: {getattr(settings, 'embed_ollama_base_url', '')}")
             suggestions.append(
                 "Ensure Ollama is running locally and the embedding model is pulled (e.g., 'ollama "
                 "pull nomic-embed-text').")
