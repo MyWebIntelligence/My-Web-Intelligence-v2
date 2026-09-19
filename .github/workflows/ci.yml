@@ -43,9 +43,14 @@ env:
   UV_LOCKED: "1"
 
 jobs:
-  # --- Lint et types : indépendants de la version de Python -----------------
-  quality:
-    name: Lint & types
+  # --- Lint : sur la version la PLUS RÉCENTE supportée ----------------------
+  # flake8 ne rend pas le même verdict selon l'interpréteur qui l'exécute :
+  # depuis Python 3.12 (PEP 701) le tokeniseur émet des jetons à l'intérieur des
+  # champs `{…}` d'une f-string, que pycodestyle inspecte enfin. Mesuré le
+  # 2026-09-19 : `flake8 mwi/` rendait 0 sur un venv 3.11 et 10 sur un 3.12, sur
+  # le même code. On lint donc sur la plus récente, qui voit le plus.
+  lint:
+    name: Lint (flake8)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout du code
@@ -70,19 +75,47 @@ jobs:
 
       # BLOQUANT. Ce job tourne sous 3.12 : une syntaxe 3.10+ n'y est donc pas
       # vue comme une erreur E9. C'est le job `tests` en 3.10 qui la rattrape.
-      - name: Lint (classe bugs) — bloquant
+      - name: Lint (classe bugs)
         run: make lint
 
-      # BLOQUANTS depuis le 2026-09-19. Les deux comptes sont passés à zéro le
-      # 2026-09-18 (390 -> 0 pour flake8, lot L16 ; 215 -> 0 pour mypy, décision
-      # D-16), et le premier run vert (run 35409588128, PR #4) a confirmé qu'ils
-      # rendent le même verdict sur un runner Linux que sur le poste de dev.
-      # Un acquis qu'on ne verrouille pas se reperd : laissés informatifs, ils
-      # seraient revenus à plusieurs centaines sans que personne le voie.
-      - name: Lint complet — bloquant
+      # BLOQUANT depuis le 2026-09-19 (390 -> 0 le 2026-09-18, lot L16).
+      # Un acquis qu'on ne verrouille pas se reperd.
+      - name: Lint complet
         run: make lint-all
 
-      - name: Typage (mypy) — bloquant
+  # --- Types : sur le PLANCHER, la version que mypy prétend vérifier --------
+  # Exigence exactement inverse de celle du lint, d'où deux jobs. `[tool.mypy]
+  # python_version = "3.10"` demande à mypy de raisonner comme en 3.10 ; dans un
+  # venv 3.12 les stubs numpy INSTALLÉS emploient la syntaxe PEP 695
+  # (`type X = ...`) et mypy refuse alors de les lire — « Type statement is only
+  # supported in Python 3.12 and greater », erreur venue d'une dépendance, pas
+  # de notre code. Vérifier contre le plancher exige de tourner SUR le plancher.
+  types:
+    name: Types (mypy)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout du code
+        uses: actions/checkout@v4
+
+      - name: Installer uv (+ cache)
+        # Version EXACTE, pas un tag majeur flottant : astral-sh/setup-uv
+        # n'en publie plus depuis v7 (les releases v8, v9 et v10 n'existent
+        # qu'en semver complet). `@v8` n'a donc jamais pu se résoudre — la
+        # toute première exécution de cette CI l'a montré, aucun job ne
+        # démarrant. Épingler une version exacte est de toute façon plus
+        # cohérent avec `version: "0.11.23"` juste en dessous.
+        uses: astral-sh/setup-uv@v10.1.0
+        with:
+          enable-cache: true
+          # Épinglé sur la version du Dockerfile et du poste de développement.
+          version: "0.11.23"
+          python-version: "3.10"
+
+      - name: Synchroniser l'environnement (base + dev, gelé sur uv.lock)
+        run: uv sync --locked
+
+      # BLOQUANT depuis le 2026-09-19 (215 -> 0 le 2026-09-18, décision D-16).
+      - name: Typage (mypy)
         run: make typecheck
 
   # --- Tests : matrice sur les versions de Python supportées (>=3.10) --------
@@ -146,13 +179,15 @@ jobs:
   ci-ok:
     name: CI passed
     if: always()
-    needs: [quality, tests]
+    needs: [lint, types, tests]
     runs-on: ubuntu-latest
     steps:
       - name: Vérifier que les jobs requis sont verts
         run: |
-          if [ "${{ needs.quality.result }}" != "success" ] || [ "${{ needs.tests.result }}" != "success" ]; then
-            echo "Un job requis a échoué (quality=${{ needs.quality.result }}, tests=${{ needs.tests.result }})."
+          if [ "${{ needs.lint.result }}" != "success" ] \
+             || [ "${{ needs.types.result }}" != "success" ] \
+             || [ "${{ needs.tests.result }}" != "success" ]; then
+            echo "Un job requis a échoué (lint=${{ needs.lint.result }}, types=${{ needs.types.result }}, tests=${{ needs.tests.result }})."
             exit 1
           fi
           echo "Tous les jobs requis sont verts."

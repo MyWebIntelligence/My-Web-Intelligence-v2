@@ -41,7 +41,13 @@ lint-all: ## BLOCKING in CI: the full flake8 report
 	@echo "Full flake8 report..."
 	uv run --locked flake8 mwi/ --count --statistics
 
-typecheck: ## BLOCKING in CI: mypy on the mwi package
+# mypy must run ON the floor it is configured to CHECK. `[tool.mypy]
+# python_version = "3.10"` asks it to reason as 3.10; in a 3.12 venv the INSTALLED
+# numpy stubs use PEP 695 (`type X = ...`) and mypy then refuses to read them --
+# "Type statement is only supported in Python 3.12 and greater", an error coming
+# from a dependency, not from our code. The CI `types` job pins 3.10 for exactly
+# this reason. Locally the default .venv (3.11) also passes; 3.12 does not.
+typecheck: ## BLOCKING in CI: mypy on the mwi package (CI pins Python 3.10)
 	@echo "Type checking..."
 	uv run --locked mypy mwi
 
