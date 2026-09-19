@@ -60,3 +60,6 @@ docs/Art1_Methods_v1.0.docx
 # Banc body-links : corpus extrait et sorties (regenerables, jamais versionnes)
 benchmarks/body_links/cache/
 benchmarks/body_links/out/
+
+# Artefact de `pytest --cov-report=xml` (la CI le produit a chaque run).
+coverage.xml

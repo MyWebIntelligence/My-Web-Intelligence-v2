@@ -13,8 +13,10 @@
 #   - la suite de tests ;
 #   - `flake8 --select=E9,F63,F7,F82` : syntaxe invalide, nom non défini,
 #     comparaison impossible. Vert aujourd'hui, donc exigible tout de suite.
-# Ce qui reste informatif : `flake8` complet (dette de style mesurée à 383 le
-# 2026-09-18) et `mypy` (213 messages). Les rendre bloquants une fois verts.
+# Restent informatifs pour l'instant : `flake8` complet et `mypy`. Les deux
+# sont à ZÉRO depuis le 2026-09-18 (lot L16) ; les rendre bloquants est un
+# changement d'une ligne par étape, à faire une fois qu'un premier run vert a
+# confirmé qu'ils se comportent pareil sur un runner Linux.
 #
 # Ruff a été écarté du projet le 2026-06-24 au profit de flake8 ; l'ancienne
 # version de ce fichier l'appelait encore alors qu'il n'est pas dans uv.lock.
@@ -50,7 +52,13 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Installer uv (+ cache)
-        uses: astral-sh/setup-uv@v8
+        # Version EXACTE, pas un tag majeur flottant : astral-sh/setup-uv
+        # n'en publie plus depuis v7 (les releases v8, v9 et v10 n'existent
+        # qu'en semver complet). `@v8` n'a donc jamais pu se résoudre — la
+        # toute première exécution de cette CI l'a montré, aucun job ne
+        # démarrant. Épingler une version exacte est de toute façon plus
+        # cohérent avec `version: "0.11.23"` juste en dessous.
+        uses: astral-sh/setup-uv@v10.1.0
         with:
           enable-cache: true
           # Épinglé sur la version du Dockerfile et du poste de développement.
@@ -66,15 +74,15 @@ jobs:
         run: make lint
 
       - name: Lint complet — informatif
-        # Dette de style : 383 le 2026-09-18. Retirer continue-on-error quand
-        # le compte atteint 0 (lot L16 du sprint-upgrade).
+        # 390 -> 0 le 2026-09-18 (lot L16). Retirer continue-on-error pour
+        # verrouiller l'acquis, après un premier run vert.
         continue-on-error: true
         run: make lint-all
 
       - name: Typage (mypy) — informatif
-        # 213 messages dans 22 fichiers le 2026-09-18, dont ~140 marqueurs
-        # d'exception devenus inutiles. Objectif zéro (décision D-16) ; rendre
-        # bloquant à ce moment-là.
+        # 215 -> 0 le 2026-09-18 (décision D-16), dont ~140 marqueurs
+        # d'exception devenus inutiles. Rendre bloquant après un premier run
+        # vert, même raison que ci-dessus.
         continue-on-error: true
         run: make typecheck
 
@@ -91,7 +99,13 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Installer uv (+ cache)
-        uses: astral-sh/setup-uv@v8
+        # Version EXACTE, pas un tag majeur flottant : astral-sh/setup-uv
+        # n'en publie plus depuis v7 (les releases v8, v9 et v10 n'existent
+        # qu'en semver complet). `@v8` n'a donc jamais pu se résoudre — la
+        # toute première exécution de cette CI l'a montré, aucun job ne
+        # démarrant. Épingler une version exacte est de toute façon plus
+        # cohérent avec `version: "0.11.23"` juste en dessous.
+        uses: astral-sh/setup-uv@v10.1.0
         with:
           enable-cache: true
           version: "0.11.23"
