@@ -20,6 +20,7 @@ regex, même ordre de règles : premier match gagne). ``build_f`` assemble le di
 (``dom``/``dom_html``/``context`` + urls + domaines), qu'ils viennent de
 ``ExpressionLink`` (arêtes body) ou d'une ré-extraction DOM (arêtes raw-only).
 """
+import html as _html
 import re
 from urllib.parse import urlparse, unquote
 
@@ -129,25 +130,60 @@ def parse_block(dom_html):
     return tag, (cm.group(1).lower() if cm else "")
 
 
+def _unresolved_anchor(n):
+    """Aucune ancre du bloc n'appartient sûrement à cette arête."""
+    return {"text": "", "rel": "", "cls": "", "aria": "", "href": "",
+            "n": n, "resolved": False}
+
+
+def _anchor_href(attrs):
+    """href canonique d'une ancre, comparable à une cible stockée en base."""
+    m = HREF_RE.search(attrs)
+    return norm_url(unquote(_html.unescape(m.group(1)))) if m else ""
+
+
 def parse_anchor(dom_html, target_url):
     anchors = A_RE.findall(dom_html or "")
     if not anchors:
-        return {"text": "", "rel": "", "cls": "", "aria": "", "href": "", "n": 0}
-    tgt = norm_url(target_url)
+        return _unresolved_anchor(0)
+    # Les deux côtés de la comparaison sont traités pareil. `unquote` n'était
+    # appliqué qu'au href candidat, jamais à la cible : une URL à échappements
+    # %XX ne pouvait donc matcher ni exactement ni par inclusion. `unescape`
+    # pour la même raison : `dom_html` vient de `str(block)`, où BeautifulSoup
+    # réécrit `&` en `&amp;`, alors que `target_url` porte un vrai `&` — toute
+    # cible à deux paramètres échouait.
+    tgt = norm_url(unquote(_html.unescape(target_url or "")))
     best = None
     for attrs, inner in anchors:
-        m = HREF_RE.search(attrs)
-        if m and norm_url(unquote(m.group(1))) == tgt and tgt:
+        if tgt and _anchor_href(attrs) == tgt:
             best = (attrs, inner)
             break
     if best is None:
+        # Le href le PLUS LONG qui contient la cible ou qu'elle contient, et
+        # non le premier rencontré. Un href court — commutateur de langue
+        # `/en-us`, racine de rubrique `/actualites`, fil d'Ariane — est un
+        # sous-texte de presque toute URL profonde du même site, et gagnait
+        # donc sur l'ancre éditoriale placée plus loin dans le même bloc.
+        # `max` est stable : à longueur égale l'ordre du document départage,
+        # le résultat reste déterministe.
+        cands = []
         for attrs, inner in anchors:
-            m = HREF_RE.search(attrs)
-            hh = norm_url(unquote(m.group(1))) if m else ""
+            hh = _anchor_href(attrs)
             if tgt and hh and (tgt in hh or hh in tgt):
-                best = (attrs, inner)
-                break
+                cands.append((len(hh), attrs, inner))
+        if cands:
+            best = max(cands, key=lambda c: c[0])[1:]
     if best is None:
+        # On n'emprunte plus l'ancre d'un voisin. Attribuer son texte, sa
+        # classe et son href à cette arête ne donnait pas un défaut neutre
+        # mais un code FAUX et CONFIANT : un `/team/jane/` emprunté sortait
+        # META_BYLINE, règle « 3 byline/profile », confiance « high », pour un
+        # lien qui n'est pas une signature. Cas atteint en routine — le
+        # `dom_html` est tronqué à `link_dom_html_max_chars`, donc l'ancre
+        # d'un lien tardif n'y est tout simplement pas. Un bloc à une seule
+        # ancre, lui, reste sans ambiguïté.
+        if len(anchors) != 1:
+            return _unresolved_anchor(len(anchors))
         best = anchors[0]
     attrs, inner = best
     text = re.sub(r"\s+", " ", TAG_RE.sub(" ", inner)).replace("&amp;", "&").strip()
@@ -158,7 +194,8 @@ def parse_anchor(dom_html, target_url):
     return {"text": text, "rel": ad.get("rel", "").lower(),
             "cls": ad.get("class", "").lower(),
             "aria": ad.get("aria-label", "").lower(),
-            "href": href_m.group(1) if href_m else "", "n": len(anchors)}
+            "href": href_m.group(1) if href_m else "", "n": len(anchors),
+            "resolved": True}
 
 
 # ---------- context predicates — VERBATIM 02_precode.py ----------
@@ -461,9 +498,14 @@ def build_f(dom, dom_html, context, source_url, target_url,
     anchor = parse_anchor(dom_html, target_url)
     src = src_domain or host(source_url)
     tgt = tgt_domain or host(target_url)
-    malformed = bool((anchor["href"] and ("](" in anchor["href"] or
-                     anchor["href"].count("(") != anchor["href"].count(")"))) or
-                     (not dom and not dom_html))
+    # Le href n'est une preuve que s'il appartient VRAIMENT à cette arête :
+    # sinon la parenthèse déséquilibrée d'un lien voisin codait X_MALF, en
+    # confiance « high », une arête parfaitement saine.
+    malformed = bool((anchor["resolved"] and anchor["href"]
+                      and ("](" in anchor["href"]
+                           or anchor["href"].count("(")
+                           != anchor["href"].count(")")))
+                     or (not dom and not dom_html))
     return {
         "context": context, "dom": dom, "dom_html": dom_html,
         "leaf_tag": leaf_tag, "leaf_id": leaf_id, "leaf_cls": leaf_cls, "leaf_last2": leaf_last2,

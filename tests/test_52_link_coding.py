@@ -472,3 +472,119 @@ def test_13_resume_reads_legacy_v1_csv(tmp_path):
     for r in keep:                                # lignes normalisées en v2, prêtes à réécrire
         assert "source_page_id" in r and "Weight" not in r and "source_id" not in r
         assert set(r.keys()) <= set(lc.csv_header())
+
+
+# --------------------------------------------------------------------------
+# parse_anchor : quelle ancre du bloc appartient réellement à cette arête ?
+#
+# Ces cas manquaient. Ils codent la règle d'attribution, pas son implémentation :
+# une ancre attribuée à tort part dans `anchor_text` vers les quatre juges ET
+# dans les règles de `precode`, qui rendent alors un code faux et CONFIANT.
+# --------------------------------------------------------------------------
+from mwi import link_precode as lp                                    # noqa: E402
+
+
+class TestParseAnchorAttribution:
+    def test_exact_href_wins(self):
+        html = ('<p><a href="/a">A</a> puis '
+                '<a href="https://o.com/art">la cible</a></p>')
+
+        a = lp.parse_anchor(html, "https://o.com/art")
+
+        assert a["text"] == "la cible"
+        assert a["resolved"] is True
+
+    def test_short_neighbour_does_not_steal_the_edge(self):
+        """Un commutateur de langue est un préfixe de presque toute URL du site."""
+        html = ('<p class="entry-content"><a href="/en-us">EN</a> : selon '
+                '<a href="https://o.com/en-us/article?utm_source=nl">cette '
+                'enquête</a> la suite.</p>')
+
+        a = lp.parse_anchor(html, "https://o.com/en-us/article")
+
+        assert a["text"] == "cette enquête"
+
+    def test_section_root_does_not_beat_the_deep_relative_link(self):
+        html = ('<p><a href="/actualites">Actualités</a> — '
+                '<a href="/actualites/2026/enquete-x">le papier</a></p>')
+
+        a = lp.parse_anchor(html, "https://o.com/actualites/2026/enquete-x")
+
+        assert a["text"] == "le papier"
+
+    def test_percent_escaped_target_still_matches(self):
+        html = '<p><a href="https://o.com/caf%C3%A9">le bar</a></p>'
+
+        a = lp.parse_anchor(html, "https://o.com/caf%C3%A9")
+
+        assert a["text"] == "le bar"
+        assert a["resolved"] is True
+
+    def test_entity_escaped_href_still_matches(self):
+        """dom_html vient de str(block) : BeautifulSoup y écrit &amp;."""
+        html = ('<p>Texte. <a href="/team/jane/">Jane Doe</a> sur '
+                '<a href="https://ex.fr/art?b=2&amp;a=1">ce sujet</a>.</p>')
+
+        a = lp.parse_anchor(html, "https://ex.fr/art?b=2&a=1")
+
+        assert a["text"] == "ce sujet"
+
+    def test_unfound_target_never_borrows_a_neighbour(self):
+        """Le lien est hors du dom_html tronqué : on ne devine pas."""
+        html = ('<p><a href="/team/jane/">Jane Doe</a> et '
+                '<a href="/tag/ia/">IA</a></p>')
+
+        a = lp.parse_anchor(html, "https://ex.fr/cible-absente")
+
+        assert a["resolved"] is False
+        assert a["text"] == ""
+        assert a["href"] == ""
+        assert a["n"] == 2
+
+    def test_single_anchor_block_is_unambiguous(self):
+        html = '<p><a href="/whatever/">Le seul lien</a></p>'
+
+        a = lp.parse_anchor(html, "https://ex.fr/cible-absente")
+
+        assert a["resolved"] is True
+        assert a["text"] == "Le seul lien"
+
+    def test_no_anchor_at_all(self):
+        a = lp.parse_anchor("<p>pas de lien</p>", "https://ex.fr/x")
+
+        assert a["n"] == 0
+        assert a["resolved"] is False
+
+    def test_equal_length_candidates_keep_document_order(self):
+        """Déterminisme : à longueur égale, le premier du document gagne."""
+        html = ('<p><a href="https://o.com/aa">un</a>'
+                '<a href="https://o.com/bb">deux</a></p>')
+
+        first = lp.parse_anchor(html, "https://o.com/")
+        again = lp.parse_anchor(html, "https://o.com/")
+
+        assert first["text"] == again["text"]
+
+
+class TestUnresolvedAnchorIsNotEvidence:
+    def test_an_unresolved_anchor_cannot_mark_the_edge_malformed(self):
+        """Une parenthèse déséquilibrée chez un VOISIN ne doit pas coder X_MALF."""
+        html = ('<p><a href="/promo(2026">bruit</a> et '
+                '<a href="/autre/">autre</a></p>')
+
+        f = lp.build_f(context="", dom="html > body > p", dom_html=html,
+                       source_url="https://o.com/page",
+                       target_url="https://o.com/cible-absente",
+                       src_domain="o.com", tgt_domain="o.com")
+
+        assert f["malformed"] is False
+
+    def test_a_resolved_anchor_still_marks_a_real_malformation(self):
+        html = '<p><a href="/promo(2026">le lien</a></p>'
+
+        f = lp.build_f(context="", dom="html > body > p", dom_html=html,
+                       source_url="https://o.com/page",
+                       target_url="https://o.com/promo(2026",
+                       src_domain="o.com", tgt_domain="o.com")
+
+        assert f["malformed"] is True
