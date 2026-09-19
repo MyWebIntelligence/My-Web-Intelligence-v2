@@ -15,6 +15,7 @@ monkeypatché pour renvoyer du JSON canné. Couvre les 7 critères GATE du sprin
 7. Schéma CSV v2 (46 col., 12/09/2026) : 9 colonnes du frame renommées en tête ;
    in_body_mwi / cites_from_place / panel_cites présentes et distinctes ; relecture v1.
 """
+import io
 import pytest
 
 from mwi import link_coding as lc
@@ -142,7 +143,11 @@ def test_03c_html_null_indet_zero_api_call(monkeypatch):
 def test_03d_rawonly_full_evidence_makes_6_calls(monkeypatch):
     calls = []
 
-    def fake(prompt, model=None, timeout=None, max_tokens=None):
+    # Signature souple : les paramètres inspectés, puis **kwargs. Une
+    # doublure rigide lève TypeError dès qu'un argument optionnel est
+    # ajouté en production — et `_safe_call` l'avale, brûle ses trois
+    # reprises, et le test échoue loin de la cause (testing.md).
+    def fake(prompt, model=None, **kwargs):
         calls.append(model)
         if "ACTE DE CITATION" in prompt:
             return '{"cit":1,"cit_type":"ACTOR","confidence":0.95,"review":false,"note":""}'
@@ -317,6 +322,52 @@ def test_08_judge_location_validates_code_only(monkeypatch):
     assert lc.judge_location(ev, "m", None, retries=1) is None
 
 
+def test_08b_judge_citation_coerces_and_rejects(monkeypatch):
+    """Jumeau de test_08 pour le juge-citation, dont toute l'échelle de
+    coercition était sans test. Le cas qui compte est le dernier : un verdict
+    illisible doit rendre None — s'il retombait sur 0, chaque réponse
+    incomprise compterait comme un « non » explicite et biaiserait
+    `panel_cites` vers 0 sur toute la table livrée, sans qu'aucun test tombe."""
+    ev = {"source_url": "", "target_url": "", "dom": "", "dom_html": "", "context": "",
+          "target_title": "", "is_external": True, "target_typeactor": "", "source_actor": ""}
+
+    def reply(payload):
+        monkeypatch.setattr(lc.llm_openrouter, "ask_openrouter_chat",
+                            lambda *a, **k: payload)
+
+    # chaîne "OUI" → 1, et le type de citation est conservé
+    reply('{"cit":"OUI","cit_type":"ACTOR","confidence":0.9}')
+    v = lc.judge_citation(ev, PROJECT, "m", None, retries=1)
+    assert v is not None and v["cit"] == 1 and v["cit_type"] == "ACTOR"
+
+    # booléen true → 1 ; type hors vocabulaire → NONE
+    reply('{"cit":true,"cit_type":"BOGUS"}')
+    v = lc.judge_citation(ev, PROJECT, "m", None, retries=1)
+    assert v is not None and v["cit"] == 1 and v["cit_type"] == "NONE"
+
+    # INDET conservé tel quel, et le type est forcé à NONE (cit != 1)
+    reply('{"cit":"INDET","cit_type":"ACTOR"}')
+    v = lc.judge_citation(ev, PROJECT, "m", None, retries=1)
+    assert v is not None and v["cit"] == "INDET" and v["cit_type"] == "NONE"
+
+    # un « non » explicite ne garde pas de type
+    reply('{"cit":0,"cit_type":"DOCUMENT"}')
+    v = lc.judge_citation(ev, PROJECT, "m", None, retries=1)
+    assert v is not None and v["cit"] == 0 and v["cit_type"] == "NONE"
+
+    # verdict illisible → juge MANQUANT, surtout pas un 0 silencieux
+    reply('{"cit":"maybe","cit_type":"ACTOR"}')
+    assert lc.judge_citation(ev, PROJECT, "m", None, retries=1) is None
+
+    # cit absent → juge manquant
+    reply('{"cit_type":"ACTOR","confidence":0.9}')
+    assert lc.judge_citation(ev, PROJECT, "m", None, retries=1) is None
+
+    # JSON illisible → None sans lever
+    reply("oops")
+    assert lc.judge_citation(ev, PROJECT, "m", None, retries=1) is None
+
+
 # --- 9. code_links de bout en bout (orchestration : Phase A/B, tri, manifeste, stats) ---
 def test_09_code_links_end_to_end(monkeypatch, tmp_path):
     import csv as _csv
@@ -473,6 +524,62 @@ def test_13_resume_reads_legacy_v1_csv(tmp_path):
         assert "source_page_id" in r and "Weight" not in r and "source_id" not in r
         assert set(r.keys()) <= set(lc.csv_header())
 
+
+
+def test_13b_resume_never_appends_v2_rows_under_a_v1_header(monkeypatch, tmp_path):
+    """Le partiel doit être cohérent à CHAQUE instant, pas seulement après la
+    réécriture finale. Une reprise sur un CSV v1 ajoutait des lignes ordonnées
+    v2 sous l'en-tête v1 : un arrêt brutal avant la réécriture laissait un
+    fichier que le `--resume` suivant relisait de travers — `count_in_body` lu
+    comme `Weight`. On observe donc l'en-tête EN PLEIN VOL."""
+    import csv as _csv
+    # En-tête v1 complet, obtenu en inversant la table de renommage du module :
+    # un sous-ensemble arbitraire ne serait pas un vrai fichier v1 et ferait
+    # échouer le rapport de statistiques sur une colonne absente.
+    inv = {v: k for k, v in lc.LEGACY_RENAME.items()}
+    v1_header = [inv.get(c, c) for c in lc.csv_header()]
+    assert v1_header != lc.csv_header()          # sinon le test ne teste rien
+    out = str(tmp_path / "legacy.csv")
+    with open(out, "w", newline="", encoding="utf-8") as f:
+        w = _csv.DictWriter(f, fieldnames=v1_header)
+        w.writeheader()
+        r = {c: "" for c in v1_header}
+        # `Source`/`Target` : ce sont ELLES que LEGACY_RENAME mappe sur
+        # source_page_id / target_page_id.
+        r["Source"], r["Target"] = "1000", "2000"
+        r[inv.get("evidence_source", "evidence_source")] = "rawhtml"
+        r[inv.get("judge1_cites", "judge1_cites")] = "1"    # → ligne « codée »
+        w.writerow(r)                            # une arête déjà codée, au schéma v1
+
+    # Même échafaudage que test_10 : sans lui les arêtes sortent toutes INDET
+    # (pas de HTML) et Phase B ne code rien.
+    base = {"ctx_source": "rawhtml", "is_external": True, "leaf_tag": "p",
+            "anchor_text": "x", "target_typeactor": "", "dom": "d", "context": "c",
+            "precode": {"status": "A", "code": "NAV"}, "source_url": "",
+            "target_url": "", "source_actor": "", "target_title": ""}
+    monkeypatch.setattr(lc, "_preload", lambda s: ({}, {}, {}))
+    monkeypatch.setattr(lc, "assemble_evidence",
+                        lambda edge, **k: dict(base, stratum=edge.get("stratum", ""),
+                                               source_id=int(edge["Source"]),
+                                               target_id=int(edge["Target"])))
+    monkeypatch.setattr(lc, "_sha256", lambda p: "x")
+
+    seen = {}
+
+    def spy(ev, judges, project_meta, budget=None, retries=3):
+        if "header" not in seen:                 # premier codage : le fichier est ouvert
+            with open(out, newline="", encoding="utf-8") as hf:
+                seen["header"] = next(_csv.reader(hf), [])
+        loc, cit = [_lv("NAV")] * 3, [_cv(0)] * 3
+        return loc, cit, lc.aggregate(loc, cit, n_judges=3)
+
+    monkeypatch.setattr(lc, "code_one_edge", spy)
+    lc.code_links("ig.csv", out, judges=JUDGES, project_meta=PROJECT, seed=42,
+                  n_elim=3, n_ret=0, max_workers=1, resume=True,
+                  frame_rows=_frame(3, 0))
+
+    assert seen.get("header") == lc.csv_header()
+    assert "Weight" not in seen["header"]        # plus aucune colonne v1
 
 # --------------------------------------------------------------------------
 # parse_anchor : quelle ancre du bloc appartient réellement à cette arête ?
