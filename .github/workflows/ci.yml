@@ -114,6 +114,15 @@ jobs:
       - name: Synchroniser l'environnement (base + dev, gelé sur uv.lock)
         run: uv sync --locked
 
+      - name: Générer la configuration locale
+        # settings.py est gitignoré : il est produit à l'installation, donc un
+        # clone neuf n'en a pas et TOUT le paquet `mwi` échoue à l'import
+        # (`ModuleNotFoundError: No module named 'settings'`, 18 erreurs de
+        # collecte au premier run réel de cette CI). `scripts/install-basic.py`
+        # pose des questions, donc inutilisable ici : on copie l'exemple,
+        # exactement ce que fait le setup Docker.
+        run: cp settings-example.py settings.py
+
       - name: Pré-télécharger les données NLTK (tokenisation déterministe)
         # Le code retombe sur un tokeniseur simple si indisponible ; cette étape
         # évite un téléchargement réseau en cours de test. nltk.download ne lève

@@ -1050,7 +1050,12 @@ class TestRootPathAndPercentEncoding:
         assert 'trk=abc' not in out
 
     def test_absent_key_keeps_the_previous_behaviour(self):
-        assert normalize_url('https://linkedin.com/p?trk=abc') == \
+        # Explicit rules, like every other test in this class. `{}` merges onto
+        # DEFAULT_RULES, where `strip_trackers_by_host` is empty -- so the key
+        # really is absent, which is what the name claims. Reading the ambient
+        # configuration instead made the verdict depend on the machine: green
+        # here, red on a fresh clone, whose example config DEFINES the key.
+        assert normalize_url('https://linkedin.com/p?trk=abc', {}) == \
             'https://linkedin.com/p?trk=abc'
 
 
