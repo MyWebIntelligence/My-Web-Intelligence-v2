@@ -800,8 +800,14 @@ def _row_is_coded(r: dict) -> bool:
     if r.get("evidence_source") == "indet":
         return True
     js = range(1, N_JUDGES + 1)
-    return (any(r.get("judge%d_place_code" % j) for j in js)
-            or any(r.get("judge%d_cites" % j) for j in js))
+    # `not in (None, "")` et non la simple véracité : en mémoire, un verdict de
+    # citation « non » est l'ENTIER 0, qui est faux en Python. Une ligne portant
+    # trois verdicts valides à 0 était donc jugée non codée, écartée de
+    # l'écriture, puis re-codée et re-payée au `--resume` suivant. Relue depuis
+    # le CSV le même verdict vaut la CHAÎNE "0", vraie : le défaut ne se voyait
+    # qu'avant le premier aller-retour sur disque.
+    return (any(r.get("judge%d_place_code" % j) not in (None, "") for j in js)
+            or any(r.get("judge%d_cites" % j) not in (None, "") for j in js))
 
 
 def _load_done(out_path: str) -> Tuple[set, List[dict]]:
@@ -823,8 +829,14 @@ def _load_done(out_path: str) -> Tuple[set, List[dict]]:
                 key = (s, t)
                 if key not in best or (coded and not best[key][1]):
                     best[key] = (r, coded)
-    except Exception:
-        return set(), []
+    except Exception as exc:
+        # Ne JAMAIS répondre « rien de fait » sur une lecture ratée : l'appelant
+        # enchaîne sur un open(out_path, "w") qui tronque le fichier, et le
+        # partiel d'un run de plusieurs heures disparaît. On s'arrête net.
+        raise RuntimeError(
+            "CSV partiel illisible (%s) : %s — déplacez-le ou réparez-le avant "
+            "de relancer avec --resume, sinon il serait écrasé."
+            % (out_path, exc)) from exc
     done = {k for k, (r, c) in best.items() if c}
     keep = [r for k, (r, c) in best.items() if c]
     return done, keep
