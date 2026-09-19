@@ -126,7 +126,7 @@ git --version
 | Chemin | À installer | Section |
 |---|---|---|
 | A — Docker Compose | Docker Desktop | 1.4 |
-| B — Local | `uv` (fournit Python ≥ 3.9) — ou Python 3.9+ pour le fallback pip | 1.5 |
+| B — Local | `uv` (fournit Python ≥ 3.10) — ou Python 3.10+ pour le fallback pip | 1.5 |
 | C — Docker manuel | Docker Desktop | 1.4 |
 
 ### 1.4 — Installer Docker Desktop *(chemins A et C)*
@@ -164,12 +164,12 @@ Vérifiez :
 uv --version    # doit afficher uv 0.x.y
 ```
 
-> 💡 Le projet épingle l'interpréteur à Python 3.11 (fichier `.python-version`), mais reste compatible Python ≥ 3.9. `uv sync` provisionnera automatiquement la bonne version — vous n'avez pas à la télécharger à la main.
+> 💡 Le projet épingle l'interpréteur à Python 3.11 (fichier `.python-version`), mais reste compatible Python ≥ 3.10. `uv sync` provisionnera automatiquement la bonne version — vous n'avez pas à la télécharger à la main.
 
 **Variante sans `uv` — installer Python soi-même pour le fallback pip** *(facultatif)* :
 
 1. Allez sur [python.org/downloads](https://www.python.org/downloads/).
-2. Téléchargez **Python 3.9 ou plus récent** (3.11 ou 3.12 sont parfaits).
+2. Téléchargez **Python 3.10 ou plus récent** (3.11 ou 3.12 sont parfaits).
 3. ⚠️ **Sur Windows**, pendant l'installation, **cochez la case « Add Python to PATH »** avant *Install*. Sans ça, le terminal ne trouvera pas Python.
 4. Vérifiez :
 
@@ -179,7 +179,7 @@ python3 --version
 py -3 --version
 ```
 
-Vous devez voir `Python 3.9.x` ou plus.
+Vous devez voir `Python 3.10.x` ou plus.
 
 ### 1.6 — Choisir un dossier de travail et cloner MWI
 

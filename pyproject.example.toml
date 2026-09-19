@@ -41,9 +41,9 @@ version = "1.0.0"
 description = "Reproducible web-mining toolkit for digital methods in the social sciences and humanities (MyWebIntelligence / MWI)."
 readme = "README.md"
 license = { file = "LICENSE" }
-# Plancher réel du projet. Si tu abandonnes le support de 3.9, monter cette valeur
+# Plancher réel du projet (relevé à 3.10 le 2026-09-19). Si tu le montes encore,
 # et, en miroir, `target-version` (Ruff) et `python_version` (mypy) ci-dessous.
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 authors = [
     { name = "Amar Lakel", email = "amar.lakel@u-bordeaux-montaigne.fr" },
 ]
@@ -125,7 +125,7 @@ package = false
 # RUFF — lint + format + sécurité. Remplace flake8 (et les rôles isort, bandit).
 # ===========================================================================
 [tool.ruff]
-target-version = "py39"   # aligné sur requires-python >= 3.9
+target-version = "py310"  # aligné sur requires-python >= 3.10
 # Plus la longueur est élevée, moins le formateur reflue de lignes existantes.
 # Aligner sur la convention actuelle du dépôt (.flake8 / setup.cfg) pour limiter
 # le diff de la première mise en forme.
@@ -168,7 +168,7 @@ indent-style = "space"
 # MYPY — typage. Adoption progressive, pas de strict global (voir l'en-tête).
 # ===========================================================================
 [tool.mypy]
-python_version = "3.9"
+python_version = "3.10"
 show_error_codes = true
 warn_redundant_casts = true
 warn_unused_ignores = true

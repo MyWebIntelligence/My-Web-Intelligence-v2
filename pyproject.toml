@@ -17,8 +17,12 @@ readme = "README.md"
 license = { file = "LICENSE" }
 # Support floor. Mirror it in mypy `python_version` below and the CI matrix
 # (.github/workflows/ci.yml). The pinned dev/runtime interpreter is 3.11
-# (.python-version, Dockerfile); 3.9 is only the lowest version we still support.
-requires-python = ">=3.9"
+# (.python-version, Dockerfile); 3.10 is only the lowest version we still
+# support. Raised from 3.9 on 2026-09-19: trafilatura 2.1.0 requires >=3.10, so
+# a 3.9 install silently resolved to 2.0.0, which does not resolve relative
+# hrefs against `url=` — the extraction path behaved differently INSIDE the
+# supported range. mypy also refuses python_version = "3.9".
+requires-python = ">=3.10"
 authors = [
     { name = "Amar Lakel", email = "amar.lakel@u-bordeaux-montaigne.fr" },
 ]
@@ -97,7 +101,7 @@ package = false
 # Run on touched code: `uv run mypy mwi/`. Lint config lives in .flake8.
 # ===========================================================================
 [tool.mypy]
-python_version = "3.9"        # check against the support floor, not the dev 3.11
+python_version = "3.10"       # check against the support floor, not the dev 3.11
 show_error_codes = true
 warn_redundant_casts = true
 warn_unused_ignores = true

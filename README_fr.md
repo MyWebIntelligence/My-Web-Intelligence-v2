@@ -171,7 +171,7 @@ Gestion : `docker stop mwi` · `docker start mwi` · `docker rm mwi`.
 ## Installation locale
 
 **Pré-requis** : [uv](https://docs.astral.sh/uv/) et git. uv provisionne
-l'interpréteur Python (3.9+) et l'environnement virtuel pour vous — aucune
+l'interpréteur Python (3.10+) et l'environnement virtuel pour vous — aucune
 installation séparée de `python`/`pip`/`venv` n'est nécessaire.
 
 Installer uv une seule fois :

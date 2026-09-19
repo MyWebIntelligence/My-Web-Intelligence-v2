@@ -61,7 +61,7 @@ jobs:
         run: uv sync --locked
 
       # BLOQUANT. Ce job tourne sous 3.12 : une syntaxe 3.10+ n'y est donc pas
-      # vue comme une erreur E9. C'est le job `tests` en 3.9 qui la rattrape.
+      # vue comme une erreur E9. C'est le job `tests` en 3.10 qui la rattrape.
       - name: Lint (classe bugs) — bloquant
         run: make lint
 
@@ -78,14 +78,14 @@ jobs:
         continue-on-error: true
         run: make typecheck
 
-  # --- Tests : matrice sur les versions de Python supportées (>=3.9) ---------
+  # --- Tests : matrice sur les versions de Python supportées (>=3.10) --------
   tests:
     name: Tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.9", "3.10", "3.11", "3.12"]
+        python-version: ["3.10", "3.11", "3.12"]
     steps:
       - name: Checkout du code
         uses: actions/checkout@v4

@@ -155,7 +155,7 @@ docker exec -it mwi python mywi.py land list
 ## Local Installation
 
 **Prerequisites:** [uv](https://docs.astral.sh/uv/) and git. uv provisions the Python
-interpreter (3.9+) and the virtual environment for you — no separate
+interpreter (3.10+) and the virtual environment for you — no separate
 `python`/`pip`/`venv` setup needed.
 
 Install uv once:

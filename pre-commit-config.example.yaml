@@ -34,7 +34,7 @@
 # identique à `make` et à la CI. Ils nécessitent uv sur le PATH et un env synchronisé.
 
 default_language_version:
-  # python3 (et non 3.12) : le projet supporte 3.9+, on n'impose pas une version
+  # python3 (et non 3.12) : le projet supporte 3.10+, on n'impose pas une version
   # qui pourrait manquer sur la machine. Ne concerne que les hooks d'hygiène ci-dessous.
   python: python3
 
