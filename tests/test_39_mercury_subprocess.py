@@ -185,7 +185,14 @@ class TestRunMercuryTimeout:
 
         monkeypatch.setattr(asyncio, 'create_subprocess_exec', spy_exec)
 
-        result = await MercuryReadablePipeline(timeout=0.2)._run_mercury(
+        # Point the pipeline AT the sleeping script. Without this the test
+        # spawned the real `mercury-parser`, so it proved nothing on a machine
+        # that has it and failed outright on one that does not (the CI runner:
+        # "[Errno 2] No such file or directory: 'mercury-parser'"). What is
+        # under test is that a hanging child is killed and reaped — which has
+        # nothing to do with Mercury specifically.
+        result = await MercuryReadablePipeline(
+            mercury_path=str(script), timeout=0.2)._run_mercury(
             'https://ex.test/slow')
 
         assert 'timed out' in (result.error or '')
