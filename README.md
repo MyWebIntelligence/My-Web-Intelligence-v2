@@ -950,6 +950,7 @@ python mywi.py land export --name="AsthmaResearch" --type=pseudolinksdomain
 python mywi.py land export --name="AsthmaResearch" --type=nodelinkcsv --minrel=1
 python mywi.py land export --name="AsthmaResearch" --type=nodelinkcsv --fullhtml=TRUE --minrel=1  # raw network only (omit flag for base 4)
 python mywi.py land export --name="AsthmaResearch" --type=nodelinkcsv --link-profile=all  # keep every link kind
+python mywi.py land export --name="AsthmaResearch" --type=nodelinkcsv --minrel=1 --resolve-twins=TRUE  # re-attach links stored on URL twins
 ```
 
 #### Link profiles (`--link-profile`)
@@ -976,6 +977,46 @@ migration 014) are always treated as `body`, and the **whole-page network**
 use to judge the body network, so filtering it would remove the measurement.
 
 Override the profiles in `settings.py` via `link_profiles`.
+
+#### Twin re-attachment (`--resolve-twins`)
+
+The crawl attaches a link to a page record by **exact** normalized URL, and the
+normalizer keeps the trailing slash by default (`trailing_slash = "preserve"`).
+A body link written `https://site.org/page/` while the corpus page is
+`https://site.org/page` is therefore stored towards a second record, a URL
+**twin** that is never crawled (relevance NULL). The closed network of the
+export drops that edge, while the raw-HTML pass of `--fullhtml`, which resolves
+hrefs through a tolerant 3-key matching (normalized URL; lowercased URL without
+trailing slash; host without `www` plus path), finds the same link and files
+it as raw-only (`weightbody = 0`, `citation = 1`).
+
+`--resolve-twins=TRUE` (`nodelinkcsv` only) applies that same matching to the
+body links, on the same perimeter:
+
+- every `ExpressionLink` row whose source qualifies by `--minrel` but whose
+  target does not is re-attached to the corpus page its URL names (trailing
+  slash, `www`, `http`/`https` or path-case variant);
+- a target the matching cannot place (no match, or a key shared by two corpus
+  pages) stays out; a resolution onto the source itself is dropped as a
+  self-loop;
+- when a direct edge and one or more twins land on the same (source, target),
+  **one** edge survives: best kind first (`body` > `ref` > `reco` > `toc` >
+  `nav`), the direct row before a twin on a tie; the surviving row supplies
+  `context` and `dom`;
+- `--link-profile` filters the **surviving** kind in `*_pageslinks.csv` and
+  `*_domainlinks.csv`; `*_pageslinksfullhtml.csv` is still never filtered;
+- node files are unchanged: the perimeter of the closed network is the same.
+
+The option reads the database and never writes to it. Without it (default
+`FALSE`), the output is the historical one, byte for byte. The export prints
+the number of re-attached edges. On a land exported with `--fullhtml`, a
+residual `weightbody = 0` edge with `citation = 1` is the signature of an
+unresolved twin; with the option there should be none.
+
+```bash
+python mywi.py land export --name="AsthmaResearch" --type=nodelinkcsv --minrel=1 --resolve-twins=TRUE
+python mywi.py land export --name="AsthmaResearch" --type=nodelinkcsv --minrel=1 --fullhtml=TRUE --resolve-twins=TRUE
+```
 
 ```bash
 python mywi.py land export --name="AsthmaResearch" --type=nodesjson --minrel=1  # domain force-graph JSON

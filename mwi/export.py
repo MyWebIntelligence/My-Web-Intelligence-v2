@@ -21,7 +21,7 @@ import datetime
 import json
 import re
 from textwrap import dedent
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 import unicodedata
 from lxml import etree
 from zipfile import ZipFile
@@ -29,6 +29,7 @@ from zipfile import ZipFile
 import settings
 
 from . import model
+from . import body_links
 from . import link_context
 from .link_context import extract_all_links, extract_markdown_links
 
@@ -80,7 +81,7 @@ class Export:
 
     def __init__(self, export_type: str, land: model.Land, minimum_relevance: int,
                  fullhtml: bool = False, link_profile: str = DEFAULT_LINK_PROFILE,
-                 method=None):
+                 method=None, resolve_twins: bool = False):
         """Initialize an Export instance with specified parameters.
 
         Args:
@@ -96,6 +97,11 @@ class Export:
                 method. None (default) exports them all. Unknown names fall
                 back to all with a warning. NEVER interpolated into SQL: it is
                 only ever looked up in PSEUDOLINK_METHODS.
+            resolve_twins: nodelinkcsv only. When True, a body link stored
+                towards an out-of-network twin of a corpus page (same page,
+                URL variant: trailing slash, www, scheme, case) is re-attached
+                to that page. See `_resolved_link_edges`. False (default)
+                keeps the historical output byte for byte.
 
         Notes:
             The export_type determines which write method will be called.
@@ -106,6 +112,7 @@ class Export:
         self.relevance = minimum_relevance
         self.fullhtml = fullhtml
         self.method = method
+        self.resolve_twins = resolve_twins
         profiles = _link_profiles()
         if link_profile not in profiles:
             print(f"Unknown link profile '{link_profile}', "
@@ -645,6 +652,8 @@ class Export:
         Returns:
             int: Number of link records written.
         """
+        if self.resolve_twins:
+            return self._write_pageslinks_resolved(filename)
         col_map = {
             'source_id': 'link.source_id',
             'source_url': 'e1.url',
@@ -726,6 +735,8 @@ class Export:
             Excludes intra-domain links (source_domain != target_domain).
             link_count represents number of page-level links between domains.
         """
+        if self.resolve_twins:
+            return self._write_domainlinks_resolved(filename)
         col_map = {
             'source_domain_id': 'e1.domain_id',
             'source_domain_name': 'd1.name',
@@ -753,6 +764,164 @@ class Export:
         """
         cursor = self.get_sql_cursor(sql, col_map)
         count = self.write_csv(filename, col_map.keys(), cursor)
+        print(f"  - domainlinks.csv: {count} domain links")
+        return count
+
+    # ------------------------------------------------------------------  #
+    # Twin re-attachment (--resolve-twins)                                #
+    # ------------------------------------------------------------------  #
+
+    def _closed_network_nodes(self):
+        """Index, url and domain of every expression qualifying by minrel.
+
+        Iterated, not fetchall()'d, and drained before returning: MWI uses one
+        shared DB connection.
+        """
+        idx: link_context.UrlIndex = ({}, {}, {})
+        url_of: Dict[int, str] = {}
+        domain_of: Dict[int, Any] = {}
+        cur = model.DB.execute_sql(
+            "SELECT id, url, domain_id FROM expression "
+            "WHERE land_id = ? AND relevance >= ?",
+            (self.land.get_id(), self.relevance))
+        for eid, url, domain_id in cur:
+            url_of[eid] = url
+            domain_of[eid] = domain_id
+            link_context.add_to_url_index(idx, eid, url)
+        return idx, url_of, domain_of
+
+    def _resolved_link_edges(self, idx, in_net, apply_profile: bool
+                             ) -> List[Tuple[int, int, int, Optional[str]]]:
+        """Body edges of the closed network, twins re-attached.
+
+        The crawl places a link on a fiche by EXACT normalized URL, and the
+        normalizer preserves the trailing slash by default. A link written
+        `.../page/` while the corpus page is `.../page` therefore lands on a
+        second fiche that is never crawled (relevance NULL): the closed network
+        drops the edge, while the raw-HTML pass, which resolves through the
+        tolerant 3-key ladder, finds the same link and files it raw-only.
+        Measured on land `airegulation` (export 2026-09-20): 3 298 body edges,
+        90 % of them by trailing slash alone.
+
+        Every ExpressionLink row whose source qualifies but whose target does
+        not is resolved here through that same ladder, on the same perimeter:
+        unify the ladder, never the perimeter. A target the ladder cannot
+        place (miss or ambiguous key) stays out; a resolution onto the source
+        itself is a self-loop and is dropped.
+
+        When several rows land on one (source, target), the direct edge and
+        one or more twins, ONE edge survives: best structural kind first
+        (KIND_RANK: a menu occurrence never cancels a body citation), the
+        direct row before a twin on a tie, then the lowest stored target id.
+        The profile, when applied, filters the SURVIVING kind with the same
+        NULL-is-body rule as `_kind_clause`.
+
+        Returns (source_id, target_id, stored_target_id, kind) tuples, sorted.
+        stored_target_id names the ExpressionLink row that supplies context
+        and dom; it equals target_id for a direct edge.
+        """
+        rank = body_links.KIND_RANK
+        worst = max(rank.values()) + 1
+        best: Dict[Tuple[int, int], tuple] = {}
+        resolved: Dict[int, Optional[int]] = {}
+        direct_pairs: Set[Tuple[int, int]] = set()
+        outside_rows = placed_rows = 0
+        # Nothing in this loop touches the connection, so draining the cursor
+        # lazily is safe on the single shared connection.
+        cur = model.DB.execute_sql(
+            "WITH idx(x) AS (SELECT id FROM expression "
+            "WHERE land_id = ? AND relevance >= ?) "
+            "SELECT link.source_id, link.target_id, link.kind, t.url "
+            "FROM expressionlink AS link "
+            "JOIN expression AS t ON t.id = link.target_id "
+            "WHERE link.source_id IN idx",
+            (self.land.get_id(), self.relevance))
+        for sid, stored, kind, turl in cur:
+            if stored in in_net:
+                tid, twin = stored, 0
+                direct_pairs.add((sid, tid))
+            else:
+                outside_rows += 1
+                if stored not in resolved:
+                    resolved[stored] = (link_context.resolve_url_in_index(idx, turl)
+                                        if turl else None)
+                tid, twin = resolved[stored], 1
+                if tid is None:
+                    continue
+                placed_rows += 1
+            if tid == sid:
+                continue
+            key = (rank.get(kind or body_links.KIND_DEFAULT, worst), twin, stored)
+            current = best.get((sid, tid))
+            if current is None or key < current[0]:
+                best[(sid, tid)] = (key, stored, kind)
+
+        kinds = _link_profiles().get(self.link_profile) if apply_profile else None
+        edges = []
+        added = upgraded = 0
+        for (sid, tid), (_, stored, kind) in best.items():
+            if kinds is not None and kind is not None and kind not in kinds:
+                continue
+            edges.append((sid, tid, stored, kind))
+            if stored != tid:
+                if (sid, tid) in direct_pairs:
+                    upgraded += 1
+                else:
+                    added += 1
+        edges.sort()
+        self._twin_stats = {
+            'outside_rows': outside_rows, 'placed_rows': placed_rows,
+            'twin_nodes': sum(1 for t in resolved.values() if t is not None),
+            'added_edges': added, 'upgraded_edges': upgraded,
+        }
+        print(f"      resolve-twins: {added} edges re-attached, {upgraded} "
+              f"direct edges taking a better-ranked twin kind "
+              f"({self._twin_stats['twin_nodes']} twin fiches placed)")
+        return edges
+
+    def _write_pageslinks_resolved(self, filename) -> int:
+        """`_write_pageslinks` with twins re-attached. Same header, same order."""
+        idx, url_of, domain_of = self._closed_network_nodes()
+        edges = self._resolved_link_edges(idx, set(url_of), apply_profile=True)
+        header = ['source_id', 'source_url', 'source_domain_id', 'target_id',
+                  'target_url', 'target_domain_id', 'context', 'dom', 'kind']
+
+        def rows():
+            for sid, tid, stored, kind in edges:
+                found = model.DB.execute_sql(
+                    "SELECT context, dom FROM expressionlink "
+                    "WHERE source_id = ? AND target_id = ?", (sid, stored)).fetchone()
+                context, dom = found if found else (None, None)
+                yield [sid, url_of[sid], domain_of[sid], tid, url_of[tid],
+                       domain_of[tid], context, dom, kind or body_links.KIND_DEFAULT]
+
+        count = self.write_csv(filename, header, rows())
+        print(f"  - pageslinks.csv: {count} links")
+        return count
+
+    def _write_domainlinks_resolved(self, filename) -> int:
+        """`_write_domainlinks` rolled up from the re-attached page edges."""
+        idx, url_of, domain_of = self._closed_network_nodes()
+        edges = self._resolved_link_edges(idx, set(url_of), apply_profile=True)
+        counts: Dict[Tuple[Any, Any], int] = {}
+        for sid, tid, _, _ in edges:
+            pair = (domain_of[sid], domain_of[tid])
+            if pair[0] != pair[1]:
+                counts[pair] = counts.get(pair, 0) + 1
+        names: Dict[Any, str] = {}
+        cur = model.DB.execute_sql(
+            "SELECT DISTINCT d.id, d.name FROM expression AS e "
+            "JOIN domain AS d ON d.id = e.domain_id "
+            "WHERE e.land_id = ? AND e.relevance >= ?",
+            (self.land.get_id(), self.relevance))
+        for did, name in cur:
+            names[did] = name
+        # Same total order as the SQL writer: count DESC, then the domain pair.
+        ordered = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+        header = ['source_domain_id', 'source_domain_name', 'target_domain_id',
+                  'target_domain_name', 'link_count']
+        count = self.write_csv(filename, header, (
+            [sd, names.get(sd), td, names.get(td), n] for (sd, td), n in ordered))
         print(f"  - domainlinks.csv: {count} domain links")
         return count
 
@@ -787,6 +956,11 @@ class Export:
         - edges found ONLY in the raw <a href> of expression.html, not in
           ExpressionLink -> weightbody=0, weighthtml=<raw anchor multiplicity>
           (in_mwi=0). The two sets are disjoint.
+
+        With resolve_twins, an ExpressionLink edge towards an out-of-network
+        twin counts as a body edge of the corpus page it names
+        (`_resolved_link_edges`), so the raw pass no longer re-emits it as
+        raw-only.
 
         Every emitted edge also carries citation (1/0): 1 iff the link appears
         in the SOURCE expression's readable markdown. Independent from
@@ -837,17 +1011,24 @@ class Export:
 
         mywi_page_edges = set()
         kind_of = {}
-        # Iterated, not fetchall()'d. `add_to_url_index` is not called here and
-        # nothing in this loop touches the connection, so draining lazily is
-        # safe on the single shared connection.
-        cur = model.DB.execute_sql(
-            "WITH idx(x) AS (SELECT id FROM expression "
-            "WHERE land_id = ? AND relevance >= ?) "
-            "SELECT source_id, target_id, kind FROM expressionlink "
-            "WHERE source_id IN idx AND target_id IN idx", (land_id, minrel))
-        for s, t, k in cur:
-            mywi_page_edges.add((s, t))
-            kind_of[(s, t)] = k or 'body'
+        if self.resolve_twins:
+            # Never profile-filtered: this file is the whole-page comparator.
+            for s, t, _, k in self._resolved_link_edges(
+                    idx, set(url_of), apply_profile=False):
+                mywi_page_edges.add((s, t))
+                kind_of[(s, t)] = k or 'body'
+        else:
+            # Iterated, not fetchall()'d. `add_to_url_index` is not called
+            # here and nothing in this loop touches the connection, so
+            # draining lazily is safe on the single shared connection.
+            cur = model.DB.execute_sql(
+                "WITH idx(x) AS (SELECT id FROM expression "
+                "WHERE land_id = ? AND relevance >= ?) "
+                "SELECT source_id, target_id, kind FROM expressionlink "
+                "WHERE source_id IN idx AND target_id IN idx", (land_id, minrel))
+            for s, t, k in cur:
+                mywi_page_edges.add((s, t))
+                kind_of[(s, t)] = k or 'body'
 
         # 0) citation lookup: (sid, tid) edges whose link appears in the
         #    source's readable markdown, resolved through the SAME 3-key

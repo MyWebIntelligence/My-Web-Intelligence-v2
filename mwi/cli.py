@@ -178,6 +178,17 @@ def command_input():
                              'Never applies to the *fullhtml.csv files, which '
                              'are the whole-page comparator.',
                         default=None)
+    parser.add_argument('--resolve-twins',
+                        type=str,
+                        dest='resolve_twins',
+                        help='For land export nodelinkcsv (TRUE/FALSE): '
+                             're-attach body links stored towards an '
+                             'uncrawled URL variant of a corpus page '
+                             '(trailing slash, www, scheme, case) to that '
+                             'page. Default FALSE: historical output.',
+                        nargs='?',
+                        const='TRUE',
+                        default=None)
     parser.add_argument('--lang',
                         type=str,
                         help='Language(s) of the project, comma-separated '
