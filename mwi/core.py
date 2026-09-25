@@ -3253,7 +3253,7 @@ def expression_relevance(dictionary, expression: model.Expression) -> int:
 
 def export_land(land: model.Land, export_type: str, minimum_relevance: int,
                 fullhtml: bool = False, link_profile: Optional[str] = None,
-                method: Optional[str] = None):
+                method: Optional[str] = None, resolve_twins: bool = False):
     """Export land data to a file in the specified format.
 
     This function creates an export file containing land data filtered by
@@ -3267,6 +3267,8 @@ def export_land(land: model.Land, export_type: str, minimum_relevance: int,
             raw-HTML link network files (*fullhtml.csv). Ignored otherwise.
         method: For pseudolinks, restrict the export to one similarity method
             ('cosine', 'verbatim', 'nli', 'cosine_lsh'). None exports all.
+        resolve_twins: nodelinkcsv only. Re-attach body links stored towards
+            an out-of-network twin (URL variant) of a corpus page to that page.
 
     Notes:
         - Output filename includes land name, export type, and timestamp.
@@ -3283,7 +3285,7 @@ def export_land(land: model.Land, export_type: str, minimum_relevance: int,
         % (land.name, export_type, date_tag)
     export = Export(export_type, land, minimum_relevance, fullhtml=fullhtml,
                     link_profile=link_profile or DEFAULT_LINK_PROFILE,
-                    method=method)
+                    method=method, resolve_twins=resolve_twins)
     count = export.write(export_type, filename)
     if count > 0:
         print("Successfully exported %s records to %s" % (count, filename))

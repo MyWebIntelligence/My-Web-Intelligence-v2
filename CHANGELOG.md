@@ -31,6 +31,27 @@ entry is here so the diagnosis takes a minute.
   health probe switched from `land list` (which legitimately exits 1 on a
   brand-new install) to `db migrate`.
 
+### Added — `--resolve-twins` on `land export` (URL twins of corpus pages)
+
+- **The defect.** The crawl attaches a link to a record by exact normalized
+  URL and the normalizer preserves the trailing slash, so a body link written
+  `.../page/` towards the corpus page `.../page` lands on a second record,
+  never crawled (relevance NULL). The closed network dropped the edge; the
+  raw-HTML pass, which resolves through the tolerant 3-key matching, found the
+  same link and filed it raw-only. Measured on land `airegulation`: 3 455 body
+  edges of the whole-page network, one third of the body network, 90 % of them
+  by trailing slash alone.
+- **The option.** `--resolve-twins=TRUE` (`nodelinkcsv` only) re-attaches every
+  `ExpressionLink` row whose source qualifies but whose target does not to the
+  corpus page the same matching names, on the same perimeter: unify the
+  matching, never the perimeter. Unplaceable or ambiguous targets stay out,
+  resolutions onto the source are dropped. One edge per (source, target):
+  best kind first, direct row before twin on a tie. `--link-profile` filters
+  the surviving kind; the whole-page network stays unfiltered.
+- **Default unchanged.** Without the option the four link files are the
+  historical output, byte for byte. The option only reads the database.
+- Tests: `tests/test_53_resolve_twins.py`.
+
 ### Added — a real perceptual fingerprint on media (migration 016)
 
 `media.image_hash` is a SHA-256 of the downloaded bytes: it answers "is this

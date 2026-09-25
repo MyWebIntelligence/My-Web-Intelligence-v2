@@ -1745,6 +1745,11 @@ class LandController:
             pageslinksfullhtml carries weight (anchor multiplicity) and in_mywi
             (1 if the edge also exists in ExpressionLink), enabling a direct
             comparison with the MyWI citation-link network.
+
+            --resolve-twins=TRUE (nodelinkcsv only): re-attach body links
+            stored towards an out-of-network twin of a corpus page (trailing
+            slash, www, scheme or case variant, never crawled) to that page,
+            in both networks. Absent or FALSE: historical output.
         """
         minimum_relevance = 1
         core.check_args(args, ('name', 'type'))
@@ -1772,9 +1777,13 @@ class LandController:
                                                    set_type=str, default=None)
                 method = core.get_arg_option('method', args, set_type=str,
                                              default=None)
+                twins_raw = core.get_arg_option('resolve_twins', args,
+                                                set_type=str, default=None)
+                resolve_twins = (twins_raw is not None
+                                 and twins_raw.upper() == 'TRUE')
                 core.export_land(land, args.type, minimum_relevance,
                                  fullhtml=store_html, link_profile=link_profile,
-                                 method=method)
+                                 method=method, resolve_twins=resolve_twins)
                 return 1
             print('Invalid export type "%s" [%s]' % (args.type, ', '.join(valid_types)))
         return 0

@@ -607,6 +607,7 @@ python mywi.py land export --name="MonProjet" --type=pseudolinks
 python mywi.py land export --name="MonProjet" --type=nodelinkcsv --minrel=1
 python mywi.py land export --name="MonProjet" --type=nodelinkcsv --fullhtml=TRUE --minrel=1  # réseau brut SEUL (sans le flag = 4 de base)
 python mywi.py land export --name="MonProjet" --type=nodelinkcsv --link-profile=all  # conserve tous les kinds de liens
+python mywi.py land export --name="MonProjet" --type=nodelinkcsv --minrel=1 --resolve-twins=TRUE  # rattache les liens enregistrés sur des jumelles d'URL
 python mywi.py land export --name="MonProjet" --type=nodesjson --minrel=1  # graphe de domaines JSON force-graph
 python mywi.py land export --name="MonProjet" --type=pagesjson --minrel=1  # graphe de pages JSON force-graph
 ```
@@ -663,6 +664,48 @@ comparateur qui sert à juger le réseau body.
 La colonne `kind` est ajoutée en **fin d'en-tête** de `*_pageslinks.csv`
 (`NULL` → `body`). Le profil s'applique à tous les exports qui lisent
 `ExpressionLink`. Profils redéfinissables dans `settings.py` via `link_profiles`.
+
+#### Rattachement des jumelles d'URL (`--resolve-twins`)
+
+Le crawl rattache un lien à une fiche par égalité **exacte** de l'URL
+normalisée, et la normalisation conserve le slash final par défaut
+(`trailing_slash = "preserve"`). Un lien de corps de texte écrit
+`https://site.org/page/` alors que la page du corpus est `https://site.org/page`
+est donc enregistré vers une seconde fiche, une **jumelle** d'URL jamais crawlée
+(pertinence NULL). Le réseau fermé de l'export écarte cette arête, tandis que la
+passe HTML brute de `--fullhtml`, qui résout les liens par une correspondance
+tolérante à trois clés (URL normalisée ; URL en minuscules sans slash final ;
+hôte sans `www` plus chemin), retrouve le même lien et le classe comme lien du
+seul HTML brut (`weightbody = 0`, `citation = 1`).
+
+`--resolve-twins=TRUE` (`nodelinkcsv` seulement) applique cette même
+correspondance aux liens de corps de texte, sur le même périmètre :
+
+- toute ligne d'`ExpressionLink` dont la source passe `--minrel` mais pas la
+  cible est rattachée à la page du corpus que désigne son URL (variante de slash
+  final, de `www`, de `http`/`https` ou de casse du chemin) ;
+- une cible que la correspondance ne sait pas placer (aucune correspondance, ou
+  clé partagée par deux pages du corpus) reste dehors ; un rattachement qui
+  retombe sur la page source est écarté comme boucle ;
+- quand une arête directe et une ou plusieurs jumelles aboutissent à la même
+  paire (source, cible), **une seule** arête est conservée : le meilleur kind
+  d'abord (`body` > `ref` > `reco` > `toc` > `nav`), la ligne directe avant la
+  jumelle en cas d'égalité ; la ligne retenue fournit `context` et `dom` ;
+- `--link-profile` filtre le kind **retenu** dans `*_pageslinks.csv` et
+  `*_domainlinks.csv` ; `*_pageslinksfullhtml.csv` n'est toujours jamais filtré ;
+- les fichiers de nœuds ne changent pas : le périmètre du réseau fermé est le
+  même.
+
+L'option lit la base et n'y écrit jamais. Sans elle (défaut `FALSE`), la sortie
+est la sortie historique, octet pour octet. L'export affiche le nombre d'arêtes
+rattachées. Sur un export `--fullhtml`, une arête `weightbody = 0` portant
+`citation = 1` signale une jumelle non résolue ; avec l'option, il ne doit plus
+y en avoir.
+
+```bash
+python mywi.py land export --name="MonProjet" --type=nodelinkcsv --minrel=1 --resolve-twins=TRUE
+python mywi.py land export --name="MonProjet" --type=nodelinkcsv --minrel=1 --fullhtml=TRUE --resolve-twins=TRUE
+```
 
 ### 2. Exporter les tags
 
