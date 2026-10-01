@@ -49,7 +49,7 @@ This README is also available in French: [README_fr.md](README_fr.md)
 
 ## Tutorials
 
-*   [`docs/mwi_tutorial.ipynb`](docs/mwi_tutorial.ipynb) — a complete research project from A to Z (land creation, multi-engine seeding, depth-bounded crawl, URL normalization, readable extraction, qualification, enrichments, exports), with an SQL audit after every step. Requires `pip install jupyter pandas`.
+*   [`docs/mwi_tutorial.ipynb`](docs/mwi_tutorial.ipynb) — a complete research project from A to Z (land creation, multi-engine seeding, depth-bounded crawl, URL normalization, readable extraction, qualification, enrichments, exports), with an SQL audit after every step. Open it with `uv run --with jupyter --with pandas jupyter lab docs/mwi_tutorial.ipynb` (notebook-only dependencies, not installed by `uv sync`).
 *   [`docs/mwi_tutorial_install.md`](docs/mwi_tutorial_install.md) — step-by-step installation walkthrough.
 *   [`docs/mwi_tutorial_crawl.md`](docs/mwi_tutorial_crawl.md) — corpus-building tutorial on a French-language case study.
 
@@ -235,16 +235,16 @@ uv run python -m nltk.downloader punkt punkt_tab
 
 **Interactive configuration wizards**
 - `scripts/install-docker-compose.py` — writes `.env` for Compose (timezone, host data path ↔ `/app/data`, Playwright/ML build flags, SerpAPI/SEO Rank/OpenRouter keys, embeddings/NLI defaults). Run `python scripts/install-docker-compose.py [--level basic|api|llm] [--output .env]`.
-- `scripts/install-basic.py` — generates a minimal `settings.py` (storage path, network timeouts, concurrency, user agent, dynamic media, media analysis, default heuristics). Run `python scripts/install-basic.py [--output settings.py]`.
-- `scripts/install-api.py` — records SerpAPI, SEO Rank, and OpenRouter credentials into `settings.py` (with env-var fallbacks). Run `python scripts/install-api.py [--output settings.py]`.
-- `scripts/install-llm.py` — configures embeddings provider, NLI models/backends, retry and batching parameters after checking ML dependencies. Run `python scripts/install-llm.py [--output settings.py]`.
+- `scripts/install-basic.py` — generates a minimal `settings.py` (storage path, network timeouts, concurrency, user agent, dynamic media, media analysis, default heuristics). Run `uv run python scripts/install-basic.py [--output settings.py]`.
+- `scripts/install-api.py` — records SerpAPI, SEO Rank, and OpenRouter credentials into `settings.py` (with env-var fallbacks). Run `uv run python scripts/install-api.py [--output settings.py]`.
+- `scripts/install-llm.py` — configures embeddings provider, NLI models/backends, retry and batching parameters after checking ML dependencies. Run `uv run python scripts/install-llm.py [--output settings.py]`.
 
 **Diagnostics & recovery**
-- `scripts/test-apis.py` — validates configured API keys; supports `--serpapi`, `--seorank`, `--openrouter`, or `--all` (add `-v` for verbose). Run `python scripts/test-apis.py ...`.
+- `scripts/test-apis.py` — validates configured API keys; supports `--serpapi`, `--seorank`, `--openrouter`, or `--all` (add `-v` for verbose). Run `uv run python scripts/test-apis.py ...`.
 - `scripts/sqlite_recover.sh` — non-destructive SQLite repair helper (see [SQLite Recovery](#sqlite-recovery)). Run `scripts/sqlite_recover.sh [INPUT_DB] [OUTPUT_DB]`.
 
 **Utilities**
-- `scripts/install-nltk.py` — downloads the `punkt` and `punkt_tab` tokenizers required by NLTK. Run `python scripts/install-nltk.py`.
+- `scripts/install-nltk.py` — downloads the `punkt` and `punkt_tab` tokenizers required by NLTK. Run `uv run python scripts/install-nltk.py`.
 - `scripts/crawl_robuste.sh` — sample retry loop around `land crawl`; edit the land name/limits before running. Execute with `bash scripts/crawl_robuste.sh`.
 - `scripts/install_utils.py` — shared helper library for the interactive installers (not executable on its own).
 
@@ -260,7 +260,13 @@ uv run python -m nltk.downloader punkt punkt_tab
     like `mywi.py land crawl ... && mywi.py land export ...` carried on after a
     step that had failed. If a script of yours relied on that, it will now stop
     where it should have stopped all along.
-*   Commands are run using `python mywi.py ...`.
+*   **Every command below is written for the local uv install** (the recommended
+    one): `uv run python mywi.py ...`, run from the repository root. `uv run`
+    executes inside the project's `.venv` — nothing to activate, and the
+    environment is re-synced on the fly.
+*   **Inside the Docker container, drop the `uv run ` prefix** and type
+    `python mywi.py ...`: the image already puts its environment on the `PATH`.
+    The same goes for a manually activated venv (pip fallback).
 *   If using Docker, first execute `docker exec -it mwi bash` to enter the container. The prompt might be `root@<container_id>:/app#` or similar.
 
 ```bash
@@ -272,12 +278,14 @@ docker compose exec mwi bash
 docker exec -it mwi bash
 #  >>> Prompt typically looks like root@<container_id>:/app#
 
-# Then run any application command
+# Then run any application command — without `uv run`
+python mywi.py land list
 ```
 
-*   If using a local development setup, ensure your virtual environment is activated (e.g., `(venv)` prefix in your prompt).
 *   Arguments like `LAND_NAME` or `TERMS` are placeholders; replace them with your actual values.
-*   The tutorial notebook (`docs/mwi_tutorial.ipynb`) additionally requires `pip install pandas jupyter` — these are intentionally **not** in `requirements.txt` (notebook-only dependencies).
+*   The tutorial notebook (`docs/mwi_tutorial.ipynb`) additionally needs `jupyter` and `pandas` — intentionally **not** project dependencies (notebook-only). Let uv provide them for the session only: `uv run --with jupyter --with pandas jupyter lab docs/mwi_tutorial.ipynb`.
+
+If you prefer an activated venv to the `uv run` prefix:
 
 ```bash
 # macOS / Linux
@@ -289,7 +297,7 @@ source .venv/bin/activate
 # Windows Command Prompt (cmd.exe)
 .\.venv\Scripts\activate.bat
 
-# Then run any application command
+# Then run any application command, without `uv run`
 python mywi.py land list
 ```
 
@@ -304,7 +312,7 @@ A "Land" is a central concept in MyWI, representing a specific research area or 
 Create a new land (research topic/project).
 
 ```bash
-python mywi.py land create --name="MyResearchTopic" --desc="A description of this research topic"
+uv run python mywi.py land create --name="MyResearchTopic" --desc="A description of this research topic"
 ```
 
 | Option      | Type   | Required | Default | Description                                 |
@@ -316,10 +324,10 @@ python mywi.py land create --name="MyResearchTopic" --desc="A description of thi
 
 **Example:**
 ```bash
-python mywi.py land create --name="AsthmaResearch" --desc="Research on asthma and air quality" --lang="en"
+uv run python mywi.py land create --name="AsthmaResearch" --desc="Research on asthma and air quality" --lang="en"
 
 # Land that stores the full HTML of every crawled page by default
-python mywi.py land create --name="AsthmaArchive" --desc="HTML archive" --fullhtml=TRUE
+uv run python mywi.py land create --name="AsthmaArchive" --desc="HTML archive" --fullhtml=TRUE
 ```
 
 ---
@@ -330,11 +338,11 @@ List all lands or show properties of a specific land.
 
 - List all lands:
   ```bash
-  python mywi.py land list
+  uv run python mywi.py land list
   ```
 - Show details for a specific land:
   ```bash
-  python mywi.py land list --name="MyResearchTopic"
+  uv run python mywi.py land list --name="MyResearchTopic"
   ```
 
 | Option   | Type | Required | Default | Description                      |
@@ -361,7 +369,7 @@ The detailed view shows, for each land:
 Add keywords or phrases to a land.
 
 ```bash
-python mywi.py land addterm --land="MyResearchTopic" --terms="keyword1, keyword2, related phrase"
+uv run python mywi.py land addterm --land="MyResearchTopic" --terms="keyword1, keyword2, related phrase"
 ```
 
 | Option   | Type | Required | Default | Description                                 |
@@ -377,11 +385,11 @@ Add URLs to a land, either directly or from a file.
 
 - Directly:
   ```bash
-  python mywi.py land addurl --land="MyResearchTopic" --urls="https://example.com/page1, https://anothersite.org/article"
+  uv run python mywi.py land addurl --land="MyResearchTopic" --urls="https://example.com/page1, https://anothersite.org/article"
   ```
 - From a file (one URL per line):
   ```bash
-  python mywi.py land addurl --land="MyResearchTopic" --path="/path/to/your/url_list.txt"
+  uv run python mywi.py land addurl --land="MyResearchTopic" --path="/path/to/your/url_list.txt"
   ```
   *(If using Docker, ensure this file is accessible within the container, e.g., in your mounted data volume.)*
 
@@ -400,7 +408,7 @@ new URLs are inserted; existing entries keep their data but receive a title if
 one was returned by the API.
 
 ```bash
-python mywi.py land urlist --name="MyResearchTopic" --query="(gilets jaunes) OR (manifestation)" \
+uv run python mywi.py land urlist --name="MyResearchTopic" --query="(gilets jaunes) OR (manifestation)" \
   --datestart=2023-01-01 --dateend=2023-03-31 --timestep=week
 ```
 
@@ -441,12 +449,12 @@ cd docker/searxng && docker compose up -d
 cd ../..
 
 # 2. Verify which providers are configured.
-python mywi.py search check
+uv run python mywi.py search check
 # searxng yes / brave no / serper no / serpapi no / tavily no
 
 # 3. Run a search and seed a Land.
-python mywi.py land create --name=DemoSearch --desc="search router demo"
-python mywi.py search run --land=DemoSearch \
+uv run python mywi.py land create --name=DemoSearch --desc="search router demo"
+uv run python mywi.py search run --land=DemoSearch \
                           --query="humanités numériques" \
                           --limit=20 --strategy=fallback
 ```
@@ -455,14 +463,14 @@ python mywi.py search run --land=DemoSearch \
 
 | Command | Description |
 |---------|-------------|
-| `python mywi.py search check` | Per-provider configured/unconfigured table |
-| `python mywi.py search run --land=X --query=… [--limit=20] [--strategy=fallback\|parallel] [--language=fr] [--providers=searxng,brave]` | **`--limit` caps results PER PROVIDER**, not in total: with `--strategy=parallel` and two providers you can get up to `limit x providers` distinct URLs (the merged list is never truncated — truncating it would throw away the triangulation `parallel` exists for). With `fallback` you get at most `limit`, from the first provider that answers. `SearchQuery.num_requested` therefore stores a per-provider figure. | Execute search, dedup URLs **after URL normalisation** (tracker/parameter-order/Wayback variants of one page are merged into a single result: providers concatenated, best rank kept, title and snippet backfilled), insert Expressions in the Land |
-| `python mywi.py search list --land=X` | List past `SearchQuery` rows for a Land |
-| `python mywi.py search usage --land=X` | Aggregate per-provider usage report (calls, errors, status, quota) |
+| `uv run python mywi.py search check` | Per-provider configured/unconfigured table |
+| `uv run python mywi.py search run --land=X --query=… [--limit=20] [--strategy=fallback\|parallel] [--language=fr] [--providers=searxng,brave]` | Execute search, dedup URLs **after URL normalisation** (tracker/parameter-order/Wayback variants of one page are merged into a single result: providers concatenated, best rank kept, title and snippet backfilled), insert Expressions in the Land. **`--limit` caps results PER PROVIDER**, not in total: with `--strategy=parallel` and two providers you can get up to `limit x providers` distinct URLs (the merged list is never truncated — truncating it would throw away the triangulation `parallel` exists for). With `fallback` you get at most `limit`, from the first provider that answers. `SearchQuery.num_requested` therefore stores a per-provider figure. |
+| `uv run python mywi.py search list --land=X` | List past `SearchQuery` rows for a Land |
+| `uv run python mywi.py search usage --land=X` | Aggregate per-provider usage report (calls, errors, status, quota) |
 
 #### Configuration
 
-Add the keys you have to `settings.py`. The dot-env file is read by **Docker Compose only** — there is no dotenv loader in `mwi/`, so a key placed there is invisible to a local `python mywi.py` run:
+Add the keys you have to `settings.py`. The dot-env file is read by **Docker Compose only** — there is no dotenv loader in `mwi/`, so a key placed there is invisible to a local `uv run python mywi.py` run:
 
 ```bash
 SEARXNG_BASE_URL=http://localhost:8888  # default
@@ -490,11 +498,11 @@ Delete an entire land or only expressions below a relevance threshold.
 
 - Delete an entire land:
   ```bash
-  python mywi.py land delete --name="MyResearchTopic"
+  uv run python mywi.py land delete --name="MyResearchTopic"
   ```
 - Delete expressions with relevance lower than a specific value:
   ```bash
-  python mywi.py land delete --name="MyResearchTopic" --maxrel=MAXIMUM_RELEVANCE
+  uv run python mywi.py land delete --name="MyResearchTopic" --maxrel=MAXIMUM_RELEVANCE
   # e.g., --maxrel=1 drops the relevance-0 pages
   ```
   `--maxrel` is an **integer** and the comparison is **strict**
@@ -514,9 +522,9 @@ Delete an entire land or only expressions below a relevance threshold.
 - Delete low-relevance pages **and** the uncrawled links they orphaned:
   ```bash
   # Preview first (counts orphans, deletes nothing)
-  python mywi.py land delete --name="MyResearchTopic" --maxrel=1 --prune-orphans --dry-run
+  uv run python mywi.py land delete --name="MyResearchTopic" --maxrel=1 --prune-orphans --dry-run
   # Then apply
-  python mywi.py land delete --name="MyResearchTopic" --maxrel=1 --prune-orphans
+  uv run python mywi.py land delete --name="MyResearchTopic" --maxrel=1 --prune-orphans
   ```
   Deleting relevance-0 pages removes their outgoing links; the uncrawled URLs they
   had discovered can be left with no incoming link at all. `--prune-orphans` deletes
@@ -540,11 +548,11 @@ language(s) declared on the land (`--lang`), not just French.
 
 ```bash
 # Single-language English land
-python mywi.py land create --name="EnglishTopic" --desc="..." --lang=en
+uv run python mywi.py land create --name="EnglishTopic" --desc="..." --lang=en
 
 # Multilingual land: one lemma per language for every term (union matching)
-python mywi.py land create --name="BilingualTopic" --desc="..." --lang=fr,en
-python mywi.py land addterm --land="BilingualTopic" --terms="work, policy"
+uv run python mywi.py land create --name="BilingualTopic" --desc="..." --lang=fr,en
+uv run python mywi.py land addterm --land="BilingualTopic" --terms="work, policy"
 ```
 
 Key facts:
@@ -563,8 +571,8 @@ Key facts:
   with the French stemmer. Fix them with:
 
   ```bash
-  python mywi.py db migrate                      # adds word.lang (migration 011)
-  python mywi.py land relemm --name="EnglishTopic"  # re-stems terms + recomputes relevance
+  uv run python mywi.py db migrate                      # adds word.lang (migration 011)
+  uv run python mywi.py land relemm --name="EnglishTopic"  # re-stems terms + recomputes relevance
   ```
 
 
@@ -575,7 +583,7 @@ Key facts:
 Crawl the URLs added to a land to fetch their content.
 
 ```bash
-python mywi.py land crawl --name="MyResearchTopic" [--limit=NUMBER] [--http=HTTP_STATUS_CODE] [--retry-status=CSV]
+uv run python mywi.py land crawl --name="MyResearchTopic" [--limit=NUMBER] [--http=HTTP_STATUS_CODE] [--retry-status=CSV]
 ```
 
 | Option         | Type   | Required | Default        | Description                                                                 |
@@ -590,14 +598,14 @@ python mywi.py land crawl --name="MyResearchTopic" [--limit=NUMBER] [--http=HTTP
 
 **Examples:**
 ```bash
-python mywi.py land crawl --name="AsthmaResearch"
-python mywi.py land crawl --name="AsthmaResearch" --limit=10
-python mywi.py land crawl --name="AsthmaResearch" --http=503
-python mywi.py land crawl --name="AsthmaResearch" --depth=2
-python mywi.py land crawl --name="AsthmaResearch" --depth=1 --limit=5
-python mywi.py land crawl --name="AsthmaResearch" --fullhtml=TRUE   # archive the raw HTML
-python mywi.py land crawl --name="AsthmaResearch" --retry-status=403,429   # backfill cascade
-python mywi.py land crawl --name="AsthmaResearch" --issuecrawl     # controversy-analysis gate
+uv run python mywi.py land crawl --name="AsthmaResearch"
+uv run python mywi.py land crawl --name="AsthmaResearch" --limit=10
+uv run python mywi.py land crawl --name="AsthmaResearch" --http=503
+uv run python mywi.py land crawl --name="AsthmaResearch" --depth=2
+uv run python mywi.py land crawl --name="AsthmaResearch" --depth=1 --limit=5
+uv run python mywi.py land crawl --name="AsthmaResearch" --fullhtml=TRUE   # archive the raw HTML
+uv run python mywi.py land crawl --name="AsthmaResearch" --retry-status=403,429   # backfill cascade
+uv run python mywi.py land crawl --name="AsthmaResearch" --issuecrawl     # controversy-analysis gate
 ```
 
 > **Controversy-analysis mode (`--issuecrawl`)** — when the OpenRouter gate is
@@ -614,7 +622,7 @@ python mywi.py land crawl --name="AsthmaResearch" --issuecrawl     # controversy
 > back to `curl_cffi` (TLS impersonation, ON by default), then optionally
 > Playwright (`crawl_fallback_playwright=True` to enable, ~3-5 s/page),
 > then archive.org. The strategy that finally provided the HTML is recorded
-> in `expression.fetch_method` (visible in `python mywi.py land list`).
+> in `expression.fetch_method` (visible in `uv run python mywi.py land list`).
 > Use `--retry-status=403,429` to re-run the cascade on previously crawled
 > URLs without resetting their `fetched_at`. Configuration block:
 > `crawl_fallback_*` keys in `settings-example.py`.
@@ -639,7 +647,7 @@ python mywi.py land crawl --name="AsthmaResearch" --issuecrawl     # controversy
 > Storage size is capped at `settings.fullhtml_max_size_kb`
 > (default 5 MB per page) to protect the SQLite WAL cache from
 > pathological pages; set the cap to `0` to disable. Audit the
-> archive size at any time with `python mywi.py land list --name=X`
+> archive size at any time with `uv run python mywi.py land list --name=X`
 > (line `Full HTML: policy=ON — N stored (X.Y MB)`) or directly
 > in SQL:
 > ```sql
@@ -652,7 +660,7 @@ python mywi.py land crawl --name="AsthmaResearch" --issuecrawl     # controversy
 
 > **Tip (Bash)** — Running multiple small batches can be faster than a single huge crawl. On macOS/Linux you can loop the crawler in one line:
 > ```bash
-> for i in {1..100}; do python mywi.py land crawl --name="melenchon" --depth=0 --limit=100; done
+> for i in {1..100}; do uv run python mywi.py land crawl --name="melenchon" --depth=0 --limit=100; done
 > ```
 > The loop is a **throughput** option, not a completeness one. Until
 > 2026-09 it was silently load-bearing: batching used `OFFSET` over a
@@ -694,7 +702,7 @@ sudo npm install -g @postlight/mercury-parser
 
 **Command:**
 ```bash
-python mywi.py land readable --name="MyResearchTopic" [--limit=NUMBER] [--depth=NUMBER] [--merge=STRATEGY] [--llm=true|false] [--issuecrawl]
+uv run python mywi.py land readable --name="MyResearchTopic" [--limit=NUMBER] [--depth=NUMBER] [--merge=STRATEGY] [--llm=true|false] [--issuecrawl]
 ```
 
 | Option   | Type   | Required | Default | Description                                         |
@@ -735,25 +743,25 @@ python mywi.py land readable --name="MyResearchTopic" [--limit=NUMBER] [--depth=
 **Examples:**
 ```bash
 # Basic extraction with smart merge (default)
-python mywi.py land readable --name="AsthmaResearch"
+uv run python mywi.py land readable --name="AsthmaResearch"
 
 # Process only first 50 pages with depth limit
-python mywi.py land readable --name="AsthmaResearch" --limit=50 --depth=2
+uv run python mywi.py land readable --name="AsthmaResearch" --limit=50 --depth=2
 
 # Mercury priority strategy (overwrites existing data)
-python mywi.py land readable --name="AsthmaResearch" --merge=mercury_priority
+uv run python mywi.py land readable --name="AsthmaResearch" --merge=mercury_priority
 
 # Conservative strategy (only fills empty fields)
-python mywi.py land readable --name="AsthmaResearch" --merge=preserve_existing
+uv run python mywi.py land readable --name="AsthmaResearch" --merge=preserve_existing
 
 # Advanced: Limited processing with specific strategy
-python mywi.py land readable --name="AsthmaResearch" --limit=100 --depth=1 --merge=smart_merge
+uv run python mywi.py land readable --name="AsthmaResearch" --limit=100 --depth=1 --merge=smart_merge
 
 # Trigger OpenRouter validation (requires OpenRouter configuration)
-python mywi.py land readable --name="AsthmaResearch" --llm=true
+uv run python mywi.py land readable --name="AsthmaResearch" --llm=true
 
 # Validate in controversy-analysis mode (issue mode) for this run
-python mywi.py land readable --name="AsthmaResearch" --llm=true --issuecrawl
+uv run python mywi.py land readable --name="AsthmaResearch" --llm=true --issuecrawl
 ```
 
 **Output:** The pipeline provides detailed statistics including:
@@ -777,7 +785,7 @@ Fetch SEO Rank metrics for each expression and store the raw JSON payload in the
 
 **Command:**
 ```bash
-python mywi.py land seorank --name="MyResearchTopic" [--limit=NUMBER] [--depth=NUMBER] [--force]
+uv run python mywi.py land seorank --name="MyResearchTopic" [--limit=NUMBER] [--depth=NUMBER] [--force]
 ```
 
 | Option   | Type    | Required | Default | Description |
@@ -801,10 +809,10 @@ python mywi.py land seorank --name="MyResearchTopic" [--limit=NUMBER] [--depth=N
 **Example:**
 ```bash
 # Enrich the first 100 seed URLs (depth 0) for the "AsthmaResearch" land
-python mywi.py land seorank --name="AsthmaResearch" --depth=0 --limit=100
+uv run python mywi.py land seorank --name="AsthmaResearch" --depth=0 --limit=100
 
 # Refresh every stored payload, regardless of current values
-python mywi.py land seorank --name="AsthmaResearch" --force
+uv run python mywi.py land seorank --name="AsthmaResearch" --force
 ```
 
 **Tip:** Once data is stored you can inspect it directly via SQLite (`SELECT seorank FROM expression WHERE id=…`) or load it in Python with `json.loads` for downstream analysis.
@@ -828,7 +836,7 @@ python mywi.py land seorank --name="AsthmaResearch" --force
 Analyze media files (images, videos, audio) associated with expressions in a land. This command will fetch media, analyze its properties, and store the results in the database.
 
 ```bash
-python mywi.py land medianalyse --name=LAND_NAME [--depth=DEPTH] [--minrel=MIN_RELEVANCE]
+uv run python mywi.py land medianalyse --name=LAND_NAME [--depth=DEPTH] [--minrel=MIN_RELEVANCE]
 ```
 
 | Option | Type | Required | Default | Description |
@@ -839,7 +847,7 @@ python mywi.py land medianalyse --name=LAND_NAME [--depth=DEPTH] [--minrel=MIN_R
 
 **Example:**
 ```bash
-python mywi.py land medianalyse --name="AsthmaResearch" --depth=2 --minrel=0.5
+uv run python mywi.py land medianalyse --name="AsthmaResearch" --depth=2 --minrel=0.5
 ```
 
 **Notes:**
@@ -847,7 +855,7 @@ python mywi.py land medianalyse --name="AsthmaResearch" --depth=2 --minrel=0.5
 - Configuration for media analysis (e.g., `media_min_width`, `media_max_file_size`) can be found in `settings.py`.
 - The results, including dimensions, file size, format, dominant colors, EXIF data, and hashes, are stored in the database.
 - **Two fingerprints, two questions.** `image_hash` is a SHA-256 of the downloaded bytes and answers *"is this the same FILE?"* — re-encode a PNG at another compression level and the hash is unrelated. `perceptual_hash` is a 64-bit dHash and answers *"is this the same IMAGE?"* — a photo reprinted by another outlet after a recompression or a resize keeps a close fingerprint, which is how you measure image circulation across a corpus. Until 2026-09 only the first existed, under a comment and a documentation that called it "perceptual".
-- **`perceptual_hash` is NULL on everything analysed before migration 016.** It cannot be backfilled from the database — the bytes are not stored. Run `python mywi.py db migrate`, then `python mywi.py land reanalyze --name=LAND` to fill it. That re-downloads one file per media, so go in steps with `--limit` on a large land.
+- **`perceptual_hash` is NULL on everything analysed before migration 016.** It cannot be backfilled from the database — the bytes are not stored. Run `uv run python mywi.py db migrate`, then `uv run python mywi.py land reanalyze --name=LAND` to fill it. That re-downloads one file per media, so go in steps with `--limit` on a large land.
 - **Your measurements survive `land consolidate`.** Since 2026-09 consolidation reconciles media rows by URL instead of deleting and recreating them, so analysed media keep their `id` and their enrichment columns.
 - `land readable` (Mercury) sees **markdown images only**. Video, audio and HTML `<img>` media discovered by the crawl are still dropped on that path — this predates the reconciliation work and is unchanged. Run `land consolidate` after `land readable` if you need them back.
 
@@ -855,14 +863,14 @@ python mywi.py land medianalyse --name="AsthmaResearch" --depth=2 --minrel=0.5
 
 ```bash
 # Aggregate statistics: totals, formats, dimension/size buckets, duplicates by hash
-python mywi.py land media_stats --name=LAND_NAME [--near=5]
+uv run python mywi.py land media_stats --name=LAND_NAME [--near=5]
 
 # Pure dry-run: count + up to 20 example URLs of non-conforming media (deletes nothing)
-python mywi.py land preview_deletion --name=LAND_NAME [--minwidth=N] [--minheight=N] [--maxsize=MB]
+uv run python mywi.py land preview_deletion --name=LAND_NAME [--minwidth=N] [--minheight=N] [--maxsize=MB]
 
 # Re-analyze media (never-analyzed / errored first);
 # --suppress deletes non-conforming media AFTER confirmation
-python mywi.py land reanalyze --name=LAND_NAME [--limit=N] [--minwidth=N] [--minheight=N] [--maxsize=MB] [--suppress]
+uv run python mywi.py land reanalyze --name=LAND_NAME [--limit=N] [--minwidth=N] [--minheight=N] [--maxsize=MB] [--suppress]
 ```
 
 Criteria defaults come from `settings.media_min_width`, `media_min_height`
@@ -875,7 +883,7 @@ and `media_max_file_size`.
 Get information from domains that were identified from expressions added to lands.
 
 ```bash
-python mywi.py domain crawl [--limit=NUMBER] [--http=HTTP_STATUS_CODE]
+uv run python mywi.py domain crawl [--limit=NUMBER] [--http=HTTP_STATUS_CODE]
 ```
 
 | Option   | Type   | Required | Default | Description                                                                 |
@@ -885,10 +893,10 @@ python mywi.py domain crawl [--limit=NUMBER] [--http=HTTP_STATUS_CODE]
 
 **Examples:**
 ```bash
-python mywi.py domain crawl
-python mywi.py domain crawl --limit=5
-python mywi.py domain crawl --http=404
-python mywi.py domain crawl --http=ERR   # retry every failed domain
+uv run python mywi.py domain crawl
+uv run python mywi.py domain crawl --limit=5
+uv run python mywi.py domain crawl --http=404
+uv run python mywi.py domain crawl --http=ERR   # retry every failed domain
 ```
 
 ---
@@ -905,7 +913,7 @@ Export data from a land in various formats.
 
 
 ```bash
-python mywi.py land export --name="MyResearchTopic" --type=EXPORT_TYPE [--minrel=MINIMUM_RELEVANCE]
+uv run python mywi.py land export --name="MyResearchTopic" --type=EXPORT_TYPE [--minrel=MINIMUM_RELEVANCE]
 ```
 
 | Option   | Type   | Required | Default | Description                                                                 |
@@ -942,15 +950,15 @@ python mywi.py land export --name="MyResearchTopic" --type=EXPORT_TYPE [--minrel
 
 **Examples:**
 ```bash
-python mywi.py land export --name="AsthmaResearch" --type=pagecsv
-python mywi.py land export --name="AsthmaResearch" --type=corpus --minrel=0.7
-python mywi.py land export --name="AsthmaResearch" --type=pseudolinks
-python mywi.py land export --name="AsthmaResearch" --type=pseudolinkspage
-python mywi.py land export --name="AsthmaResearch" --type=pseudolinksdomain
-python mywi.py land export --name="AsthmaResearch" --type=nodelinkcsv --minrel=1
-python mywi.py land export --name="AsthmaResearch" --type=nodelinkcsv --fullhtml=TRUE --minrel=1  # raw network only (omit flag for base 4)
-python mywi.py land export --name="AsthmaResearch" --type=nodelinkcsv --link-profile=all  # keep every link kind
-python mywi.py land export --name="AsthmaResearch" --type=nodelinkcsv --minrel=1 --resolve-twins=TRUE  # re-attach links stored on URL twins
+uv run python mywi.py land export --name="AsthmaResearch" --type=pagecsv
+uv run python mywi.py land export --name="AsthmaResearch" --type=corpus --minrel=0.7
+uv run python mywi.py land export --name="AsthmaResearch" --type=pseudolinks
+uv run python mywi.py land export --name="AsthmaResearch" --type=pseudolinkspage
+uv run python mywi.py land export --name="AsthmaResearch" --type=pseudolinksdomain
+uv run python mywi.py land export --name="AsthmaResearch" --type=nodelinkcsv --minrel=1
+uv run python mywi.py land export --name="AsthmaResearch" --type=nodelinkcsv --fullhtml=TRUE --minrel=1  # raw network only (omit flag for base 4)
+uv run python mywi.py land export --name="AsthmaResearch" --type=nodelinkcsv --link-profile=all  # keep every link kind
+uv run python mywi.py land export --name="AsthmaResearch" --type=nodelinkcsv --minrel=1 --resolve-twins=TRUE  # re-attach links stored on URL twins
 ```
 
 #### Link profiles (`--link-profile`)
@@ -1014,14 +1022,14 @@ residual `weightbody = 0` edge with `citation = 1` is the signature of an
 unresolved twin; with the option there should be none.
 
 ```bash
-python mywi.py land export --name="AsthmaResearch" --type=nodelinkcsv --minrel=1 --resolve-twins=TRUE
-python mywi.py land export --name="AsthmaResearch" --type=nodelinkcsv --minrel=1 --fullhtml=TRUE --resolve-twins=TRUE
+uv run python mywi.py land export --name="AsthmaResearch" --type=nodelinkcsv --minrel=1 --resolve-twins=TRUE
+uv run python mywi.py land export --name="AsthmaResearch" --type=nodelinkcsv --minrel=1 --fullhtml=TRUE --resolve-twins=TRUE
 ```
 
 ```bash
-python mywi.py land export --name="AsthmaResearch" --type=nodesjson --minrel=1  # domain force-graph JSON
-python mywi.py land export --name="AsthmaResearch" --type=pagesjson --minrel=1  # page force-graph JSON
-python mywi.py land export --name="AsthmaArchive"  --type=htmldump --minrel=1
+uv run python mywi.py land export --name="AsthmaResearch" --type=nodesjson --minrel=1  # domain force-graph JSON
+uv run python mywi.py land export --name="AsthmaResearch" --type=pagesjson --minrel=1  # page force-graph JSON
+uv run python mywi.py land export --name="AsthmaArchive"  --type=htmldump --minrel=1
 ```
 
 ---
@@ -1031,7 +1039,7 @@ python mywi.py land export --name="AsthmaArchive"  --type=htmldump --minrel=1
 Export tag-based data for a land.
 
 ```bash
-python mywi.py tag export --name="MyResearchTopic" --type=EXPORT_TYPE [--minrel=MINIMUM_RELEVANCE]
+uv run python mywi.py tag export --name="MyResearchTopic" --type=EXPORT_TYPE [--minrel=MINIMUM_RELEVANCE]
 ```
 
 | Option   | Type   | Required | Default | Description                                                                 |
@@ -1046,8 +1054,8 @@ python mywi.py tag export --name="MyResearchTopic" --type=EXPORT_TYPE [--minrel=
 
 **Examples:**
 ```bash
-python mywi.py tag export --name="AsthmaResearch" --type=matrix
-python mywi.py tag export --name="AsthmaResearch" --type=content --minrel=0.5
+uv run python mywi.py tag export --name="AsthmaResearch" --type=matrix
+uv run python mywi.py tag export --name="AsthmaResearch" --type=content --minrel=0.5
 ```
 
 ---
@@ -1063,16 +1071,16 @@ other host keeps its bare netloc.
 
 ```bash
 # URL rules over listed platforms (safe — never a global re-baseline)
-python mywi.py heuristic update --land=LAND
+uv run python mywi.py heuristic update --land=LAND
 
 # Preview without writing
-python mywi.py heuristic update --land=LAND --dry-run
+uv run python mywi.py heuristic update --land=LAND --dry-run
 
 # Resolve listed platforms from the page HTML (per-platform declarative signal)
-python mywi.py heuristic update --land=LAND --html
+uv run python mywi.py heuristic update --land=LAND --html
 
 # Non-fullhtml land: fetch missing HTML on the fly (--limit is required)
-python mywi.py heuristic update --land=LAND --html --fetch-missing --limit=500
+uv run python mywi.py heuristic update --land=LAND --html --fetch-missing --limit=500
 ```
 
 Options:
@@ -1096,8 +1104,8 @@ older heuristic state), use the standalone reconstruction tool — dry-run by
 default, `--apply` to write, chunked and URL-only (no network):
 
 ```bash
-python scripts/reconstruct_domains.py --name=LAND --db=data/mwi_x.db
-python scripts/reconstruct_domains.py --name=LAND --db=data/mwi_x.db --apply
+uv run python scripts/reconstruct_domains.py --name=LAND --db=data/mwi_x.db
+uv run python scripts/reconstruct_domains.py --name=LAND --db=data/mwi_x.db --apply
 ```
 
 ## Land Consolidation Pipeline
@@ -1118,7 +1126,7 @@ The `land consolidate` pipeline is designed to re-compute and repair the interna
 
 **Command:**
 ```bash
-python mywi.py land consolidate --name=LAND_NAME [--limit=LIMIT] [--depth=NbDEEP] [--minrel=MIN_RELEVANCE] [--llm=true|false] [--issuecrawl]
+uv run python mywi.py land consolidate --name=LAND_NAME [--limit=LIMIT] [--depth=NbDEEP] [--minrel=MIN_RELEVANCE] [--llm=true|false] [--issuecrawl]
 ```
 - `--name` (required): Name of the land to consolidate.
 - `--limit` (optional): Maximum number of pages to process.
@@ -1129,13 +1137,13 @@ python mywi.py land consolidate --name=LAND_NAME [--limit=LIMIT] [--depth=NbDEEP
 
 **Example:**
 ```bash
-python mywi.py land consolidate --name="AsthmaResearch" --depth=0
+uv run python mywi.py land consolidate --name="AsthmaResearch" --depth=0
 
 # Re-validate with the LLM gate while consolidating
-python mywi.py land consolidate --name="AsthmaResearch" --llm=true --limit=200
+uv run python mywi.py land consolidate --name="AsthmaResearch" --llm=true --limit=200
 
 # Same, in controversy-analysis mode
-python mywi.py land consolidate --name="AsthmaResearch" --llm=true --issuecrawl
+uv run python mywi.py land consolidate --name="AsthmaResearch" --llm=true --issuecrawl
 ```
 
 **Notes:**
@@ -1177,16 +1185,16 @@ brought up to date with:
 sqlite3 data/mwi.db ".backup data/mwi.db.bak_$(date +%Y%m%d_%H%M%S)"
 
 # Preview (no DB writes)
-python mywi.py land normalize --name=LAND_NAME --dry-run --verbose
+uv run python mywi.py land normalize --name=LAND_NAME --dry-run --verbose
 
 # Apply
-python mywi.py land normalize --name=LAND_NAME
+uv run python mywi.py land normalize --name=LAND_NAME
 
 # Apply + clear http_status so renamed URLs get re-crawled next time
-python mywi.py land normalize --name=LAND_NAME --reset-status
+uv run python mywi.py land normalize --name=LAND_NAME --reset-status
 
 # Export the old_id -> new_id mapping (also produced in --dry-run)
-python mywi.py land normalize --name=LAND_NAME --dry-run --mapping-out=plan.csv
+uv run python mywi.py land normalize --name=LAND_NAME --dry-run --mapping-out=plan.csv
 ```
 
 **What `land normalize` does** — Expressions are planned by canonical-URL
@@ -1212,7 +1220,7 @@ group (every variant converging on the same target belongs to one group):
   `Paragraph` / embeddings / similarities come back with `embedding generate`
   then `embedding similarity`; **`TaggedContent` does not come back at all**.
   Tagged snippets are manual annotations — nothing can recompute them. **Export
-  them before normalising**: `python mywi.py tag export --name=LAND
+  them before normalising**: `uv run python mywi.py tag export --name=LAND
   --type=content`. (This page claimed consolidation rebuilt all three until
   2026-09; it never touched Paragraph or TaggedContent.)
 - Wayback-of-Wayback chains are resolved transitively in one pass.
@@ -1238,15 +1246,15 @@ export MWI_URL_STRIP_WWW=true
 # and edit settings.py: "trailing_slash": "strip"  (no env override)
 
 # 3. Audit, then apply (interruptible, re-runnable, converges)
-python mywi.py land normalize --name=LAND_NAME --dry-run --verbose
-python mywi.py land normalize --name=LAND_NAME
+uv run python mywi.py land normalize --name=LAND_NAME --dry-run --verbose
+uv run python mywi.py land normalize --name=LAND_NAME
 
 # 4. Verify: a second dry-run reports 0 changes, and
 #    SELECT url, COUNT(*) FROM expression WHERE land_id=? GROUP BY url
 #    HAVING COUNT(*)>1;  returns no row
 
 # 5. Recompute relevance and rebuild links/media from the merged readables
-python mywi.py land consolidate --name=LAND_NAME
+uv run python mywi.py land consolidate --name=LAND_NAME
 ```
 
 Legacy exact duplicates (several rows already sharing the same canonical
@@ -1268,12 +1276,12 @@ Useful for parallel projects, backups, or files received from collaborators
 that aren't named `mwi.db`:
 
 ```bash
-python mywi.py land normalize --name=foo --db /path/to/projectA.db --dry-run
-python mywi.py db migrate --db ./backups/melenchon_v2.db
-python mywi.py land export --name=bar --db /tmp/incoming.db --type=pagecsv
+uv run python mywi.py land normalize --name=foo --db /path/to/projectA.db --dry-run
+uv run python mywi.py db migrate --db ./backups/melenchon_v2.db
+uv run python mywi.py land export --name=bar --db /tmp/incoming.db --type=pagecsv
 ```
 
-Alternative without code change: `MYWI_DATA_DIR=/some/dir python mywi.py …`
+Alternative without code change: `MYWI_DATA_DIR=/some/dir uv run python mywi.py …`
 (the file must then be named `mwi.db` inside that directory).
 
 ---
@@ -1413,44 +1421,44 @@ Typical flow
 ## Commands & Parameters
 - Generate embeddings:
   ```bash
-  python mywi.py embedding generate --name=LAND [--limit N]
+  uv run python mywi.py embedding generate --name=LAND [--limit N]
   ```
 - Compute similarities (pick one):
   - Cosine (exact):
     ```bash
-    python mywi.py embedding similarity --name=LAND --method=cosine \
+    uv run python mywi.py embedding similarity --name=LAND --method=cosine \
       --threshold=0.85 [--minrel R]
     ```
   - Cosine LSH (approximate):
     ```bash
-    python mywi.py embedding similarity --name=LAND --method=cosine_lsh \
+    uv run python mywi.py embedding similarity --name=LAND --method=cosine_lsh \
       --lshbits=20 --topk=15 --threshold=0.85 [--minrel R] [--maxpairs M]
     ```
   - ANN + NLI:
     ```bash
-    python mywi.py embedding similarity --name=LAND --method=nli \
+    uv run python mywi.py embedding similarity --name=LAND --method=nli \
       --backend=faiss|bruteforce --topk=10 [--minrel R] [--maxpairs M]
     ```
 - Export CSVs:
   - Paragraph pairs:
     ```bash
-    python mywi.py land export --name=LAND --type=pseudolinks
+    uv run python mywi.py land export --name=LAND --type=pseudolinks
     ```
   - Page‑level aggregation:
     ```bash
-    python mywi.py land export --name=LAND --type=pseudolinkspage
+    uv run python mywi.py land export --name=LAND --type=pseudolinkspage
     ```
   - Domain‑level aggregation:
     ```bash
-    python mywi.py land export --name=LAND --type=pseudolinksdomain
+    uv run python mywi.py land export --name=LAND --type=pseudolinksdomain
     ```
 - Utilities:
-  - Check env: `python mywi.py embedding check`
-  - Reset embeddings for a land: `python mywi.py embedding reset --name=LAND` (asks for `Y` confirmation; `--force` skips it)
+  - Check env: `uv run python mywi.py embedding check`
+  - Reset embeddings for a land: `uv run python mywi.py embedding reset --name=LAND` (asks for `Y` confirmation; `--force` skips it)
 
 ## Troubleshooting & Caution
 - “All `score_raw=0.5` and `score=0`” → neutral fallback; install ML extras or switch to the safe EN model.
-- “No `score_raw` column” → run `python mywi.py db migrate` once.
+- “No `score_raw` column” → run `uv run python mywi.py db migrate` once.
 - macOS segfaults (OpenMP/Torch): pip‑only venv; try `OMP_NUM_THREADS=1`, then raise; optional `KMP_DUPLICATE_LIB_OK=TRUE`.
 - Slow scoring: lower `nli_batch_size`, raise threads moderately, filter with `--minrel`, cap with `--maxpairs`.
 - Too many pairs: raise `threshold`, increase `lshbits`, lower `topk`, or use `--minrel`.
@@ -1463,7 +1471,7 @@ Quick guidelines for speed vs. quality:
   - Simple and fast method: `cosine` with `--threshold=0.85` and `--minrel=1`.
   - Example:
     ```bash
-    python mywi.py embedding similarity --name=LAND --method=cosine \
+    uv run python mywi.py embedding similarity --name=LAND --method=cosine \
       --threshold=0.85 --minrel=1
     ```
 
@@ -1476,7 +1484,7 @@ Quick guidelines for speed vs. quality:
     - `--maxpairs` to cap the total number of pairs (e.g., 5–10M)
   - Example:
     ```bash
-    python mywi.py embedding similarity --name=LAND --method=cosine_lsh \
+    uv run python mywi.py embedding similarity --name=LAND --method=cosine_lsh \
       --lshbits=20 --topk=15 --threshold=0.88 --minrel=1 --maxpairs=8000000
     ```
 
@@ -1491,7 +1499,7 @@ Quick guidelines for speed vs. quality:
     - `nli_max_tokens=384–512` if you want to truncate a bit more for speed.
   - Example:
     ```bash
-    python mywi.py embedding similarity --name=LAND --method=nli \
+    uv run python mywi.py embedding similarity --name=LAND --method=nli \
       --backend=faiss --topk=8 --minrel=2 --maxpairs=20000
     ```
 
@@ -1535,11 +1543,11 @@ Pick a method with `--method` when running `embedding similarity`:
 
 ## ANN Backend Selection (FAISS)
 
-- Install FAISS (optional): `pip install faiss-cpu`.
+- Install FAISS (optional): `uv sync --extra ml` (pip fallback: `python -m pip install -r requirements-ml.txt`).
 - CLI override: `--backend=faiss` to force FAISS recall for `--method=nli`.
 - Settings default: `similarity_backend = 'faiss'` to prefer FAISS when no `--backend` is specified.
 - Fallback: if FAISS is not installed or import fails, recall uses `bruteforce` automatically.
-- Verify: `python mywi.py embedding check` prints `FAISS: available` when detected.
+- Verify: `uv run python mywi.py embedding check` prints `FAISS: available` when detected.
 
 ## Scalable Similarity (Large Lands)
 
@@ -1547,7 +1555,7 @@ For large collections (hundreds of thousands to millions of paragraphs), prefer 
 
 ```bash
 # LSH buckets + per-paragraph top-k + hard cap of total pairs
-python mywi.py embedding similarity \
+uv run python mywi.py embedding similarity \
   --name=MyResearchTopic \
   --method=cosine_lsh \
   --threshold=0.85 \
@@ -1574,20 +1582,15 @@ Classify logical relations between paragraphs (entailment/paraphrase = 1, neutra
 
 Prerequisites (optional, installed only if you need NLI or faster ANN):
 ```bash
-pip install sentence-transformers transformers  # Cross-Encoder NLI
-# For faster ANN recall (optional):
-pip install faiss-cpu
+uv sync --extra ml   # Cross-Encoder NLI (sentence-transformers, transformers) + FAISS for faster ANN recall
+# pip fallback: python -m pip install -r requirements-ml.txt
 ```
 
 Command example:
 ```bash
-python mywi.py embedding similarity \
-  --name=MyResearchTopic \
-  --method=nli \
-  --backend=bruteforce    # or faiss if installed \
-  --topk=50               # candidates per paragraph from ANN \
-  --minrel=1              # optional relevance filter \
-  --maxpairs=2000000      # optional safety cap
+# --backend: bruteforce, or faiss if installed · --topk: candidates per paragraph from ANN
+# --minrel: optional relevance filter · --maxpairs: optional safety cap
+uv run python mywi.py embedding similarity --name=MyResearchTopic --method=nli --backend=bruteforce --topk=50 --minrel=1 --maxpairs=2000000
 ```
 
 Settings touch-points:
@@ -1599,25 +1602,25 @@ Settings touch-points:
 Quick recipes:
 - Exact cosine (small set):
   ```bash
-  python mywi.py embedding similarity --name=MyResearchTopic --method=cosine --threshold=0.85 --minrel=1
+  uv run python mywi.py embedding similarity --name=MyResearchTopic --method=cosine --threshold=0.85 --minrel=1
   ```
 - Approx cosine (large set, no deps):
   ```bash
-  python mywi.py embedding similarity --name=MyResearchTopic --method=cosine_lsh --lshbits=20 --topk=15 --threshold=0.85 --minrel=1 --maxpairs=5000000
+  uv run python mywi.py embedding similarity --name=MyResearchTopic --method=cosine_lsh --lshbits=20 --topk=15 --threshold=0.85 --minrel=1 --maxpairs=5000000
   ```
 - ANN + NLI with FAISS:
   ```bash
-  pip install sentence-transformers transformers faiss-cpu
-  python mywi.py embedding similarity --name=MyResearchTopic --method=nli --backend=faiss --topk=50 --minrel=1 --maxpairs=2000000
+  uv sync --extra ml
+  uv run python mywi.py embedding similarity --name=MyResearchTopic --method=nli --backend=faiss --topk=50 --minrel=1 --maxpairs=2000000
   ```
 
 CSV export (pseudolinks):
-- `python mywi.py land export --name=MyResearchTopic --type=pseudolinks`
+- `uv run python mywi.py land export --name=MyResearchTopic --type=pseudolinks`
 - Columns: `Source_ParagraphID, Target_ParagraphID, RelationScore, ConfidenceScore, Source_Text, Target_Text, Source_ExpressionID, Target_ExpressionID`
 
 Quick environment check:
 ```bash
-python mywi.py embedding check
+uv run python mywi.py embedding check
 ```
 
 Shows provider config, optional libs (faiss/sentence-transformers/transformers), and DB tables availability.
@@ -1629,7 +1632,7 @@ Shows provider config, optional libs (faiss/sentence-transformers/transformers),
 When pulling a newer version of MyWI, make sure your existing database has the latest columns and indexes.
 
 ```bash
-python mywi.py db migrate
+uv run python mywi.py db migrate
 ```
 
 This command is idempotent: it inspects `data/mwi.db` (or the location specified via `MYWI_DATA_DIR`) and adds any missing fields. Run it after every upgrade or before sharing a database. For safety, back up the file first:
@@ -1647,10 +1650,10 @@ Older crawls sometimes attached `archive.org` (or `web.archive.org`) as the `dom
 
 ```bash
 # Preview only — list affected expressions, write nothing
-python mywi.py db fix_archive_domains --dry-run
+uv run python mywi.py db fix_archive_domains --dry-run
 
 # Apply the re-attribution
-python mywi.py db fix_archive_domains
+uv run python mywi.py db fix_archive_domains
 ```
 
 The command is non-destructive — it only updates the `expression.domain` foreign key and creates the missing `Domain` rows. Use `--dry-run` first to inspect what would change (nothing is written, and no `Domain` row is created). Run it after a `db migrate` if you suspect that archive.org is over-represented in your domain stats.
@@ -1678,7 +1681,7 @@ Validate the repaired DB with MyWI without replacing the original:
 ```bash
 mkdir -p data/test-repaired
 cp data/mwi_repaired.db data/test-repaired/mwi.db
-MYWI_DATA_DIR="$PWD/data/test-repaired" python mywi.py land list
+MYWI_DATA_DIR="$PWD/data/test-repaired" uv run python mywi.py land list
 ```
 
 If everything looks good, adopt the repaired DB (after a manual backup):
@@ -1729,16 +1732,16 @@ mywi.py  →  mwi/cli.py  →  mwi/controller.py  →  mwi/core.py & mwi/export.
 
 ### Main Workflows
 
-- **Project Bootstrap**: `python mywi.py db setup`
-- **Media Analysis**: `python mywi.py land medianalyse --name=LAND_NAME [--depth=DEPTH] [--minrel=MIN_RELEVANCE]`
+- **Project Bootstrap**: `uv run python mywi.py db setup`
+- **Media Analysis**: `uv run python mywi.py land medianalyse --name=LAND_NAME [--depth=DEPTH] [--minrel=MIN_RELEVANCE]`
 - **Land Life-Cycle**: Create, add terms, add URLs, crawl, extract readable, export, clean/delete.
-- **SEO Rank Enrichment**: `python mywi.py land seorank --name=LAND [--limit N] [--depth D] [--force]`
-- **Domain Processing**: `python mywi.py domain crawl`
-- **Tag Export**: `python mywi.py tag export`
-- **Heuristics Update**: `python mywi.py heuristic update [--land=X] [--html] [--fetch-missing --limit=N]`
+- **SEO Rank Enrichment**: `uv run python mywi.py land seorank --name=LAND [--limit N] [--depth D] [--force]`
+- **Domain Processing**: `uv run python mywi.py domain crawl`
+- **Tag Export**: `uv run python mywi.py tag export`
+- **Heuristics Update**: `uv run python mywi.py heuristic update [--land=X] [--html] [--fetch-missing --limit=N]`
 - **Embeddings & Similarity**:
-  - Generate: `python mywi.py embedding generate --name=LAND [--limit N]`
-  - Similarity: `python mywi.py embedding similarity --name=LAND [--threshold 0.85] [--method cosine]`
+  - Generate: `uv run python mywi.py embedding generate --name=LAND [--limit N]`
+  - Similarity: `uv run python mywi.py embedding similarity --name=LAND [--threshold 0.85] [--method cosine]`
 
 ### Implementation Notes
 
@@ -1810,12 +1813,12 @@ Validate relevance in bulk via OpenRouter and record the verdict in DB (`express
 
 Command:
 ```bash
-python mywi.py land llm validate --name=LAND [--limit N] [--force] [--issuecrawl]
+uv run python mywi.py land llm validate --name=LAND [--limit N] [--force] [--issuecrawl]
 ```
 
 Requirements:
 - In `settings.py`: set `openrouter_enabled=True`, and provide `openrouter_api_key` and `openrouter_model`.
-- If your DB is old: `python mywi.py db migrate` (adds columns if missing).
+- If your DB is old: `uv run python mywi.py db migrate` (adds columns if missing).
 
 `--issuecrawl` option:
 - Force the gate into controversy-analysis mode for this run (overrides the `openrouter_issue_mode` setting default). See [OpenRouter Relevance Gate](#optional-openrouter-relevance-gate-ai-yesno-filter).
