@@ -1,7 +1,7 @@
 # Multi-API Search Router — User Guide
 
 **Sprint** : `sprint-searchrouter`
-**CLI surface** : `python mywi.py search {run,list,usage,check}`
+**CLI surface** : `uv run python mywi.py search {run,list,usage,check}`
 
 This document describes the multi-API search router shipped in MWI v2.
 The router is **independent** from the historical `land urlist` SerpAPI
@@ -37,7 +37,7 @@ cd docker/searxng
 docker compose up -d
 
 # 2. Verify the routing layer sees it.
-python mywi.py search check
+uv run python mywi.py search check
 # Expected:
 #   Provider          Configured
 #   --------------------------------
@@ -46,8 +46,8 @@ python mywi.py search check
 #   ...
 
 # 3. Create a Land and run a search.
-python mywi.py land create --name=DemoSearch --desc="search router demo"
-python mywi.py search run --land=DemoSearch \
+uv run python mywi.py land create --name=DemoSearch --desc="search router demo"
+uv run python mywi.py search run --land=DemoSearch \
                           --query="humanités numériques" \
                           --limit=20
 ```
@@ -69,10 +69,10 @@ SEARCH_DEFAULT_STRATEGY=parallel
 Then:
 
 ```bash
-python mywi.py search check
+uv run python mywi.py search check
 # All five providers should now be 'yes'.
 
-python mywi.py search run --land=DemoSearch \
+uv run python mywi.py search run --land=DemoSearch \
                           --query="humanités numériques" \
                           --limit=50 --strategy=parallel
 ```
@@ -82,7 +82,7 @@ python mywi.py search run --land=DemoSearch \
 ### 4.1 `search run`
 
 ```bash
-python mywi.py search run --land=NAME --query="..." \
+uv run python mywi.py search run --land=NAME --query="..." \
                           [--limit=N] [--strategy=fallback|parallel] \
                           [--language=fr] [--providers=searxng,brave]
 ```
@@ -104,7 +104,7 @@ The command writes:
 ### 4.2 `search list`
 
 ```bash
-python mywi.py search list --land=NAME
+uv run python mywi.py search list --land=NAME
 ```
 
 Lists every search query executed for a Land, most recent first.
@@ -112,7 +112,7 @@ Lists every search query executed for a Land, most recent first.
 ### 4.3 `search usage`
 
 ```bash
-python mywi.py search usage --land=NAME
+uv run python mywi.py search usage --land=NAME
 ```
 
 Aggregates the JSON `usage_report` columns of past queries, per provider:
@@ -121,7 +121,7 @@ total calls, total errors, last status, monthly quota.
 ### 4.4 `search check`
 
 ```bash
-python mywi.py search check
+uv run python mywi.py search check
 ```
 
 Per-provider configured/unconfigured table. Use it to confirm your `.env`

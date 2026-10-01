@@ -79,7 +79,7 @@ requêtes suivent exactement le même chemin (on montre comment les enchaîner e
 
 Trois types de blocs cohabitent ici :
 
-1. **Blocs `bash` de commandes** — ils exécutent le CLI MyWebIntelligence (`python mywi.py …`).
+1. **Blocs `bash` de commandes** — ils exécutent le CLI MyWebIntelligence (`uv run python mywi.py …`).
    C'est la voie officielle : tout ce que fait MWI passe par là. Copiez-collez-les tels quels
    dans votre terminal.
 2. **Blocs `bash` d'audit SQL** — après chaque étape du pipeline, on **vérifie** ce qui a été
@@ -105,15 +105,17 @@ nouvelle session de terminal** : toutes les autres commandes dépendent de `$LAN
 # Sous zsh (défaut macOS) : autoriser les commentaires '#' en fin de ligne, comme bash
 setopt interactive_comments 2>/dev/null || true
 
-# Se placer à la racine du dépôt MWI (adaptez le chemin) et activer l'environnement virtuel
+# Se placer à la racine du dépôt MWI (adaptez le chemin). Rien à activer : chaque
+# commande passe par `uv run`, qui utilise le .venv du projet.
+# Variante pip : activez plutôt le venv (source .venv/bin/activate) et retirez
+# le préfixe `uv run ` des commandes de ce tutoriel.
 cd /chemin/vers/MyWebIntelligencePython
-source .venv/bin/activate   # ou venv/bin/activate selon votre installation
 
 # Le projet de recherche (fil rouge Art.1)
 LAND="airegulation"
 
 # Lire l'emplacement des données depuis settings.py (override possible via MYWI_DATA_DIR)
-DATA=$(python -c "import os, settings; print(os.path.abspath(os.path.expanduser(os.environ.get('MYWI_DATA_DIR', settings.data_location))))")
+DATA=$(uv run python -c "import os, settings; print(os.path.abspath(os.path.expanduser(os.environ.get('MYWI_DATA_DIR', settings.data_location))))")
 DB="$DATA/mwi.db"
 
 echo "Racine du dépôt : $(pwd)"
@@ -138,16 +140,16 @@ Avant de toucher au projet, on vérifie l'instrument. Quatre contrôles :
 > recrée toutes les tables (il demande d'ailleurs de confirmer en tapant exactement `Y`
 > majuscule). Sur une base qui contient déjà des corpus, la seule commande légitime est
 > `db migrate`, idempotente et non destructive. Si vous partez d'une base vierge, exécutez une
-> seule fois `python mywi.py db setup` dans un terminal, puis revenez ici.
+> seule fois `uv run python mywi.py db setup` dans un terminal, puis revenez ici.
 
 ```bash
 # Mettre le schéma à niveau (idempotent — ne détruit rien)
-python mywi.py db migrate
+uv run python mywi.py db migrate
 ```
 
 ```bash
 # Quels fournisseurs de recherche sont configurés ? (clé absente = fournisseur ignoré silencieusement)
-python mywi.py search check
+uv run python mywi.py search check
 ```
 
 **Sortie indicative** :
@@ -171,7 +173,7 @@ tavily            no
 
 ```bash
 # La chaîne embeddings est-elle prête ? (provider, FAISS, sentence-transformers, tables)
-python mywi.py embedding check
+uv run python mywi.py embedding check
 ```
 
 ```bash
@@ -205,7 +207,7 @@ de pages crawlées et d'analyses, isolée des autres projets de la base. Trois d
 ```bash
 DESC="Controverse sur la régulation de l'IA dans le web anglophone (2023-2026) — corpus apparié pour la comparaison page-level vs body-text-level (Art.1, SSCR). Axes : régulation institutionnelle, risques sociétaux, gouvernance industrielle, propriété intellectuelle."
 
-python mywi.py land create --name=$LAND --desc="$DESC" --lang=en --fullhtml=TRUE
+uv run python mywi.py land create --name=$LAND --desc="$DESC" --lang=en --fullhtml=TRUE
 ```
 
 **Sortie attendue** :
@@ -217,7 +219,7 @@ Land "airegulation" created (fullhtml=enabled)
 On vérifie immédiatement la fiche du Land :
 
 ```bash
-python mywi.py land list --name=$LAND
+uv run python mywi.py land list --name=$LAND
 ```
 
 ```bash
@@ -250,15 +252,15 @@ au long du pipeline (`--minrel`).
 > lemmes.
 >
 > ⚠️ **Land non francophone créé avant juin 2026 ?** Ses lemmes ont été calculés avec l'ancien
-> stemmer français. Rattrapage en deux commandes : `python mywi.py db migrate` puis
-> `python mywi.py land relemm --name=<land>` — idempotent, re-stemme le dictionnaire dans la
+> stemmer français. Rattrapage en deux commandes : `uv run python mywi.py db migrate` puis
+> `uv run python mywi.py land relemm --name=<land>` — idempotent, re-stemme le dictionnaire dans la
 > bonne langue et recalcule la pertinence de tout le corpus.
 
 Le vocabulaire ci-dessous opérationnalise la controverse telle que cadrée en §4.2 du document de
 méthode : régulation institutionnelle, conformité, gouvernance, législation.
 
 ```bash
-python mywi.py land addterm --land=$LAND --terms="artificial intelligence, AI act, AI regulation, regulation, regulations, regulatory, governance, compliance, enforcement, legislation, AI policy, AI safety"
+uv run python mywi.py land addterm --land=$LAND --terms="artificial intelligence, AI act, AI regulation, regulation, regulations, regulatory, governance, compliance, enforcement, legislation, AI policy, AI safety"
 ```
 
 ```bash
@@ -313,7 +315,7 @@ Si `search check` (§1) a montré `searxng : not configured`, démarrez l'instan
 # Instance SearXNG locale (Docker) — fournisseur primaire sans clé ni quota
 ( cd docker/searxng && docker compose up -d )
 # Laisser quelques secondes au conteneur, puis re-vérifier
-sleep 5 && python mywi.py search check
+sleep 5 && uv run python mywi.py search check
 ```
 
 ### 4.3 — Lancer la collecte multi-moteurs
@@ -332,7 +334,7 @@ triangule pas.)
 ```bash
 Q1='"EU AI Act" enforcement implementation'   # requête Q1 — axe 1, version illustrative
 
-python mywi.py search run --land=$LAND --query="$Q1" --limit=50 --strategy=parallel --language=en
+uv run python mywi.py search run --land=$LAND --query="$Q1" --limit=50 --strategy=parallel --language=en
 ```
 
 **Sortie indicative** :
@@ -355,8 +357,8 @@ chaque URL ».
 
 ```bash
 # Vue CLI : requêtes passées et usage agrégé par fournisseur
-python mywi.py search list --land=$LAND
-python mywi.py search usage --land=$LAND
+uv run python mywi.py search list --land=$LAND
+uv run python mywi.py search usage --land=$LAND
 ```
 
 ```bash
@@ -404,7 +406,7 @@ Sans `--lang`, la commande hérite de la langue primaire du Land.
 ```bash
 Q1_DATED='("EU AI Act" OR "Artificial Intelligence Act") (enforcement OR implementation)'
 
-python mywi.py land urlist --name=$LAND --query="$Q1_DATED" --engine=google --lang=en --datestart=2023-06-01 --dateend=2026-05-31 --timestep=month --sleep=1.0
+uv run python mywi.py land urlist --name=$LAND --query="$Q1_DATED" --engine=google --lang=en --datestart=2023-06-01 --dateend=2026-05-31 --timestep=month --sleep=1.0
 ```
 
 ### 4.6 — Graines manuelles et montée en charge
@@ -415,9 +417,9 @@ Commission européenne) méritent d'être ajoutées explicitement — elles ancr
 ```bash
 SEEDS="https://artificialintelligenceact.eu/,https://digital-strategy.ec.europa.eu/en/policies/regulatory-framework-ai"
 
-python mywi.py land addurl --land=$LAND --urls="$SEEDS"
+uv run python mywi.py land addurl --land=$LAND --urls="$SEEDS"
 # Variante fichier : une URL par ligne dans seeds_q1.txt, puis :
-#   python mywi.py land addurl --land=airegulation --path=seeds_q1.txt
+#   uv run python mywi.py land addurl --land=airegulation --path=seeds_q1.txt
 ```
 
 **Les 7 autres requêtes** suivent le même schéma — chacune produira sa propre ligne
@@ -434,7 +436,7 @@ QUERIES=(
   'AI training data licensing publishers rights'                 # Q8 — axe 4
 )
 for q in "${QUERIES[@]}"; do
-  python mywi.py search run --land=$LAND --query="$q" --limit=50 --strategy=parallel --language=en
+  uv run python mywi.py search run --land=$LAND --query="$q" --limit=50 --strategy=parallel --language=en
 done
 ```
 
@@ -484,7 +486,7 @@ Toujours commencer par un pilote : 20 pages suffisent à vérifier que la chaîn
 (réseau → extraction → scoring → stockage HTML) fonctionne avant d'engager des heures de crawl.
 
 ```bash
-python mywi.py land crawl --name=$LAND --limit=20
+uv run python mywi.py land crawl --name=$LAND --limit=20
 ```
 
 **Sortie indicative** (le nombre d'erreurs dépend de l'état du web ; la première ligne, elle,
@@ -515,7 +517,7 @@ crawlées — c'est le bornage voulu.
 for d in 0 1 2 3 4 5 6; do          # profondeurs 0 à 6 incluses (design Art.1)
   echo ""
   echo "=== Vague de profondeur $d ==="
-  python mywi.py land crawl --name=$LAND --depth=$d
+  uv run python mywi.py land crawl --name=$LAND --depth=$d
 done
 ```
 
@@ -525,7 +527,7 @@ done
 méthodes de fetch et le volume de HTML archivé :
 
 ```bash
-python mywi.py land list --name=$LAND
+uv run python mywi.py land list --name=$LAND
 ```
 
 **Sortie indicative** (corpus complet, 8 requêtes, profondeur 6) :
@@ -594,7 +596,7 @@ la cascade complète sur ces statuts précis, **en ignorant** le filtre habituel
 (`fetched_at IS NULL`). Sur des corpus réels, curl_cffi récupère une large part des 403 initiaux.
 
 ```bash
-python mywi.py land crawl --name=$LAND --retry-status=403,429
+uv run python mywi.py land crawl --name=$LAND --retry-status=403,429
 ```
 
 ```bash
@@ -646,7 +648,7 @@ ls -lh "$DB".bak_*
 
 ```bash
 # 2) Aperçu sans modification — que ferait la normalisation ?
-python mywi.py land normalize --name=$LAND --dry-run --verbose
+uv run python mywi.py land normalize --name=$LAND --dry-run --verbose
 ```
 
 **Sortie indicative** :
@@ -671,7 +673,7 @@ Si l'aperçu est cohérent (pas de fusion aberrante), on applique :
 
 ```bash
 # 3) Application réelle
-python mywi.py land normalize --name=$LAND --mapping-out=normalize_map_${LAND}.csv
+uv run python mywi.py land normalize --name=$LAND --mapping-out=normalize_map_${LAND}.csv
 # --mapping-out écrit old_id,new_id,old_url,canonical_url — produit AUSSI en --dry-run (il décrit
 #   alors le plan). old_id == new_id = renommage ; old_id != new_id = fusion. À archiver : c'est la
 #   seule trace permettant de raccorder un export antérieur au corpus normalisé.
@@ -696,9 +698,9 @@ Les pages sauvées par la stratégie Wayback peuvent s'être retrouvées rattach
 web (§4.4 du document de méthode). `db fix_archive_domains` corrige ce rattachement (idempotent) :
 
 ```bash
-# Aperçu d'abord (--dryrun est un vrai flag booléen ici), puis application
-python mywi.py db fix_archive_domains --dryrun
-python mywi.py db fix_archive_domains
+# Aperçu d'abord (--dry-run est un vrai flag booléen ici), puis application
+uv run python mywi.py db fix_archive_domains --dry-run
+uv run python mywi.py db fix_archive_domains
 ```
 
 <a id="sec7"></a>
@@ -726,7 +728,7 @@ publicité). Le pipeline `readable` de MWI :
 | `preserve_existing` | Ne touche jamais aux données existantes (strictement additif) |
 
 ```bash
-python mywi.py land readable --name=$LAND --merge=smart_merge
+uv run python mywi.py land readable --name=$LAND --merge=smart_merge
 ```
 
 **Sortie indicative** :
@@ -760,7 +762,7 @@ WHERE l.name = '$LAND' AND e.fetched_at IS NOT NULL;
 ```
 
 ```bash
-# Audit SQL 2 : le graphe éditorial (profil `editorial` = body + ref ; un `kind` NULL est un
+# Audit SQL 2 : le graphe des citations (profil `citation` = body + ref ; un `kind` NULL est un
 # lien antérieur à la migration 014, il vaut toujours body — ne jamais écrire `kind = 'body'`)
 sqlite3 -header -column "$DB" "
 SELECT COUNT(*)                       AS liens_diriges,
@@ -883,7 +885,7 @@ raisonner dans cette langue et son contexte culturel ; le verdict stocké reste 
 
 ```bash
 # Pilote sur 200 pages d'abord — vérifier le verdict et le coût avant le passage complet
-python mywi.py land llm validate --name=$LAND --limit=200
+uv run python mywi.py land llm validate --name=$LAND --limit=200
 ```
 
 **Mode controverse (`--issuecrawl`).** Par défaut, la gate juge la simple pertinence
@@ -900,7 +902,7 @@ readable, consolidate, `llm validate`) —, soit **ponctuellement** pour un seul
 
 ```bash
 # Mode controverse pour ce run : ne valider que les pages qui prennent position dans le débat
-python mywi.py land llm validate --name=$LAND --limit=200 --issuecrawl
+uv run python mywi.py land llm validate --name=$LAND --limit=200 --issuecrawl
 ```
 
 ```bash
@@ -941,7 +943,7 @@ WHERE l.name = '$LAND' AND e.fetched_at IS NOT NULL AND e.relevance < 1;
 
 ```bash
 # Suppression effective (la confirmation 'Y' est pipée — exécution consciente uniquement !)
-echo "Y" | python mywi.py land delete --name=$LAND --maxrel=1
+echo "Y" | uv run python mywi.py land delete --name=$LAND --maxrel=1
 ```
 
 ```bash
@@ -974,7 +976,7 @@ Deux commandes l'entretiennent :
 > voulu : un domaine est une entité partagée entre projets.
 
 ```bash
-python mywi.py domain crawl --limit=500
+uv run python mywi.py domain crawl --limit=500
 # Re-lancer avec --http=ERR pour rejouer TOUS les domaines en échec
 # (matche ERR_TRAFI, ERR_ARCHIVE*, ERR_ALL_FAILED, ERR_PROCESS… + ARC_NO_HTML, REQ_NO_HTML, 000) ;
 # un code précis reste possible en égalité stricte : --http=ERR_ALL_FAILED
@@ -982,7 +984,7 @@ python mywi.py domain crawl --limit=500
 
 ```bash
 # heuristic update affiche le nombre de réattributions (« 0 domain(s) updated » si rien à corriger)
-python mywi.py heuristic update
+uv run python mywi.py heuristic update
 ```
 
 ```bash
@@ -1024,12 +1026,12 @@ immédiatement).
 
 ```bash
 # Pilote : les graines d'abord (depth=0), 100 pages
-python mywi.py land seorank --name=$LAND --depth=0 --limit=100
+uv run python mywi.py land seorank --name=$LAND --depth=0 --limit=100
 ```
 
 ```bash
 # Passage complet (1 seconde par appel par défaut — compter ~3h pour 10 000 pages)
-python mywi.py land seorank --name=$LAND
+uv run python mywi.py land seorank --name=$LAND
 ```
 
 ```bash
@@ -1076,7 +1078,7 @@ ORDER BY medias DESC;
 
 ```bash
 # --depth / --minrel restreignent le périmètre (ici : pages pertinentes uniquement)
-python mywi.py land medianalyse --name=$LAND --minrel=1
+uv run python mywi.py land medianalyse --name=$LAND --minrel=1
 ```
 
 ```bash
@@ -1113,20 +1115,20 @@ recommandé : `media_stats` (photographie) → `preview_deletion` (périmètre e
 
 ```bash
 # Statistiques agrégées du corpus média (lecture seule)
-python mywi.py land media_stats --name=$LAND
+uv run python mywi.py land media_stats --name=$LAND
 ```
 
 ```bash
 # Dry-run pur : que supprimerait un filtre 200×200 px / 5 Mo ? (rien n'est supprimé)
-python mywi.py land preview_deletion --name=$LAND --minwidth=200 --minheight=200 --maxsize=5
+uv run python mywi.py land preview_deletion --name=$LAND --minwidth=200 --minheight=200 --maxsize=5
 ```
 
 ```bash
 # Re-analyse des médias jamais analysés ou en erreur (sans suppression)
-python mywi.py land reanalyze --name=$LAND --limit=500
+uv run python mywi.py land reanalyze --name=$LAND --limit=500
 # Variante destructive — supprime les non-conformes APRÈS confirmation pipée (périmètre validé en
 # preview_deletion d'abord !) :
-#   echo "Y" | python mywi.py land reanalyze --name=airegulation --suppress --minwidth=200 --minheight=200
+#   echo "Y" | uv run python mywi.py land reanalyze --name=airegulation --suppress --minwidth=200 --minheight=200
 ```
 
 <a id="sec12"></a>
@@ -1151,7 +1153,7 @@ une suppression manuelle — pour garantir que le graphe reflète bien le conten
 > NULL et les profils d'export (§15) n'ont rien à trier.
 
 ```bash
-python mywi.py land consolidate --name=$LAND --depth=0
+uv run python mywi.py land consolidate --name=$LAND --depth=0
 # --depth limite aux pages de cette profondeur ; --limit borne le nombre de pages traitées
 ```
 
@@ -1165,7 +1167,7 @@ controverse** (§8.2) sur ce run.
 
 ```bash
 # Re-juger la pertinence via la gate LLM pendant la consolidation, en mode controverse
-python mywi.py land consolidate --name=$LAND --depth=0 --llm=true --issuecrawl
+uv run python mywi.py land consolidate --name=$LAND --depth=0 --llm=true --issuecrawl
 ```
 
 <a id="sec13"></a>
@@ -1194,7 +1196,7 @@ Le provider d'embeddings se règle dans `settings.py` (`embed_provider` : `opena
 
 ```bash
 # 1) Vectoriser les paragraphes du corpus qualifié
-python mywi.py embedding generate --name=$LAND
+uv run python mywi.py embedding generate --name=$LAND
 ```
 
 ```bash
@@ -1213,23 +1215,23 @@ WHERE l.name = '$LAND';
 
 ```bash
 # 2) Calcul des pseudolinks — cosinus exact (adapté à un corpus de cette taille)
-python mywi.py embedding similarity --name=$LAND --method=cosine --threshold=0.85 --minrel=1
+uv run python mywi.py embedding similarity --name=$LAND --method=cosine --threshold=0.85 --minrel=1
 ```
 
 **Variantes**, selon la volumétrie et la question de recherche :
 
 ```bash
 # Gros corpus (> 50 000 paragraphes) : LSH approché, plafonné
-python mywi.py embedding similarity --name=airegulation --method=cosine_lsh \
+uv run python mywi.py embedding similarity --name=airegulation --method=cosine_lsh \
     --threshold=0.85 --lshbits=20 --topk=15 --minrel=1 --maxpairs=5000000
 
 # Relations logiques (accord/désaccord entre argumentaires) : NLI
-python mywi.py embedding similarity --name=airegulation --method=nli \
+uv run python mywi.py embedding similarity --name=airegulation --method=nli \
     --backend=faiss --topk=50 --minrel=1 --maxpairs=2000000
 
 # Tout remettre à zéro pour ce Land (paragraphes + embeddings + similarités)
 # Demande de taper 'Y' avant suppression ; --force la saute (pour les scripts)
-python mywi.py embedding reset --name=airegulation
+uv run python mywi.py embedding reset --name=airegulation
 ```
 
 ```bash
@@ -1264,8 +1266,8 @@ MWI exporte deux vues :
 - `content` — les extraits taggés eux-mêmes, un par ligne.
 
 ```bash
-python mywi.py tag export --name=$LAND --type=matrix --minrel=1
-python mywi.py tag export --name=$LAND --type=content --minrel=1
+uv run python mywi.py tag export --name=$LAND --type=matrix --minrel=1
+uv run python mywi.py tag export --name=$LAND --type=content --minrel=1
 ```
 
 > 💡 Si aucun tag n'a encore été posé, la commande sort proprement : le CSV est écrit avec sa
@@ -1309,16 +1311,16 @@ fichiers sont écrits dans `settings.data_location` avec le motif
 
 ```bash
 # Les quatre exports pivots de l'étude
-python mywi.py land export --name=$LAND --type=pagecsv  --minrel=1
-python mywi.py land export --name=$LAND --type=nodegexf --minrel=1
-python mywi.py land export --name=$LAND --type=corpus   --minrel=1
-python mywi.py land export --name=$LAND --type=htmldump --minrel=1
+uv run python mywi.py land export --name=$LAND --type=pagecsv  --minrel=1
+uv run python mywi.py land export --name=$LAND --type=nodegexf --minrel=1
+uv run python mywi.py land export --name=$LAND --type=corpus   --minrel=1
+uv run python mywi.py land export --name=$LAND --type=htmldump --minrel=1
 ```
 
 ```bash
 # Le reste de la panoplie, en boucle
 for t in fullpagecsv nodecsv pagegexf mediacsv nodelinkcsv pseudolinks pseudolinkspage pseudolinksdomain nodesjson pagesjson; do
-  python mywi.py land export --name=$LAND --type=$t --minrel=1
+  uv run python mywi.py land export --name=$LAND --type=$t --minrel=1
 done
 ```
 
@@ -1409,61 +1411,61 @@ MRQAP, tau de Kendall) — hors périmètre de MWI, dans R ou Python, sur les ex
 
 ```bash
 # §1 — Instrument
-python mywi.py db migrate
-python mywi.py search check
-python mywi.py embedding check
+uv run python mywi.py db migrate
+uv run python mywi.py search check
+uv run python mywi.py embedding check
 
 # §2-3 — Projet
-python mywi.py land create --name=airegulation --desc="..." --lang=en --fullhtml=TRUE
-python mywi.py land addterm --land=airegulation --terms="artificial intelligence, AI act, ..."
-python mywi.py land relemm --name=airegulation   # rattrapage : Land non-fr créé avant juin 2026
+uv run python mywi.py land create --name=airegulation --desc="..." --lang=en --fullhtml=TRUE
+uv run python mywi.py land addterm --land=airegulation --terms="artificial intelligence, AI act, ..."
+uv run python mywi.py land relemm --name=airegulation   # rattrapage : Land non-fr créé avant juin 2026
 
 # §4 — Graines (×8 requêtes)
-python mywi.py search run --land=airegulation --query='"EU AI Act" enforcement implementation' \
+uv run python mywi.py search run --land=airegulation --query='"EU AI Act" enforcement implementation' \
     --limit=50 --strategy=parallel --language=en
-python mywi.py land urlist --name=airegulation --query='...' --engine=google --lang=en \
+uv run python mywi.py land urlist --name=airegulation --query='...' --engine=google --lang=en \
     --datestart=2023-06-01 --dateend=2026-05-31 --timestep=month
-python mywi.py land addurl --land=airegulation --urls="https://...,https://..."
-python mywi.py search list  --land=airegulation
-python mywi.py search usage --land=airegulation
+uv run python mywi.py land addurl --land=airegulation --urls="https://...,https://..."
+uv run python mywi.py search list  --land=airegulation
+uv run python mywi.py search usage --land=airegulation
 
 # §5 — Crawl (profondeur bornée à 6, puis rattrapage)
-python mywi.py land crawl --name=airegulation --depth=0      # … répéter jusqu'à --depth=6
-python mywi.py land crawl --name=airegulation --retry-status=403,429
-python mywi.py land list  --name=airegulation
+uv run python mywi.py land crawl --name=airegulation --depth=0      # … répéter jusqu'à --depth=6
+uv run python mywi.py land crawl --name=airegulation --retry-status=403,429
+uv run python mywi.py land list  --name=airegulation
 
 # §6 — Normalisation (backup + dry-run d'abord !)
-python mywi.py land normalize --name=airegulation --dry-run --verbose
-python mywi.py land normalize --name=airegulation
-python mywi.py db fix_archive_domains
+uv run python mywi.py land normalize --name=airegulation --dry-run --verbose
+uv run python mywi.py land normalize --name=airegulation
+uv run python mywi.py db fix_archive_domains
 
 # §7 — Texte éditorial
-python mywi.py land readable --name=airegulation --merge=smart_merge
+uv run python mywi.py land readable --name=airegulation --merge=smart_merge
 
 # §8 — Qualification et nettoyage
-python mywi.py land llm validate --name=airegulation --limit=200
-python mywi.py land delete --name=airegulation --maxrel=1     # confirmation 'Y'
+uv run python mywi.py land llm validate --name=airegulation --limit=200
+uv run python mywi.py land delete --name=airegulation --maxrel=1     # confirmation 'Y'
 
 # §9-11 — Enrichissements
-python mywi.py domain crawl --limit=500
-python mywi.py heuristic update
-python mywi.py land seorank --name=airegulation
-python mywi.py land medianalyse --name=airegulation --minrel=1
-python mywi.py land media_stats --name=airegulation
-python mywi.py land preview_deletion --name=airegulation --minwidth=200 --minheight=200
+uv run python mywi.py domain crawl --limit=500
+uv run python mywi.py heuristic update
+uv run python mywi.py land seorank --name=airegulation
+uv run python mywi.py land medianalyse --name=airegulation --minrel=1
+uv run python mywi.py land media_stats --name=airegulation
+uv run python mywi.py land preview_deletion --name=airegulation --minwidth=200 --minheight=200
 
 # §12-13 — Consolidation et sémantique
-python mywi.py land consolidate --name=airegulation --depth=0
+uv run python mywi.py land consolidate --name=airegulation --depth=0
 # (consolidate respecte validllm='non' ; --llm=true rejoue la gate OpenRouter ; --issuecrawl = mode controverse)
-python mywi.py embedding generate --name=airegulation
-python mywi.py embedding similarity --name=airegulation --method=cosine --threshold=0.85 --minrel=1
+uv run python mywi.py embedding generate --name=airegulation
+uv run python mywi.py embedding similarity --name=airegulation --method=cosine --threshold=0.85 --minrel=1
 
 # §14-15 — Exports
-python mywi.py tag export --name=airegulation --type=matrix --minrel=1
-python mywi.py land export --name=airegulation --type=pagecsv  --minrel=1
-python mywi.py land export --name=airegulation --type=nodegexf --minrel=1
-python mywi.py land export --name=airegulation --type=corpus   --minrel=1
-python mywi.py land export --name=airegulation --type=htmldump --minrel=1
+uv run python mywi.py tag export --name=airegulation --type=matrix --minrel=1
+uv run python mywi.py land export --name=airegulation --type=pagecsv  --minrel=1
+uv run python mywi.py land export --name=airegulation --type=nodegexf --minrel=1
+uv run python mywi.py land export --name=airegulation --type=corpus   --minrel=1
+uv run python mywi.py land export --name=airegulation --type=htmldump --minrel=1
 # (+ fullpagecsv, nodecsv, pagegexf, mediacsv, nodelinkcsv, pseudolinks, pseudolinkspage, pseudolinksdomain, nodesjson, pagesjson)
 ```
 

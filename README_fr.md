@@ -294,6 +294,7 @@ uv run python -m nltk.downloader punkt punkt_tab
 - `scripts/install_utils.py` — bibliothèque d'utilitaires partagée par les assistants d'installation interactifs (non exécutable seule).
 
 ---
+
 # Utilisation
 
 ## Notes générales
@@ -624,6 +625,7 @@ Points clés :
   uv run python mywi.py db migrate                      # ajoute word.lang (migration 011)
   uv run python mywi.py land relemm --name="EnglishTopic"  # re-stemme les termes + recalcule la pertinence
   ```
+
 ## Collecte de données
 
 ### 1. Crawler les URLs du land
@@ -747,7 +749,7 @@ sudo npm install -g @postlight/mercury-parser
 > tronquée ne pourrait que perdre du texte.
 >
 > Si un land a été touché, réinitialisez le marqueur sur les pages vides et
-> relancez (sauvegardez d'abord, voir *Sauvegardes* ci-dessous) :
+> relancez (sauvegardez d'abord, voir [Garder le schéma de base à jour](#garder-le-schéma-de-base-à-jour)) :
 > ```sql
 > UPDATE expression SET readable_at = NULL
 >  WHERE land_id = <id> AND html IS NOT NULL
@@ -902,7 +904,7 @@ uv run python mywi.py land medianalyse --name=LAND_NAME [--depth=DEPTH] [--minre
 
 **Exemple :**
 ```bash
-uv run python mywi.py land medianalyse --name="AsthmaResearch" --depth=2 --minrel=0.5
+uv run python mywi.py land medianalyse --name="AsthmaResearch" --depth=2 --minrel=1
 ```
 
 **Remarques :**
@@ -955,6 +957,7 @@ uv run python mywi.py domain crawl --http=ERR   # relancer tous les domaines en 
 ```
 
 ---
+
 ## Exporter les données
 
 Exportez les données de vos lands ou de vos tags pour les analyser dans d'autres outils.
@@ -1114,7 +1117,7 @@ uv run python mywi.py tag export --name="MyResearchTopic" --type=EXPORT_TYPE [--
 **Exemples :**
 ```bash
 uv run python mywi.py tag export --name="AsthmaResearch" --type=matrix
-uv run python mywi.py tag export --name="AsthmaResearch" --type=content --minrel=0.5
+uv run python mywi.py tag export --name="AsthmaResearch" --type=content --minrel=1
 ```
 
 ---
@@ -1322,8 +1325,8 @@ uv run python mywi.py land consolidate --name=LAND_NAME
 Les doublons exacts hérités (plusieurs lignes partageant déjà la même URL
 canonique) sont aussi résorbés : la ligne la plus riche survit, ses sœurs y sont
 fusionnées. Limites connues : `https://site.com` et `https://site.com/` ne
-convergent pas (le slash racine est préservé par la politique `strip`) ; avec
-`--limit`, un groupe peut n'être traité que partiellement (les relances convergent). Sur de très grosses bases,
+convergent que sous la politique `strip` (le défaut `preserve` en garde deux nœuds) ;
+`--limit` plafonne les groupes de collision, et un groupe n'est jamais coupé (les relances convergent). Sur de très grosses bases,
 préférez travailler sur une copie locale (les E/S SQLite sur un disque synchronisé
 dans le cloud sont lentes), puis remettez le fichier en place.
 
@@ -1350,9 +1353,12 @@ Alternative sans modification du code : `MYWI_DATA_DIR=/some/dir uv run python m
 
 ## Tests
 
-MyWI inclut une suite de tests aux standards JOSS. Lancez `make test` pour les chiffres du
-jour ; le compte de référence, la commande qui le produit et les skips attendus sont tenus
-à un seul endroit, `CLAUDE.md` §4.1. Couverture ~87 % à la dernière mesure (10 juin 2026).
+MyWI inclut une suite de tests aux standards JOSS. Lancez `make test` : sa dernière ligne
+donne les chiffres du jour. Attendez-vous à **2 skips** — les deux tests réseau réels
+(curl_cffi, Playwright), ignorés par construction — et à quelques tests
+**désélectionnés** : ceux qui exigent une clé d'API (`make test-apis`) ou une instance
+SearXNG active (`make test-integration`). Couverture ~87 % à la dernière mesure
+(10 juin 2026).
 
 ### Démarrage rapide
 
@@ -1361,7 +1367,7 @@ jour ; le compte de référence, la commande qui le produit et les skips attendu
 # pytest-asyncio, aioresponses, pytest-cov). Repli pip : pip install -r requirements.txt
 uv sync
 
-# Tests de base, sans clés API, sans réseau (~7 secondes). Les cibles Make appellent `uv run` en interne.
+# Tests de base, sans clés API, sans réseau (environ une minute). Les cibles Make appellent `uv run` en interne.
 make test
 
 # Idem, avec rapport de couverture (ouvrir htmlcov/index.html)
@@ -1370,18 +1376,29 @@ make test-cov
 
 ### Structure des tests
 
-| Fichier | Tests | Couverture |
-|------|------:|----------|
-| `tests/test_01_installation.py`     | 12 | Mise en place de la base, idempotence des migrations |
-| `tests/test_02_land_management.py`  | 19 | CRUD land/termes/URLs, mises à jour du dictionnaire |
-| `tests/test_03_data_collection.py`  | 12 | Pipeline de crawl, extraction de contenu |
-| `tests/test_04_export.py`           | 12 | Exports CSV / GEXF / corpus / pseudolinks |
-| `tests/test_05_media_analysis.py`   | 9  | Pillow / EXIF / hachage / couleurs |
-| `tests/test_06_embeddings.py`       | 12 | Découpage en paragraphes, fournisseurs, similarité |
-| `tests/test_07_integration.py`      | 11 | Workflows de bout en bout |
-| `tests/test_08_expression_html.py`  | 11 | Stockage `--fullhtml`, défaut `Land.fullhtml`, migration 007 |
+La suite est à plat et numérotée, `tests/test_NN_*.py`, un fichier par domaine de
+comportement. `make list-tests` affiche chaque test ; les comptes par fichier bougent
+trop souvent pour valoir la peine d'être recopiés ici.
 
-Les anciens smoke tests (`test_cli.py`, `test_core.py`, etc.) se trouvent dans `tests/legacy/` et sont conservés à titre de référence ; la suite active est `tests/test_NN_*.py` (`test_01` à `test_38`).
+| Fichiers | Domaine |
+|-------|------|
+| `test_01` – `test_08` | Socle : installation et migrations, gestion des lands, crawl et extraction, exports, analyse des médias, embeddings, workflows de bout en bout, stockage du HTML brut (`--fullhtml`) |
+| `test_09` | Normalisation des URLs |
+| `test_10` – `test_15` | Cascade de récupération (aiohttp → curl_cffi → Playwright → archive.org), `fetch_method`, `--retry-status`, pool de navigateurs partagé |
+| `test_16` | Routeur SerpAPI (`land urlist`) |
+| `test_17` – `test_25` | Routeur de recherche multi-API : modèles, les cinq fournisseurs, routeur, contrôleur, intégration |
+| `test_26` | Lands multilingues |
+| `test_27` | Correctifs de la CLI (confirmations, `--http=ERR`, troncature, dry-run) |
+| `test_28` – `test_31` | Contexte des liens, réseau de liens du HTML brut, parseur de liens markdown, consolidation des liens |
+| `test_32` | Verdicts LLM respectés par `consolidate`, mode controverse |
+| `test_33` | Heuristiques de domaine |
+| `test_34` – `test_38` | Liens du corps : banc hors ligne, extraction, classification `kind`, export `--link-profile`, pipeline de normalisation |
+| `test_39` – `test_50` | Robustesse et reproductibilité : sous-processus Mercury, empreinte perceptuelle, pagination keyset, consolidate atomique, gardes de dry-run, lots du readable, codes de sortie, occurrences de paragraphes, workflow CI, gate LLM asynchrone, déterminisme des exports, liens des README |
+| `test_51` | Statistiques du planificateur SQLite et pragmas |
+| `test_52` | Codage des liens par quatre juges LLM |
+| `test_53` | Rattachement des jumelles d'URL à l'export (`--resolve-twins`) |
+
+Les anciens smoke tests (`test_cli.py`, `test_core.py`, etc.) se trouvent dans `tests/legacy/` et sont conservés à titre de référence ; `make test` les exécute aussi.
 
 ### Toutes les cibles Make
 
@@ -1393,6 +1410,8 @@ Les anciens smoke tests (`test_cli.py`, `test_core.py`, etc.) se trouvent dans `
 | `make test-cov` / `make test-cov-open` | Rapport de couverture (ouvert dans le navigateur) |
 | `make test-apis` | Tests conditionnés par `MWI_SERPAPI_API_KEY`, `MWI_SEORANK_API_KEY`, `MWI_OPENROUTER_API_KEY` |
 | `make test-integration` | Tests de bout en bout lents (réseau) |
+| `make lint` / `make lint-all` / `make typecheck` | flake8 classe bugs / flake8 complet / mypy — les trois bloquent la CI |
+| `make bench-cache` / `make bench-links` / `make bench-determinism` | Banc hors ligne des liens du corps (voir [`benchmarks/body_links/README.md`](benchmarks/body_links/README.md)) |
 | `make test-01` … `make test-05` | Raccourcis par fichier |
 | `make check` | `test-quick` + `test-cov` (recommandé pour la CI) |
 | `make joss-test` | Rejoue le flux d'évaluation JOSS |
@@ -1416,10 +1435,14 @@ make test-apis
 
 Pour la définition des marqueurs pytest, voir `pytest.ini`. Pour la configuration de la CI, voir `.github/workflows/ci.yml`.
 
-`make lint` est exactement ce sur quoi la CI bloque (la classe bugs de flake8 : erreurs
-de syntaxe, noms non définis, comparaisons impossibles). `make lint-all` (flake8 complet) et
-`make typecheck` (mypy) sont informatifs — ils rapportent une dette mesurée en cours de
-remboursement, et ne font pas échouer le build.
+La CI bloque sur trois contrôles : `make lint` (la classe bugs de flake8 : erreurs de
+syntaxe, noms non définis, comparaisons impossibles), `make lint-all` (flake8 complet) et
+`make typecheck` (mypy). Les trois sont à zéro : un seul message fait échouer le build.
+La CI exécute flake8 sous Python 3.12, qui inspecte aussi les champs des f-strings : un
+environnement local en 3.11 peut remonter moins de messages. Pour reproduire le verdict
+de la CI : `uv run --locked --python 3.12 flake8 mwi/ --count` (ce qui reconstruit le
+`.venv` sous Python 3.12).
+
 # Embeddings & pseudolinks (guide utilisateur)
 
 ## Objectif
@@ -1454,7 +1477,6 @@ Flux type
 
 
 ## Modèles
--Pseudolinks
 - Multilingue (recommandé) :
   - MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7
 - Repli léger (anglais) :
@@ -1685,6 +1707,7 @@ uv run python mywi.py embedding check
 ```
 
 Affiche la configuration du fournisseur, les bibliothèques optionnelles (faiss/sentence-transformers/transformers) et la disponibilité des tables de la base.
+
 # Dépannage & réparation
 
 ## Garder le schéma de base à jour
@@ -1807,7 +1830,7 @@ mywi.py  →  mwi/cli.py  →  mwi/controller.py  →  mwi/core.py & mwi/export.
 
 - **Score de pertinence** : somme pondérée des occurrences de lemmes dans le titre / le contenu.
 - **Lots asynchrones** : concurrence polie pour le crawl.
-- **Extraction des médias** : seules les images `.jpg` sont conservées, les médias sont enregistrés pour un téléchargement ultérieur.
+- **Extraction des médias** : les URL d'images (`.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`, `.bmp`, `.svg`, quelle que soit la casse), de vidéos et de sons sont enregistrées dans `Media` ; leur mesure (dimensions, EXIF, empreintes, couleurs) est une étape distincte, `land medianalyse`.
 - **Export** : formats multiples, SQL dynamique, GEXF avec attributs.
 
 ### Réglages
@@ -1929,7 +1952,7 @@ les dates couvertes et le nombre d'URL renvoyées par SerpAPI.
 
 ### Tests (vue développeur)
 
-- Suite active : `tests/test_01_installation.py` … `tests/test_08_expression_html.py` (fichiers numérotés).
+- Suite active : les fichiers numérotés `tests/test_NN_*.py` (inventaire dans [Structure des tests](#structure-des-tests)).
 - Les anciens smokes (`test_cli.py`, `test_core.py`, etc.) vivent sous `tests/legacy/`. Ils **sont** exécutés par `make test` : `pytest.ini` fixe `testpaths = tests` et pytest parcourt les sous-dossiers récursivement. (Cette ligne affirmait le contraire jusqu'en 2026-09.)
 - Le conftest de `tests/conftest.py` met en place une base SQLite isolée par test, dans des répertoires temporaires.
 - Voir le tableau complet des cibles Make dans la section [Tests](#tests) ci-dessus pour les points d'entrée.
@@ -1945,5 +1968,4 @@ les dates couvertes et le nombre d'URL renvoyées par SerpAPI.
 
 # Licence
 
-Ce projet est distribué selon les termes du fichier LICENSE. (En supposant qu'un fichier LICENSE existe dans le dépôt, par ex. MIT, Apache 2.0.)
-Si `LICENSE` est bien le nom du fichier, vous pouvez y faire un lien : [LICENSE](LICENSE).
+Ce projet est distribué sous licence MIT — voir [LICENSE](LICENSE).

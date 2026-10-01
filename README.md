@@ -18,18 +18,61 @@ This README is also available in French: [README_fr.md](README_fr.md)
 - [Features](#features)
 - [Tutorials](#tutorials)
 - [Installation](#installation)
-  - [Using Docker](#using-docker)
-  - [Local Development Setup](#local-development-setup)
+  - [Quick Start: Docker Compose (Recommended)](#quick-start-docker-compose-recommended)
+  - [Manual Docker (Advanced)](#manual-docker-advanced)
+  - [Local Installation](#local-installation)
+  - [Helper Scripts](#helper-scripts)
 - [Usage](#usage)
   - [General Notes](#general-notes)
   - [Land Management](#land-management)
+    - [1. Create a New Land](#1-create-a-new-land)
+    - [2. List Created Lands](#2-list-created-lands)
+    - [3. Add Terms to a Land](#3-add-terms-to-a-land)
+    - [4. Add URLs to a Land](#4-add-urls-to-a-land)
+    - [5. Gather URLs from SerpAPI (Google)](#5-gather-urls-from-serpapi-google)
+    - [6. Multi-API Search Router](#6-multi-api-search-router)
+    - [7. Delete a Land or Expressions](#7-delete-a-land-or-expressions)
+  - [Multilingual Lands](#multilingual-lands)
   - [Data Collection](#data-collection)
-  - [Domain Management](#domain-management)
+    - [1. Crawl Land URLs](#1-crawl-land-urls)
+    - [2. Fetch Readable Content (Mercury Parser Pipeline)](#2-fetch-readable-content-mercury-parser-pipeline)
+    - [3. Capture SEO Rank Metrics](#3-capture-seo-rank-metrics)
+    - [4. Media Analysis](#4-media-analysis)
+    - [5. Crawl Domains](#5-crawl-domains)
   - [Exporting Data](#exporting-data)
-  - [Heuristics](#heuristics)
-- [Testing](#testing)
-- [Helper Scripts](#helper-scripts)
-- [SQLite Recovery](#sqlite-recovery)
+    - [1. Export Land Data](#1-export-land-data)
+    - [2. Export Tag Data](#2-export-tag-data)
+  - [Update Domains from Heuristic Settings](#update-domains-from-heuristic-settings)
+  - [Land Consolidation Pipeline](#land-consolidation-pipeline)
+  - [URL Normalization Pipeline](#url-normalization-pipeline)
+  - [Testing](#testing)
+- [Embeddings & Pseudolinks (User Guide)](#embeddings--pseudolinks-user-guide)
+  - [Purpose](#purpose)
+  - [Prerequisites & Install](#prerequisites--install)
+  - [Models](#models)
+  - [Settings (Key Reference)](#settings-key-reference)
+  - [Commands & Parameters](#commands--parameters)
+  - [Troubleshooting & Caution](#troubleshooting--caution)
+  - [Best Practices — Performance](#best-practices--performance)
+  - [Model Choice and Fallbacks](#model-choice-and-fallbacks)
+  - [Progress & Logs](#progress--logs)
+  - [Similarity Methods](#similarity-methods)
+  - [ANN Backend Selection (FAISS)](#ann-backend-selection-faiss)
+  - [Scalable Similarity (Large Lands)](#scalable-similarity-large-lands)
+  - [NLI Relations (ANN + Cross‑Encoder)](#nli-relations-ann--crossencoder)
+- [Troubleshooting & repairing](#troubleshooting--repairing)
+  - [Keep the database schema current](#keep-the-database-schema-current)
+  - [Repair archive.org domain attributions](#repair-archiveorg-domain-attributions)
+  - [SQLite Recovery](#sqlite-recovery)
+- [For Developers](#for-developers)
+  - [Architecture & Internals](#architecture--internals)
+    - [File Structure & Flow](#file-structure--flow)
+    - [Database Schema (SQLite, via Peewee)](#database-schema-sqlite-via-peewee)
+    - [Main Workflows](#main-workflows)
+    - [Implementation Notes](#implementation-notes)
+    - [Settings](#settings)
+    - [Testing (developer view)](#testing-developer-view)
+    - [Extending](#extending)
 - [License](#license)
 
 ## Features
@@ -692,7 +735,7 @@ sudo npm install -g @postlight/mercury-parser
 > re-extracting from a truncated archive could only lose text.
 >
 > If a land was affected, reset the marker on the empty ones and re-run (back up
-> first, see *Backups* below):
+> first, see [Keep the database schema current](#keep-the-database-schema-current)):
 > ```sql
 > UPDATE expression SET readable_at = NULL
 >  WHERE land_id = <id> AND html IS NOT NULL
@@ -847,7 +890,7 @@ uv run python mywi.py land medianalyse --name=LAND_NAME [--depth=DEPTH] [--minre
 
 **Example:**
 ```bash
-uv run python mywi.py land medianalyse --name="AsthmaResearch" --depth=2 --minrel=0.5
+uv run python mywi.py land medianalyse --name="AsthmaResearch" --depth=2 --minrel=1
 ```
 
 **Notes:**
@@ -1055,7 +1098,7 @@ uv run python mywi.py tag export --name="MyResearchTopic" --type=EXPORT_TYPE [--
 **Examples:**
 ```bash
 uv run python mywi.py tag export --name="AsthmaResearch" --type=matrix
-uv run python mywi.py tag export --name="AsthmaResearch" --type=content --minrel=0.5
+uv run python mywi.py tag export --name="AsthmaResearch" --type=content --minrel=1
 ```
 
 ---
@@ -1259,9 +1302,9 @@ uv run python mywi.py land consolidate --name=LAND_NAME
 
 Legacy exact duplicates (several rows already sharing the same canonical
 URL) are also collapsed: the richest row survives, its siblings are merged
-into it. Known limits: `https://site.com` and `https://site.com/` do not
-converge (the root slash is preserved by the `strip` policy); with
-`--limit` a group may be processed partially (re-runs converge). On very large databases
+into it. Known limits: `https://site.com` and `https://site.com/` converge only
+under the `strip` policy (the default `preserve` keeps them as two nodes);
+`--limit` caps collision groups, and a group is never split (re-runs converge). On very large databases
 prefer running on a local copy (SQLite I/O on cloud-synced drives is
 slow), then move the file back.
 
@@ -1288,9 +1331,11 @@ Alternative without code change: `MYWI_DATA_DIR=/some/dir uv run python mywi.py 
 
 ## Testing
 
-MyWI ships with a JOSS-grade test suite. Run `make test` for the current figures; the
-reference count, the command that produces it and the expected skips are kept in one
-place, `CLAUDE.md` §4.1. Coverage was ~87% when last measured on 10 June 2026.
+MyWI ships with a JOSS-grade test suite. Run `make test`: its last line gives the
+current figures. Expect **2 skips** — the two live-network tests (curl_cffi,
+Playwright), skipped by design — and a few **deselected** tests: those that need an
+API key (`make test-apis`) or a live SearXNG instance (`make test-integration`).
+Coverage was ~87% when last measured on 10 June 2026.
 
 ### Quick start
 
@@ -1299,7 +1344,7 @@ place, `CLAUDE.md` §4.1. Coverage was ~87% when last measured on 10 June 2026.
 # aioresponses, pytest-cov — automatically). pip fallback: pip install -r requirements.txt
 uv sync
 
-# Basic tests, no API keys, no network (~7 seconds). Make targets call `uv run` internally.
+# Basic tests, no API keys, no network (about a minute). Make targets call `uv run` internally.
 make test
 
 # Same, with coverage report (open htmlcov/index.html)
@@ -1308,18 +1353,29 @@ make test-cov
 
 ### Test structure
 
-| File | Tests | Coverage |
-|------|------:|----------|
-| `tests/test_01_installation.py`     | 12 | Database setup, migration idempotency |
-| `tests/test_02_land_management.py`  | 19 | Land/term/URL CRUD, dictionary updates |
-| `tests/test_03_data_collection.py`  | 12 | Crawl pipeline, content extraction |
-| `tests/test_04_export.py`           | 12 | CSV / GEXF / corpus / pseudolinks exports |
-| `tests/test_05_media_analysis.py`   | 9  | Pillow / EXIF / hashing / colors |
-| `tests/test_06_embeddings.py`       | 12 | Paragraph splitting, providers, similarity |
-| `tests/test_07_integration.py`      | 11 | End-to-end workflows |
-| `tests/test_08_expression_html.py`  | 11 | `--fullhtml` storage, `Land.fullhtml` default, migration 007 |
+The suite is flat and numbered, `tests/test_NN_*.py`, one file per behaviour area.
+`make list-tests` prints every test; the per-file counts move too often to be
+worth copying here.
 
-Older smoke tests (`test_cli.py`, `test_core.py`, etc.) live in `tests/legacy/` and are kept for reference; the active suite is `tests/test_NN_*.py` (`test_01` through `test_38`).
+| Files | Area |
+|-------|------|
+| `test_01` – `test_08` | Core: installation and migrations, land management, crawl and extraction, exports, media analysis, embeddings, end-to-end workflows, raw HTML storage (`--fullhtml`) |
+| `test_09` | URL normalization |
+| `test_10` – `test_15` | Fetch cascade (aiohttp → curl_cffi → Playwright → archive.org), `fetch_method`, `--retry-status`, shared browser pool |
+| `test_16` | SerpAPI router (`land urlist`) |
+| `test_17` – `test_25` | Multi-API search router: models, the five providers, router, controller, integration |
+| `test_26` | Multilingual lands |
+| `test_27` | CLI fixes (confirmations, `--http=ERR`, truncation, dry-run) |
+| `test_28` – `test_31` | Link context, raw-HTML link network, markdown link parser, link consolidation |
+| `test_32` | LLM verdicts honoured by `consolidate`, controversy mode |
+| `test_33` | Domain heuristics |
+| `test_34` – `test_38` | Body links: offline benchmark, extraction, `kind` classification, `--link-profile` export, normalize pipeline |
+| `test_39` – `test_50` | Robustness and reproducibility: Mercury subprocess, perceptual hash, keyset pagination, atomic consolidate, dry-run guards, readable batching, exit codes, paragraph occurrences, CI workflow, async LLM gate, export determinism, README links |
+| `test_51` | SQLite planner statistics and pragmas |
+| `test_52` | Four-judge LLM coding of links |
+| `test_53` | Twin re-attachment at export (`--resolve-twins`) |
+
+Older smoke tests (`test_cli.py`, `test_core.py`, etc.) live in `tests/legacy/` and are kept for reference; `make test` runs them too.
 
 ### All Make targets
 
@@ -1331,6 +1387,8 @@ Older smoke tests (`test_cli.py`, `test_core.py`, etc.) live in `tests/legacy/` 
 | `make test-cov` / `make test-cov-open` | Coverage report (open in browser) |
 | `make test-apis` | Tests gated by `MWI_SERPAPI_API_KEY`, `MWI_SEORANK_API_KEY`, `MWI_OPENROUTER_API_KEY` |
 | `make test-integration` | Slow end-to-end tests (network) |
+| `make lint` / `make lint-all` / `make typecheck` | flake8 bug class / full flake8 / mypy — all three block CI |
+| `make bench-cache` / `make bench-links` / `make bench-determinism` | Offline body-links benchmark (see [`benchmarks/body_links/README.md`](benchmarks/body_links/README.md)) |
 | `make test-01` … `make test-05` | Single file shortcuts |
 | `make check` | `test-quick` + `test-cov` (recommended for CI) |
 | `make joss-test` | Replays the JOSS evaluation flow |
@@ -1354,12 +1412,15 @@ make test-apis
 
 For pytest marker definitions, see `pytest.ini`. For CI configuration, see `.github/workflows/ci.yml`.
 
-`make lint` is exactly what CI blocks on (the flake8 bug class: syntax errors,
-undefined names, impossible comparisons). `make lint-all` (full flake8) and
-`make typecheck` (mypy) are informational — they report a measured debt that is
-being paid down, and they do not fail the build.
+CI blocks on three checks: `make lint` (the flake8 bug class: syntax errors,
+undefined names, impossible comparisons), `make lint-all` (full flake8) and
+`make typecheck` (mypy). All three are at zero, so a single message fails the
+build. CI runs flake8 under Python 3.12, which also inspects f-string fields: a
+local 3.11 environment can report fewer messages. To reproduce the CI verdict:
+`uv run --locked --python 3.12 flake8 mwi/ --count` (this rebuilds `.venv`
+under Python 3.12).
 
-#  Embeddings & Pseudolinks (User Guide)
+# Embeddings & Pseudolinks (User Guide)
 
 ## Purpose
 - Build paragraph‑level vectors (embeddings) from pages, then link similar paragraphs across pages (“pseudolinks”).
@@ -1393,7 +1454,6 @@ Typical flow
 
 
 ## Models
--Pseudo Links
 - Multilingual (recommended):
   - MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7
 - Lightweight fallback (English):
@@ -1695,7 +1755,7 @@ mv data/mwi_repaired.db data/mwi.db
 
 Note: You can temporarily point the app to a different data directory using the `MYWI_DATA_DIR` environment variable; it overrides `settings.py:data_location` for that session.
 
-# For Developpers
+# For Developers
 
 ## Architecture & Internals
 
@@ -1747,7 +1807,7 @@ mywi.py  →  mwi/cli.py  →  mwi/controller.py  →  mwi/core.py & mwi/export.
 
 - **Relevance Score**: Weighted sum of lemma hits in title/content.
 - **Async Batching**: Polite concurrency for crawling.
-- **Media Extraction**: Only `.jpg` images kept, media saved for later download.
+- **Media Extraction**: images (`.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`, `.bmp`, `.svg`, any case), video and audio URLs are recorded in `Media`; measuring them (dimensions, EXIF, hashes, colors) is a separate step, `land medianalyse`.
 - **Export**: Multiple formats, dynamic SQL, GEXF with attributes.
 
 ### Settings
@@ -1866,7 +1926,7 @@ line per window indicating the covered dates and how many URLs SerpAPI returned.
 
 ### Testing (developer view)
 
-- Active suite: `tests/test_01_installation.py` … `tests/test_08_expression_html.py` (numbered files).
+- Active suite: the numbered files `tests/test_NN_*.py` (inventory in [Test structure](#test-structure)).
 - Legacy smokes (`test_cli.py`, `test_core.py`, etc.) live under `tests/legacy/`. They **are** run by `make test`: `pytest.ini` sets `testpaths = tests` and pytest recurses. (This line claimed the opposite until 2026-09.)
 - Conftest in `tests/conftest.py` sets up an isolated SQLite per test using temp directories.
 - See the full Make-target table in the [Testing](#testing) section above for entry points.
@@ -1882,5 +1942,4 @@ line per window indicating the covered dates and how many URLs SerpAPI returned.
 
 # License
 
-This project is licensed under the terms of the LICENSE file. (Assuming a LICENSE file exists in the repository, e.g., MIT, Apache 2.0).
-If `LICENSE` is the actual name of the file, you can link to it: [LICENSE](LICENSE).
+This project is licensed under the MIT License — see [LICENSE](LICENSE).

@@ -152,7 +152,7 @@ Ces gestes touchent des données de production ; ils n'ont pas été exécutés.
 2. **Trois dry-runs de décision** (D1 `path_casefold`, D2 trackers), qui
    produisent le mapping sans rien modifier — voir `--mapping-out` dans le
    README.
-3. **`python mywi.py db migrate`** sur les bases existantes (migration 014).
+3. **`uv run python mywi.py db migrate`** sur les bases existantes (migration 014).
 4. **`land consolidate`** pour rétro-remplir `kind` sur un land déjà crawlé,
    puis réexporter.
 5. Les consommateurs qui référencent des identifiants internes doivent

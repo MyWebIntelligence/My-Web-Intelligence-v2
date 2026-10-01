@@ -475,28 +475,28 @@ docker rm mwi        # supprimer (les données dans ~/mywi_data restent)
 
 Petit test concret pour vous assurer que la chaîne complète marche : créer un Land, y mettre des termes, lister.
 
-> ⚠️ Si **chemin A ou C** : préfixez chaque commande par `docker compose exec mwi` (ou `docker exec mwi`), ou bien entrez d'abord dans le conteneur (`docker compose exec mwi bash`).
+> ⚠️ Les commandes ci-dessous sont écrites pour le **chemin B avec `uv`** (`uv run python mywi.py …`).
 >
-> Si **chemin B avec `uv`** : préfixez chaque commande `python …` ci-dessous par `uv run` (ex. `uv run python mywi.py land list`). **Avec la variante pip** : assurez-vous que `(.venv)` apparaît dans votre invite ; sinon, réactivez (cf. 3.2).
+> Si **chemin A ou C** : remplacez `uv run` par `docker compose exec mwi` (ou `docker exec mwi`), ou bien entrez d'abord dans le conteneur (`docker compose exec mwi bash`) et tapez les commandes **sans** `uv run`. **Avec la variante pip** : retirez `uv run` et assurez-vous que `(.venv)` apparaît dans votre invite ; sinon, réactivez (cf. 3.2).
 
 ### 5.1 — Créer un Land de test
 
 ```bash
-python mywi.py land create --name="TestInstall" --desc="Mon premier essai"
+uv run python mywi.py land create --name="TestInstall" --desc="Mon premier essai"
 ```
 **Décodage** : `land` est l'objet, `create` le verbe, `--name` et `--desc` sont les paramètres obligatoires. Sortie attendue : `Land "TestInstall" created (fullhtml=disabled)`.
 
 ### 5.2 — Ajouter des termes (mots-clés thématiques)
 
 ```bash
-python mywi.py land addterm --land="TestInstall" --terms="climat, environnement, écologie"
+uv run python mywi.py land addterm --land="TestInstall" --terms="climat, environnement, écologie"
 ```
 **Ce qui se passe** : MWI lemmatise chaque terme (l'écologie devient « écologi », *etc.*) et l'enregistre dans le dictionnaire du Land.
 
 ### 5.3 — Vérifier dans la liste
 
 ```bash
-python mywi.py land list
+uv run python mywi.py land list
 ```
 
 Vous voyez `TestInstall` avec ses termes : c'est gagné.
@@ -510,17 +510,16 @@ uv run pytest tests/ -q
 # Chemin B (variante pip, venv activé)
 pip install pytest pytest-cov
 pytest tests/ -q
-
-# Chemin A
-docker compose exec mwi pytest tests/ -q
 ```
 
-Vous devez voir quelque chose comme `98 passed in 7.5s`. Cela confirme que **toute** l'installation est saine.
+Chemins A et C : l'image Docker est construite sans les outils de test (`uv sync --no-dev`), lancez donc la suite depuis une installation locale (chemin B).
+
+Vous devez voir une dernière ligne du type `N passed, M skipped` — plus d'un millier de tests, environ une minute — **sans aucun `failed`**. Les `skipped` sont normaux : tests réseau réels, tests qui exigent une clé d'API ou une instance SearXNG. Cela confirme que **toute** l'installation est saine.
 
 ### 5.5 — Faire le ménage
 
 ```bash
-python mywi.py land delete --name="TestInstall"
+uv run python mywi.py land delete --name="TestInstall"
 ```
 
 🎉 **Installation complète.** Vous pouvez ouvrir `docs/mwi_tutorial_crawl.md` pour apprendre à constituer un vrai corpus.
@@ -616,6 +615,10 @@ docker compose exec mwi python install_playwright.py
 ### 7.3 — Erreur SSL au téléchargement des dépendances
 
 ```bash
+# Chemin B (uv) : utiliser les certificats du système (proxy d'entreprise, antivirus…)
+uv sync --system-certs
+
+# Chemin B (variante pip, venv activé)
 python -m pip install --upgrade certifi
 ```
 
@@ -624,7 +627,7 @@ Sur macOS, lancez aussi `Install Certificates.command` situé dans `/Application
 ### 7.4 — NLTK : `LookupError: Resource punkt not found`
 
 ```bash
-python -m nltk.downloader punkt punkt_tab
+uv run python -m nltk.downloader punkt punkt_tab   # variante pip (venv activé) : python -m nltk.downloader punkt punkt_tab
 ```
 
 ### 7.5 — `(.venv)` n'apparaît pas devant l'invite
@@ -725,7 +728,7 @@ rm -rf data/
 **Chemin B — Local** :
 
 ```bash
-deactivate          # sortir du venv
+deactivate          # variante pip seulement : sortir du venv
 cd ..
 rm -rf mwi/         # supprime tout le projet (code + venv + données)
 ```

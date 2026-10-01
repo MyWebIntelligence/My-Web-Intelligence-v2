@@ -1,8 +1,8 @@
 # Tutoriel pas à pas — Constituer son premier corpus avec MWI
 
-> **Prérequis** : MWI installé (voir `mwi_tutorial_install.md`). Vous savez ouvrir un terminal, entrer dans le dossier `mwi/`, et lancer `python mywi.py …`.
+> **Prérequis** : MWI installé (voir `mwi_tutorial_install.md`). Vous savez ouvrir un terminal, entrer dans le dossier `mwi/`, et lancer `uv run python mywi.py …`.
 >
-> 💡 **Comment lancer les commandes ci-dessous ?** Si vous avez suivi le chemin `uv` (recommandé), préfixez chaque `python mywi.py …` par `uv run` : `uv run python mywi.py land list`. Avec la variante `pip` (venv activé) ou dans Docker, tapez les commandes telles quelles. Pour rester lisibles, les exemples sont écrits sans le préfixe `uv run`.
+> 💡 **Comment lancer les commandes ci-dessous ?** Elles sont écrites pour le chemin `uv` (recommandé) : copiez-les telles quelles depuis la racine du dépôt, par exemple `uv run python mywi.py land list`. Avec la variante `pip` (venv activé) ou dans le conteneur Docker, retirez le préfixe `uv run ` : `python mywi.py land list`.
 >
 > **Le contrat** : on va construire un corpus thématique de A à Z, en s'appuyant sur **un vrai exemple** — le corpus *Mélenchon* (169 199 pages crawlées entre 2024 et 2025). Chaque commande est suivie de la sortie réelle qu'elle a produite, pour que vous sachiez à quoi vous attendre.
 >
@@ -82,7 +82,7 @@ Tout au long de ce tutoriel, on va dérouler le cycle de vie en s'appuyant sur *
 ### 1.1 — Commande générique
 
 ```bash
-python mywi.py land create --name="MonLand" --desc="Description courte" [--lang=fr] [--fullhtml=TRUE]
+uv run python mywi.py land create --name="MonLand" --desc="Description courte" [--lang=fr] [--fullhtml=TRUE]
 ```
 
 | Paramètre | Rôle |
@@ -95,7 +95,7 @@ python mywi.py land create --name="MonLand" --desc="Description courte" [--lang=
 ### 1.2 — Notre exemple
 
 ```bash
-python mywi.py land create \
+uv run python mywi.py land create \
   --name="melenchon" \
   --lang=fr \
   --desc="analyse socio, politique sur le Web des pages qui abordent Jean-Luc Mélenchon, comme objet principal ou comme objet annexe du propos"
@@ -112,7 +112,7 @@ Land "melenchon" created (fullhtml=disabled)
 ### 1.3 — Vérifier
 
 ```bash
-python mywi.py land list
+uv run python mywi.py land list
 ```
 
 Vous devez voir votre Land apparaître avec ses champs.
@@ -145,7 +145,7 @@ Conséquence : ajouter le mot « écologie » suffit pour reconnaître toutes se
 ### 2.3 — Commande générique
 
 ```bash
-python mywi.py land addterm --land="MonLand" --terms="terme1, terme2, expression composée"
+uv run python mywi.py land addterm --land="MonLand" --terms="terme1, terme2, expression composée"
 ```
 
 ### 2.4 — Notre exemple
@@ -153,7 +153,7 @@ python mywi.py land addterm --land="MonLand" --terms="terme1, terme2, expression
 Le Land *Mélenchon* contient seulement **2 termes** :
 
 ```bash
-python mywi.py land addterm --land="melenchon" --terms="melenchon, mélenchon"
+uv run python mywi.py land addterm --land="melenchon" --terms="melenchon, mélenchon"
 ```
 
 **Vérification dans la base** (anticipons §9) :
@@ -188,7 +188,7 @@ Le Land est créé, le vocabulaire fixé. Il faut maintenant lui donner les prem
 ### 3.1 — Option A : ajouter des URLs à la main (`land addurl`)
 
 ```bash
-python mywi.py land addurl \
+uv run python mywi.py land addurl \
   --land="melenchon" \
   --urls="https://fr.wikipedia.org/wiki/Jean-Luc_Mélenchon, https://www.lemonde.fr/jean-luc-melenchon/"
 ```
@@ -208,7 +208,7 @@ https://www.liberation.fr/checknews/?s=Mélenchon
 Puis :
 
 ```bash
-python mywi.py land addurl --land="melenchon" --path=seeds.txt
+uv run python mywi.py land addurl --land="melenchon" --path=seeds.txt
 ```
 
 > ⚠️ **Avec Docker** : le fichier doit être à l'intérieur du conteneur, ou dans le dossier `data/` partagé.
@@ -222,7 +222,7 @@ C'est la méthode utilisée pour le corpus *Mélenchon*. SerpAPI est un service 
 **Commande typique** :
 
 ```bash
-python mywi.py land urlist \
+uv run python mywi.py land urlist \
   --name="melenchon" \
   --query="(Jean-Luc Mélenchon) OR (France insoumise)" \
   --datestart=2022-04-01 \
@@ -277,7 +277,7 @@ Pour chaque URL, MWI :
 ### 4.2 — Commande générique
 
 ```bash
-python mywi.py land crawl --name="MonLand" [--limit=N] [--depth=D] [--http=CODE] [--retry-status=CSV] [--fullhtml=TRUE|FALSE]
+uv run python mywi.py land crawl --name="MonLand" [--limit=N] [--depth=D] [--http=CODE] [--retry-status=CSV] [--fullhtml=TRUE|FALSE]
 ```
 
 | Paramètre | Effet |
@@ -295,7 +295,7 @@ Le crawl Mélenchon a probablement été lancé en **plusieurs vagues**, en bouc
 ```bash
 # Vague 1 : crawler les seeds (depth=0) par paquets de 500
 for i in {1..30}; do
-  python mywi.py land crawl --name="melenchon" --depth=0 --limit=500
+  uv run python mywi.py land crawl --name="melenchon" --depth=0 --limit=500
 done
 ```
 
@@ -304,7 +304,7 @@ done
 ```bash
 # Vague 2 : crawler les nouvelles URLs apparues à depth=1
 for i in {1..150}; do
-  python mywi.py land crawl --name="melenchon" --depth=1 --limit=500
+  uv run python mywi.py land crawl --name="melenchon" --depth=1 --limit=500
 done
 
 # Vague 3 : depth=2, etc.
@@ -318,7 +318,7 @@ Quand le crawl doit tourner pendant des heures (voire des jours), on n'a pas env
 # Lancer toute la boucle en tâche de fond, sortie redirigée vers crawl.log
 nohup bash -c '
   for i in {1..30}; do
-    python mywi.py land crawl --name="melenchon" --depth=0 --limit=500
+    uv run python mywi.py land crawl --name="melenchon" --depth=0 --limit=500
   done
 ' > crawl.log 2>&1 &
 
@@ -359,12 +359,12 @@ Si vous voulez juste **garder une trace écrite** de la session sans la détache
 ```bash
 # Tout dans crawl.txt, écrasant le fichier précédent
 for i in {1..30}; do
-  python mywi.py land crawl --name="melenchon" --depth=0 --limit=500
+  uv run python mywi.py land crawl --name="melenchon" --depth=0 --limit=500
 done > crawl.txt 2>&1
 
 # Variante : ajouter à un fichier existant (>> au lieu de >)
 for i in {1..30}; do
-  python mywi.py land crawl --name="melenchon" --depth=0 --limit=500
+  uv run python mywi.py land crawl --name="melenchon" --depth=0 --limit=500
 done >> crawl.txt 2>&1
 ```
 
@@ -374,7 +374,7 @@ Pour **voir la sortie ET la sauvegarder en même temps** (utile pour un long cra
 
 ```bash
 for i in {1..30}; do
-  python mywi.py land crawl --name="melenchon" --depth=0 --limit=500
+  uv run python mywi.py land crawl --name="melenchon" --depth=0 --limit=500
 done 2>&1 | tee crawl.txt
 ```
 
@@ -420,13 +420,13 @@ Plus tard, vous voudrez peut-être re-tenter les pages qui ont échoué temporai
 
 ```bash
 # Re-crawler ce qui était en 429 (rate limit dépassé)
-python mywi.py land crawl --name="melenchon" --http=429 --limit=1000
+uv run python mywi.py land crawl --name="melenchon" --http=429 --limit=1000
 
 # Backfill cascade : tous les 403 + 429 d'un coup, en ignorant fetched_at
-python mywi.py land crawl --name="melenchon" --retry-status=403,429
+uv run python mywi.py land crawl --name="melenchon" --retry-status=403,429
 
 # Idem mais limité pour test
-python mywi.py land crawl --name="melenchon" --retry-status=403 --limit=20
+uv run python mywi.py land crawl --name="melenchon" --retry-status=403 --limit=20
 ```
 
 **Effet typique** sur un Land Mélenchon antérieur au sprint-403 :
@@ -502,18 +502,18 @@ Si votre Land Mélenchon a été crawlé **avant** ce sprint, il contient probab
 cp data/mwi.db data/mwi.db.bak_$(date +%Y%m%d_%H%M%S)
 
 # Migration de la colonne expression.original_url (idempotent)
-python mywi.py db migrate
+uv run python mywi.py db migrate
 
 # Aperçu : dénombre les renames et les fusions sans rien modifier
-python mywi.py land normalize --name=melenchon --dry-run
+uv run python mywi.py land normalize --name=melenchon --dry-run
 
 # Application
-python mywi.py land normalize --name=melenchon
+uv run python mywi.py land normalize --name=melenchon
 
 # Tracer les identités : CSV old_id,new_id,old_url,canonical_url
 # (produit aussi en --dry-run, où il décrit le plan ;
 #  old_id == new_id signale un simple renommage, pas une fusion)
-python mywi.py land normalize --name=melenchon --mapping-out=mapping_melenchon.csv
+uv run python mywi.py land normalize --name=melenchon --mapping-out=mapping_melenchon.csv
 ```
 
 Sortie typique :
@@ -545,10 +545,10 @@ Si la version archive avait reçu un `http_status=000` (panne réseau) et que la
 
 ```bash
 # Remet http_status=NULL sur les expressions renommées
-python mywi.py land normalize --name=melenchon --reset-status
+uv run python mywi.py land normalize --name=melenchon --reset-status
 
 # Puis re-crawle ces URLs (qui sont maintenant des canoniques propres)
-python mywi.py land crawl --name=melenchon --http=000 --limit=2000
+uv run python mywi.py land crawl --name=melenchon --http=000 --limit=2000
 ```
 
 #### Normaliser une **autre** base que `data/mwi.db`
@@ -558,24 +558,24 @@ Par défaut MWI travaille sur `data/mwi.db`. Si vous gérez plusieurs bases en p
 **Option 1 — Le flag `--db PATH`** (le plus simple, accepte n'importe quel nom de fichier) :
 
 ```bash
-python mywi.py land normalize --name=foo --db /chemin/vers/melenchon_v2.db --dry-run
-python mywi.py land normalize --name=bar --db ./backups/projet_A.db
+uv run python mywi.py land normalize --name=foo --db /chemin/vers/melenchon_v2.db --dry-run
+uv run python mywi.py land normalize --name=bar --db ./backups/projet_A.db
 ```
 
 Le flag s'applique à **toutes** les commandes (`land normalize`, `db migrate`, `land export`, etc.) — pratique pour scripter une boucle :
 
 ```bash
 for db in backups/*.db; do
-  python mywi.py db migrate --db "$db"
-  python mywi.py land normalize --name="$(basename $db .db)" --db "$db"
+  uv run python mywi.py db migrate --db "$db"
+  uv run python mywi.py land normalize --name="$(basename $db .db)" --db "$db"
 done
 ```
 
 **Option 2 — La variable d'env `MYWI_DATA_DIR`** (limitée : le fichier doit être nommé `mwi.db` dans le dossier ciblé) :
 
 ```bash
-MYWI_DATA_DIR=./data_projet_A python mywi.py land normalize --name=foo
-MYWI_DATA_DIR=./data_projet_B python mywi.py land normalize --name=bar
+MYWI_DATA_DIR=./data_projet_A uv run python mywi.py land normalize --name=foo
+MYWI_DATA_DIR=./data_projet_B uv run python mywi.py land normalize --name=bar
 ```
 
 Cette option est utile quand chaque projet a son propre dossier `data/` (mode Docker, par exemple).
@@ -585,7 +585,7 @@ Cette option est utile quand chaque projet a son propre dossier `data/` (mode Do
 ```bash
 cp /chemin/vers/autre.db data/mwi.db.backup
 ln -sf /chemin/vers/autre.db data/mwi.db
-python mywi.py land normalize --name=foo
+uv run python mywi.py land normalize --name=foo
 rm data/mwi.db && mv data/mwi.db.backup data/mwi.db   # restaurer
 ```
 
@@ -624,7 +624,7 @@ mercury-parser --version    # vérifier
 ### 5.2 — Commande générique
 
 ```bash
-python mywi.py land readable --name="MonLand" [--limit=N] [--depth=D] [--merge=STRATEGY]
+uv run python mywi.py land readable --name="MonLand" [--limit=N] [--depth=D] [--merge=STRATEGY]
 ```
 
 | Paramètre `--merge` | Comportement quand des données existent déjà |
@@ -639,10 +639,10 @@ Pour Mélenchon, l'utilisateur a probablement procédé en deux temps : d'abord 
 
 ```bash
 # Mercury sur les seeds (depth=0)
-python mywi.py land readable --name="melenchon" --depth=0 --limit=2000
+uv run python mywi.py land readable --name="melenchon" --depth=0 --limit=2000
 
 # Puis depth=1, depth=2…
-python mywi.py land readable --name="melenchon" --depth=1 --limit=10000
+uv run python mywi.py land readable --name="melenchon" --depth=1 --limit=10000
 ```
 
 **Résultat** : `86 313` expressions ont reçu un `readable` propre (51 % du total — les pages restantes sont soit non-fetched, soit non-200, soit ont reçu un readable basique mais pas Mercury).
@@ -706,7 +706,7 @@ SEO Rank est un service externe ([seo-rank.my-addr.com](https://seo-rank.my-addr
 **Commande** :
 
 ```bash
-python mywi.py land seorank --name="melenchon" --depth=0 --limit=100
+uv run python mywi.py land seorank --name="melenchon" --depth=0 --limit=100
 ```
 
 **Sur Mélenchon** : 13 972 expressions ont reçu un payload SEO Rank. Exemple de ce qui est stocké dans `expression.seorank` (champ JSON brut) :
@@ -727,7 +727,7 @@ python mywi.py land seorank --name="melenchon" --depth=0 --limit=100
 Le crawl a déjà recensé 409 348 médias (URLs et types) sans les analyser. Pour télécharger chaque image et calculer ses dimensions, hash perceptuel, couleurs dominantes :
 
 ```bash
-python mywi.py land medianalyse --name="melenchon" --depth=2 --minrel=1
+uv run python mywi.py land medianalyse --name="melenchon" --depth=2 --minrel=1
 ```
 
 > ⚠️ **Lourd** : chaque média est téléchargé et analysé (Pillow + EXIF). Compter ~0,5 s par image, plus la bande passante. Sur Mélenchon (~410 000 médias), une analyse complète prendrait des dizaines d'heures. Filtrez avec `--minrel` et `--depth`.
@@ -739,7 +739,7 @@ Sur le Land Mélenchon, l'étape `medianalyse` n'a pas été lancée (`media.ana
 Pour un filtre de pertinence plus fin que le score d'occurrence, on peut demander à un LLM (via OpenRouter) si la page est *vraiment* pertinente :
 
 ```bash
-python mywi.py land llm validate --name="melenchon" --limit=100
+uv run python mywi.py land llm validate --name="melenchon" --limit=100
 ```
 
 Cela écrit `expression.validllm = "oui"|"non"` et `expression.validmodel = "<slug du modèle>"`. Sur Mélenchon, cette étape n'a pas été lancée non plus.
@@ -766,23 +766,23 @@ MWI n'est pas un outil d'analyse statistique : c'est un outil de **collecte et d
 | `mediacsv` | Une ligne par média | Analyse iconographique |
 | `corpus` | ZIP de fichiers `.txt` (un par page) | Pré-traitement NLP, scikit-learn |
 
-> 💡 **Corpus crawlé avant le sprint *body-links*** : ses liens n'ont pas encore de `kind`. `python mywi.py land consolidate --name=melenchon` reconstruit `expressionlink` depuis le contenu déjà en base et remplit la classification — sans re-crawler, mais seulement pour les pages dont le HTML brut est archivé (`--fullhtml`).
+> 💡 **Corpus crawlé avant le sprint *body-links*** : ses liens n'ont pas encore de `kind`. `uv run python mywi.py land consolidate --name=melenchon` reconstruit `expressionlink` depuis le contenu déjà en base et remplit la classification — sans re-crawler, mais seulement pour les pages dont le HTML brut est archivé (`--fullhtml`).
 
 ### 7.2 — Exporter notre corpus *Mélenchon*
 
 ```bash
 # Toutes les pages, format CSV léger
-python mywi.py land export --name="melenchon" --type=pagecsv --minrel=1
+uv run python mywi.py land export --name="melenchon" --type=pagecsv --minrel=1
 
 # Graphe complet (4 CSV) pour analyse réseau
-python mywi.py land export --name="melenchon" --type=nodelinkcsv --minrel=1
+uv run python mywi.py land export --name="melenchon" --type=nodelinkcsv --minrel=1
 
 # Choisir les zones de liens retenues dans le réseau exporté
-# (--link-profile : editorial par défaut = body + ref ; editorial+reco ; all)
-python mywi.py land export --name="melenchon" --type=nodelinkcsv --minrel=1 --link-profile=all
+# (--link-profile : citation par défaut = body + ref ; citation+reco ; all)
+uv run python mywi.py land export --name="melenchon" --type=nodelinkcsv --minrel=1 --link-profile=all
 
 # Corpus textuel (ZIP)
-python mywi.py land export --name="melenchon" --type=corpus --minrel=1
+uv run python mywi.py land export --name="melenchon" --type=corpus --minrel=1
 ```
 
 > 💡 **Décodage de `--minrel=1`** : on filtre à `relevance ≥ 1` pour n'exporter que les pages réellement liées au sujet. Sur Mélenchon, ça réduit le corpus de 169 199 → environ 50 000 pages exportables — beaucoup plus maniable et thématiquement homogène.
@@ -851,10 +851,10 @@ python mywi.py embedding check
 
 ```bash
 # 1) Vectoriser tous les paragraphes du Land
-python mywi.py embedding generate --name="melenchon"
+uv run python mywi.py embedding generate --name="melenchon"
 
 # 2) Calculer les similarités (méthode adaptée au volume)
-python mywi.py embedding similarity \
+uv run python mywi.py embedding similarity \
   --name="melenchon" \
   --method=cosine_lsh \
   --threshold=0.88 \
@@ -862,7 +862,7 @@ python mywi.py embedding similarity \
   --minrel=1 --maxpairs=5000000
 
 # 3) Exporter
-python mywi.py land export --name="melenchon" --type=pseudolinks
+uv run python mywi.py land export --name="melenchon" --type=pseudolinks
 ```
 
 ### 8.4 — Status sur le Land Mélenchon
@@ -978,11 +978,11 @@ ORDER BY shares DESC LIMIT 10;
 
 ```bash
 # Ne pas faire :
-python mywi.py land crawl --name="big" --limit=100000   # un seul gros batch fragile
+uv run python mywi.py land crawl --name="big" --limit=100000   # un seul gros batch fragile
 
 # Préférer :
 for i in {1..200}; do
-  python mywi.py land crawl --name="big" --limit=500
+  uv run python mywi.py land crawl --name="big" --limit=500
 done
 ```
 
@@ -997,17 +997,17 @@ cp data/mwi.db data/mwi.db.bak_$(date +%Y%m%d_%H%M%S)
 `db setup` est destructif. `db migrate` est idempotent et n'altère que le schéma.
 
 ```bash
-python mywi.py db migrate
+uv run python mywi.py db migrate
 ```
 
 ### 10.4 — Filtrer agressivement avant un export ou une analyse ML
 
 ```bash
 # pagecsv allégé : seulement les pages pertinentes
-python mywi.py land export --name="melenchon" --type=pagecsv --minrel=1
+uv run python mywi.py land export --name="melenchon" --type=pagecsv --minrel=1
 
 # Embeddings : limiter aux pages pertinentes pour ne pas vectoriser le bruit
-python mywi.py embedding similarity --name="melenchon" --method=cosine_lsh --minrel=2
+uv run python mywi.py embedding similarity --name="melenchon" --method=cosine_lsh --minrel=2
 ```
 
 ### 10.5 — Documenter ses paramètres dans un README de corpus
@@ -1029,32 +1029,32 @@ Le cycle complet, vu d'en haut, sur un corpus minimal :
 
 ```bash
 # 1. Créer
-python mywi.py land create --name="MonSujet" --desc="Ma question de recherche" --lang=fr
+uv run python mywi.py land create --name="MonSujet" --desc="Ma question de recherche" --lang=fr
 
 # 2. Vocabulaire
-python mywi.py land addterm --land="MonSujet" --terms="motA, motB, expression composée"
+uv run python mywi.py land addterm --land="MonSujet" --terms="motA, motB, expression composée"
 
 # 3. Seeds (au choix)
-python mywi.py land addurl --land="MonSujet" --path=seeds.txt
+uv run python mywi.py land addurl --land="MonSujet" --path=seeds.txt
 # OU
-python mywi.py land urlist --name="MonSujet" --query="..." --datestart=2024-01-01 --dateend=2024-12-31
+uv run python mywi.py land urlist --name="MonSujet" --query="..." --datestart=2024-01-01 --dateend=2024-12-31
 
 # 4. Crawler par vagues
 for i in {1..50}; do
-  python mywi.py land crawl --name="MonSujet" --limit=200
+  uv run python mywi.py land crawl --name="MonSujet" --limit=200
 done
 
 # 5. Mercury (texte propre)
-python mywi.py land readable --name="MonSujet"
+uv run python mywi.py land readable --name="MonSujet"
 
 # 6. Enrichir (optionnel)
-python mywi.py land seorank --name="MonSujet" --minrel=1
-python mywi.py land medianalyse --name="MonSujet" --minrel=1
+uv run python mywi.py land seorank --name="MonSujet" --minrel=1
+uv run python mywi.py land medianalyse --name="MonSujet" --minrel=1
 
 # 7. Exporter
-python mywi.py land export --name="MonSujet" --type=pagecsv --minrel=1
-python mywi.py land export --name="MonSujet" --type=nodelinkcsv --minrel=1
-python mywi.py land export --name="MonSujet" --type=corpus --minrel=1
+uv run python mywi.py land export --name="MonSujet" --type=pagecsv --minrel=1
+uv run python mywi.py land export --name="MonSujet" --type=nodelinkcsv --minrel=1
+uv run python mywi.py land export --name="MonSujet" --type=corpus --minrel=1
 ```
 
 ### 11.1 — Les chiffres-clés du Land Mélenchon (référence)
