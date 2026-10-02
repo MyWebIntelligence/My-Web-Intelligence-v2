@@ -31,6 +31,28 @@ entry is here so the diagnosis takes a minute.
   health probe switched from `land list` (which legitimately exits 1 on a
   brand-new install) to `db migrate`.
 
+### Fixed — a linked image no longer hides the page it links to
+
+- **The defect.** The markdown link reader stopped at the first `]` of
+  `[![alt](img.png)](https://example.org/page)` — the inner image's — and
+  returned the image URL as a hyperlink: the edge pointed at a picture and
+  the cited page was lost. The image reader already handled the construct.
+- **The fix.** In link mode the outer destination is the link and the inner
+  image stays an image, for every consumer of the shared reader (markdown
+  leg of crawl and consolidate, Mercury, `citation` column of the whole-page
+  export).
+- **Scope.** Trafilatura 2.1.0 never emits a linked image in its markdown (it
+  drops the link around the image), so crawl, consolidate and the body-links
+  benchmark are unaffected; Mercury output and older `readable` texts are.
+- Tests: `tests/test_30_markdown_link_parser.py::TestLinkedImageInLinkMode`.
+
+### Fixed — `land delete --prune-orphans` alone announced the whole land
+
+Without `--maxrel`, the confirmation prompt read "the ENTIRE land … + N
+uncrawled orphan(s) will be deleted", although only the orphans go and the
+land stays. It now names the orphans alone; the `--dry-run` output was
+already right. Tests: `tests/test_02_land_management.py::TestLandPruneOrphans`.
+
 ### Added — `--resolve-twins` on `land export` (URL twins of corpus pages)
 
 - **The defect.** The crawl attaches a link to a record by exact normalized
