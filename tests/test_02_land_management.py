@@ -617,6 +617,31 @@ class TestLandPruneOrphans:
         assert self._alive(model, nodes["c_multi"]) is True
         assert self._alive(model, pre_orphan) is False    # genuine orphan pruned
 
+    def test_prune_orphans_alone_announces_only_the_orphans(self, fresh_db, monkeypatch):
+        """T9: the prompt names the orphans, never "the ENTIRE land" — the land stays."""
+        model = fresh_db["model"]
+        core = fresh_db["core"]
+        controller = fresh_db["controller"]
+        name, land, nodes = _build_orphan_graph(fresh_db)
+        domain = model.Domain.get(model.Domain.name == "example.com")
+        model.Expression.create(
+            land=land, domain=domain, url="https://example.com/pre_orphan",
+            depth=2, relevance=None, fetched_at=None,  # uncrawled, no inbound link
+        )
+        seen = []
+        monkeypatch.setattr(core, "confirm",
+                            lambda msg: seen.append(msg) or False, raising=True)
+
+        ret = controller.LandController.delete(
+            core.Namespace(name=name, maxrel=None, prune_orphans=True, dry_run=False)
+        )
+
+        assert ret == 0  # confirmation refused, nothing deleted
+        assert len(seen) == 1
+        assert "ENTIRE" not in seen[0]
+        assert "1 uncrawled orphan(s)" in seen[0]
+        assert name in seen[0]
+
 
 # Note: Tests SerpAPI et autres tests avec API keys sont volontairement omis
 # car ils nécessitent des clés API réelles et sont testés dans les tests legacy

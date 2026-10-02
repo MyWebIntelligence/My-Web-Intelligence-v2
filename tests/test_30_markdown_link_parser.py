@@ -148,6 +148,36 @@ class TestIterMarkdownLinkTokens:
         assert list(link_context.iter_markdown_link_tokens(None)) == []
 
 
+class TestLinkedImageInLinkMode:
+    """A linked image ``[![alt](img)](target)`` is ONE hyperlink, to `target`.
+
+    The link reader stopped at the first ']' (the inner image's), returned
+    the IMAGE destination as a link and dropped the real target: the page was
+    linked to its own picture, and the cited page vanished from the network.
+    """
+
+    @pytest.mark.parametrize("md,expected", [
+        pytest.param("[![alt](https://a.org/i.png)](https://a.org/page)",
+                     ["https://a.org/page"], id="linked_image"),
+        pytest.param("[![a](<https://a.org/i.png>)](<https://a.org/page>)",
+                     ["https://a.org/page"], id="angle_brackets"),
+        pytest.param("[voir ![logo](/l.png) ici](https://a.org/p)",
+                     ["https://a.org/p"], id="text_around_image"),
+        pytest.param("[![a](/i.png)](https://a.org/1) et [b](https://a.org/2)",
+                     ["https://a.org/1", "https://a.org/2"], id="followed_by_link"),
+        pytest.param("[![a](/i.png) sans fermeture", [], id="unclosed_outer"),
+        pytest.param("[![a](/i.png) puis ![b](/j.png)", [],
+                     id="no_outer_link_before_next_image"),
+    ])
+    def test_link_token_is_the_outer_target(self, md, expected):
+        assert list(link_context.iter_markdown_link_tokens(md)) == expected
+
+    def test_resolved_link_is_the_target_not_the_image(self):
+        out = link_context.extract_markdown_links(
+            "[![alt](/img.png)](https://target.org)", "https://base.org/dir/page")
+        assert out == ["https://target.org"]
+
+
 class TestExtractMdLinksWrapper:
     """core.extract_md_links delegates to the unified parser."""
 

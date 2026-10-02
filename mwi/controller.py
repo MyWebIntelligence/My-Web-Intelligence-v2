@@ -1514,6 +1514,13 @@ class LandController:
                   "delete the whole land")
             return 0
 
+        orphans = 0
+        orphan_sample = []
+        if prune:
+            # Projected BEFORE the maxrel DELETE, and before the dry-run exit.
+            orphans, orphan_sample = core.prune_orphan_expressions(
+                land, dry_run=True, maxrel=maxrel or 0)
+
         # Announce the exact scope once, and reuse it for both the dry run and
         # the confirmation prompt: the two used to print the same sentence
         # whatever was about to happen.
@@ -1524,19 +1531,16 @@ class LandController:
                 & (model.Expression.fetched_at.is_null(False))).count()
             scope = ('%d crawled expression(s) with relevance < %d in land "%s"'
                      % (n, maxrel, args.name))
+            if prune:
+                scope += " + %d uncrawled orphan(s)" % orphans
+        elif prune:
+            # --prune-orphans alone keeps the land: only its orphans go.
+            scope = '%d uncrawled orphan(s) in land "%s"' % (orphans, args.name)
         else:
             total = model.Expression.select().where(
                 model.Expression.land == land).count()
             scope = ('the ENTIRE land "%s" and all its data (%d expression(s))'
                      % (args.name, total))
-
-        orphans = 0
-        orphan_sample = []
-        if prune:
-            # Projected BEFORE the maxrel DELETE, and before the dry-run exit.
-            orphans, orphan_sample = core.prune_orphan_expressions(
-                land, dry_run=True, maxrel=maxrel or 0)
-            scope += " + %d uncrawled orphan(s)" % orphans
 
         if dry:
             if maxrel is not None or not prune:

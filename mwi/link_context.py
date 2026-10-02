@@ -581,6 +581,22 @@ def _iter_markdown_inline_tokens(md_content: Optional[str], images: bool):
                     # so the nested '![' is visited on its own.
                     i += 1
                     continue
+                if not images and not is_image and '![' in s[i + 1:close]:
+                    # Same construct in link mode: `close` is the INNER
+                    # image's ']', so its destination is not a link. The
+                    # hyperlink is the OUTER destination, after the next ']'
+                    # — provided no other bracket opens in between.
+                    _, inner_end = _read_destination(s, close + 2)
+                    outer = s.find(']', inner_end)
+                    if (outer != -1 and '[' not in s[inner_end:outer]
+                            and outer + 1 < n and s[outer + 1] == '('):
+                        token, end = _read_destination(s, outer + 2)
+                        if token:
+                            yield token
+                        i = end
+                    else:
+                        i += 1  # no outer link: the nested image stays an image
+                    continue
                 token, end = _read_destination(s, close + 2)
                 if token and is_image == images:
                     yield token
