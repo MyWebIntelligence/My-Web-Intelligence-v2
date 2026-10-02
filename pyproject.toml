@@ -3,7 +3,7 @@
 # Source of truth for: project metadata, runtime/ML/dev dependencies, and mypy.
 # Deliberately NOT here, by project convention:
 #   - lint config              → .flake8       (flake8 can't read pyproject)
-#   - pytest + coverage config → pytest.ini    (.claude/rules/testing.md mandates it)
+#   - pytest + coverage config → pytest.ini
 #   - pinned installs          → uv.lock + the generated requirements.txt (`make lock`)
 #
 # MWI is a flat-layout CLI app (`python mywi.py`, PYTHONPATH=.), not an installable

@@ -1,22 +1,18 @@
 # .github/workflows/ci.yml
 #
 # Intégration continue : rejoue les tests et le lint à chaque push et pull
-# request. C'est le verrou serveur, celui que rien ne contourne. Ce qui doit
-# bloquer un merge vit ici, pas dans CLAUDE.md, que le modèle charge comme
-# contexte et peut ne pas suivre.
+# request. C'est le verrou serveur, celui que rien ne contourne : ce qui doit
+# bloquer un merge vit ici, pas dans une consigne écrite.
 #
 # Projet géré avec uv (uv.lock versionné). Les commandes passent par le
 # Makefile, pour qu'un développeur puisse rejouer EXACTEMENT ce que la CI
 # bloque : `make lint`.
 #
-# Ce que ce workflow bloque (décision D-7, 2026-09-18) :
-#   - la suite de tests ;
-#   - `flake8 --select=E9,F63,F7,F82` : syntaxe invalide, nom non défini,
-#     comparaison impossible. Vert aujourd'hui, donc exigible tout de suite.
-# Restent informatifs pour l'instant : `flake8` complet et `mypy`. Les deux
-# sont à ZÉRO depuis le 2026-09-18 (lot L16) ; les rendre bloquants est un
-# changement d'une ligne par étape, à faire une fois qu'un premier run vert a
-# confirmé qu'ils se comportent pareil sur un runner Linux.
+# Ce que ce workflow bloque (décision D-7 du 2026-09-18, étendue le 2026-09-19) :
+#   - la suite de tests (Python 3.10, 3.11 et 3.12) ;
+#   - `make lint` (`flake8 --select=E9,F63,F7,F82` : syntaxe invalide, nom non
+#     défini, comparaison impossible) et `make lint-all` (flake8 complet), sous 3.12 ;
+#   - `make typecheck` (mypy), sous 3.10, le plancher qu'il vérifie.
 #
 # Ruff a été écarté du projet le 2026-06-24 au profit de flake8 ; l'ancienne
 # version de ce fichier l'appelait encore alors qu'il n'est pas dans uv.lock.
@@ -175,7 +171,7 @@ jobs:
 
   # --- Agrégateur : cible unique pour la "branch protection" ----------------
   # Avec une matrice, exiger ce seul job en "required status check" suffit ;
-  # il échoue si quality OU n'importe quel job de la matrice échoue.
+  # il échoue si lint, types OU n'importe quel job de la matrice échoue.
   ci-ok:
     name: CI passed
     if: always()

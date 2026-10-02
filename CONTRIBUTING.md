@@ -88,7 +88,6 @@ being paid down, and they do not fail the build.
 
 - Write tests for new functionality
 - Ensure existing tests pass before submitting PR: `make test` must stay green on `master`
-  (the reference count and its command live in `CLAUDE.md` §4.1 — the only place they do)
 - Target >85% code coverage for new code
 - Use pytest fixtures from `tests/conftest.py`
 - If you touch link extraction or classification, also run the offline

@@ -1,7 +1,7 @@
 """R01 - every relative link in the READMEs must resolve to a versioned file.
 
 The commit `c60246c` (2026-06-24, "drop legacy docs") moved eight user guides
-under `.claude/docs/`, which `.gitignore` excludes: `git ls-tree -r HEAD docs/`
+into a hidden directory that `.gitignore` excludes: `git ls-tree -r HEAD docs/`
 listed two files while the READMEs pointed at guides nobody cloning the
 repository — or downloading the Zenodo archive — could ever open. 13 of 17
 relative links were dead. No test covered it.

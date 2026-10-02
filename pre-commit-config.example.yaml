@@ -19,8 +19,8 @@
 # .pre-commit-config.yaml
 #
 # Verrou d'enforcement côté git : ces hooks s'exécutent avant chaque commit et le
-# refusent s'il ne respecte pas la charte. C'est le filet qui agit avant même Claude
-# Code. Règle d'arbitrage : ce qui bloque un commit va ici et en CI, pas dans CLAUDE.md.
+# refusent s'il ne respecte pas la charte. Règle d'arbitrage : ce qui bloque un
+# commit va ici et en CI, pas dans une consigne écrite.
 #
 # Installation (le projet est piloté par uv) :
 #   uv tool install pre-commit            (ou : pipx install pre-commit)
@@ -89,5 +89,4 @@ repos:
       - id: conventional-pre-commit   # stage commit-msg (déclaré par le hook lui-même)
 
 # Note : pre-commit n'exécute PAS la suite de tests (trop lent pour un commit).
-# pytest reste lancé par `make test` et par la CI ; le hook Claude Code post-édition
-# applique ruff + mypy sur le fichier édité.
+# pytest reste lancé par `make test` et par la CI.

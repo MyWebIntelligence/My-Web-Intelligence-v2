@@ -558,7 +558,7 @@ class TestImageHashIsCryptographic:
     """R02 lot A - `image_hash` is a SHA-256 of the bytes, not a perceptual hash.
 
     `media_analyzer.py` computed `hashlib.sha256(content).hexdigest()` under a
-    comment reading "empreinte SHA-256 (fichier identique)", and README / CLAUDE.md / Pipelines all
+    comment reading "empreinte SHA-256 (fichier identique)", and the README and developer docs all
     repeated the word. Two very different promises:
 
       - SHA-256 answers "is this the SAME FILE?" — re-encode a PNG at another
