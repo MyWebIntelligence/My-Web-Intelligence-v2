@@ -19,7 +19,7 @@
 # pyproject.toml — MyWebIntelligence (MWI)
 #
 # Source unique de vérité du projet : dépendances, et configuration de l'outillage
-# de qualité (Ruff, mypy, pytest, couverture). Les règles .claude/ ne font que
+# de qualité (Ruff, mypy, pytest, couverture). Les règles écrites ne font que
 # décrire ce que ce fichier applique mécaniquement.
 #
 # Base : ce fichier reprend la configuration réelle du dépôt ([project],

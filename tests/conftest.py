@@ -281,7 +281,7 @@ def populated_land(fresh_db):
         model.Media.create(
             expression=expressions[i],
             url=f"https://example.com/image{i}.jpg",
-            type="img",  # valeur de domaine réelle : img/video/audio (cf. CLAUDE.md §12)
+            type="img",  # valeur de domaine réelle : img/video/audio, jamais image
             width=800,
             height=600,
             analyzed_at=datetime.now()

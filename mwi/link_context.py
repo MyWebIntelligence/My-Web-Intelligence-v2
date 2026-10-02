@@ -475,8 +475,8 @@ def extract_md_paragraph(markdown: Optional[str], url: Optional[str],
 # ``![alt](url)`` images, and (B) dropped every relative ``[t](/path)`` link.
 #
 # Empirically validated against the 18 real cases of the sprint Annexe B
-# (two independent implementations converged) — see
-# ``.claude/project/sprint-extractlinks.md`` §12.
+# (two independent implementations converged); those cases are pinned in
+# tests/test_30_markdown_link_parser.py.
 # ---------------------------------------------------------------------------
 
 # Scheme is matched case-insensitively for the gate (``HTTP://`` accepted).

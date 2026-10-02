@@ -5,7 +5,7 @@ and it was called straight from coroutines: `crawl_expression_with_media_analysi
 and, through `_process_single_expression`, the readable pipeline. Both run in
 batches of `parallel_connections` coroutines, so one gate call froze the whole
 batch — four 0.4 s gates in a `gather` measured 1.64 s instead of 0.4, with a
-witness task getting a single tick. CLAUDE.md already forbids a blocking call
+witness task getting a single tick. The project rules already forbid a blocking call
 inside a coroutine, and `readable_pipeline` already applies the executor idiom
 to trafilatura.
 

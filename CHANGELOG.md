@@ -77,7 +77,7 @@ cannot be backfilled — the bytes are not kept. Run `db migrate`, then
 
 ### Fixed — the user guides are back in the repository
 
-Seven guides had been moved under `.claude/docs/` in June, a directory
+Seven guides had been moved in June into a hidden directory that
 `.gitignore` excludes (`.*/`). `git ls-tree -r HEAD docs/` listed two files
 while both READMEs pointed at guides that nobody cloning the repository — or
 downloading the Zenodo archive — could open: 13 of 17 relative links were dead.

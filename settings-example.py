@@ -412,7 +412,7 @@ nli_contradiction_threshold = float(os.getenv("MWI_NLI_CONTRADICTION_THRESHOLD",
 # ────────────────────────────────────────────────────────────────────────
 # Configures the canonicalization pipeline applied to every URL ingested
 # into MWI (seeds, SerpAPI results, links extracted at crawl time, etc.).
-# See mwi/url_normalizer.py and .claude/project/sprint-normalise.md.
+# See mwi/url_normalizer.py.
 #
 # Conservative defaults: only operations that don't risk breaking existing
 # Lands are enabled by default. force_https / strip_www / strip_mobile

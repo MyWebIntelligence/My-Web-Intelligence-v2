@@ -1,6 +1,6 @@
 # flake8 configuration for MyWebIntelligence (MWI).
 #
-# flake8 + mypy are the sanctioned quality tools (see .claude/rules/testing.md);
+# flake8 + mypy are the sanctioned quality tools (both blocking in CI);
 # there is no auto-formatter. Without this file flake8 runs at its 79-column
 # default, producing ~986 spurious E501 on a legacy codebase whose lines sit
 # comfortably under 100. 100 clears ~83% of those while staying readable.

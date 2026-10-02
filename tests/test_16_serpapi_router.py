@@ -1,6 +1,6 @@
 """Tests for the SearchRouter / SearchProvider / run_search refactor.
 
-Covers §6 of `.claude/project/sprint-searchrouter.md`:
+Covers the sprint-searchrouter refactor of the single-engine SerpAPI router:
 - Router registry (engines listed, unknown raises).
 - Per-provider params for Google / Bing / DuckDuckGo (parity with legacy).
 - Orchestrator: pagination aggregation, date windowing, validation, DDG empty
