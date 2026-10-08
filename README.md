@@ -1800,7 +1800,7 @@ setting default for that run).
 Environment-configurable variables:
 - `MWI_OPENROUTER_ENABLED` (default `false`)
 - `MWI_OPENROUTER_API_KEY`
-- `MWI_OPENROUTER_MODEL` (e.g. `openai/gpt-4o-mini`, `anthropic/claude-3-haiku`)
+- `MWI_OPENROUTER_MODEL` (e.g. `openai/gpt-4o-mini`, `deepseek/deepseek-v4-flash`)
 - `MWI_OPENROUTER_TIMEOUT` (default `15` seconds)
 - `MWI_OPENROUTER_MAX_CHARS` (default `12000`)
 - `MWI_OPENROUTER_MAX_CALLS` (default `500`)

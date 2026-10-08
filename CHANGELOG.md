@@ -31,6 +31,30 @@ entry is here so the diagnosis takes a minute.
   health probe switched from `land list` (which legitimately exits 1 on a
   brand-new install) to `db migrate`.
 
+### Changed — link-coding judges are no longer asked for a `review` flag
+
+- **What.** The P-LOC and P-CIT prompts asked each judge to return `review`
+  (true below 0.90 confidence, or on two codes). Nothing read it: the panel's
+  contested axes are computed from the majorities. The instruction and the
+  field are gone; `confidence` stays.
+- **Consequence.** The text of both judge prompts changed, so a coding run made
+  after this release uses a new protocol version. Compare it with an earlier
+  campaign only after re-coding a common sample with both versions.
+
+### Added — token usage in the link-coding manifest
+
+- `llm_openrouter.ask_openrouter_chat` adds the `usage` counts of every
+  OpenRouter response (prompt and completion tokens) to a per-process total,
+  written under the `usage` key of the `code_links` manifest: the measured
+  basis for costing a run.
+
+### Changed — a retired model is no longer offered by the installers
+
+- The interactive model menu of `scripts/install-api.py` and
+  `scripts/install-docker-compose.py`, the `openrouter_model_examples` lists
+  and the README examples no longer offer a model slug its provider has
+  retired.
+
 ### Fixed — a linked image no longer hides the page it links to
 
 - **The defect.** The markdown link reader stopped at the first `]` of

@@ -280,8 +280,6 @@ openrouter_model = os.getenv("MWI_OPENROUTER_MODEL", "deepseek/deepseek-v4-flash
 openrouter_model_examples = [
     # OpenAI
     "openai/gpt-mini-latest",
-    # Anthropic
-    "anthropic/claude-3-haiku",
     # Google
     "google/gemini-3-flash-preview",
     # Meta (Llama 3.x Instruct – 8B)

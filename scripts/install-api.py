@@ -216,7 +216,6 @@ def configure_openrouter(config: dict):
     model_choices = [
         ("deepseek/deepseek-chat-v3.1", "DeepSeek v3.1 (economical, recommended)"),
         ("openai/gpt-4o-mini", "GPT-4o Mini (fast, cheap)"),
-        ("anthropic/claude-3-haiku", "Claude 3 Haiku (quality)"),
         ("google/gemini-1.5-flash", "Gemini 1.5 Flash (balanced)"),
         ("meta-llama/llama-3.1-8b-instruct", "Llama 3.1 8B (open source)"),
         ("mistralai/mistral-small-latest", "Mistral Small (efficient)"),
@@ -273,7 +272,6 @@ def configure_openrouter(config: dict):
     # Example models list (for reference in settings)
     config['openrouter_model_examples'] = [
         "openai/gpt-4o-mini",
-        "anthropic/claude-3-haiku",
         "google/gemini-1.5-flash",
         "meta-llama/llama-3.1-8b-instruct",
         "mistralai/mistral-small-latest",

@@ -1,5 +1,6 @@
 import asyncio
 import json
+import threading
 from typing import Optional, List
 
 import requests
@@ -9,6 +10,11 @@ import settings
 
 
 _call_count = 0
+
+# Tokens billed per process, read from each OpenRouter response: the measured
+# basis for costing a mass run. Locked because link_coding calls from threads.
+usage_totals = {"prompt_tokens": 0, "completion_tokens": 0}
+_usage_lock = threading.Lock()
 
 
 # Human-readable language names for the prompt (project working language).
@@ -185,6 +191,10 @@ def ask_openrouter_chat(prompt: str, model: Optional[str] = None,
     )
     resp.raise_for_status()
     data = resp.json()
+    usage = data.get("usage") or {}
+    with _usage_lock:
+        for key in usage_totals:
+            usage_totals[key] += int(usage.get(key) or 0)
     return data["choices"][0]["message"]["content"]
 
 

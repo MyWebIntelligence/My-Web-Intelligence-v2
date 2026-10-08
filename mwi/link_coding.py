@@ -309,12 +309,11 @@ def build_ploc_prompt(ev: dict) -> str:
         "DONNÉES À ANALYSER\n"
         "Page source   : %s\nPage cible    : %s  — %s\nCible externe ?: %s\n"
         "Ancre + bloc HTML : %s\nContexte      : %s\nChemin DOM    : %s\n\n"
-        "CONFIANCE & ROUTAGE\n"
-        "Évalue ta confiance dans [0,1]. review = true si confiance < 0,90 ou code ∈ "
-        "{X_OTHER, EDIT_HEADING}. Ne renonce jamais par confort.\n\n"
+        "CONFIANCE\n"
+        "Évalue ta confiance dans [0,1]. Ne renonce jamais par confort.\n\n"
         "SORTIE — un seul objet JSON sur une ligne, rien d'autre :\n"
         "{\"status\":\"M|C|A\",\"code\":\"<CODE>\",\"ref_target\":\"actor|infra|null\","
-        "\"confidence\":<0..1>,\"rule\":\"<n°>\",\"review\":<true|false>,\"note\":\"<=200 car.\"}"
+        "\"confidence\":<0..1>,\"rule\":\"<n°>\",\"note\":\"<=200 car.\"}"
         % (ev.get("source_url", ""), ev.get("target_url", ""), ev.get("target_title", ""),
            "oui" if ev.get("is_external") else "non", ev.get("dom_html", ""),
            ev.get("context", ""), ev.get("dom", ""))
@@ -370,12 +369,11 @@ def build_pcit_prompt(ev: dict, project_meta: dict) -> str:
         "contexte vide + bloc inanalysable) ou la cible irrésoluble.\n"
         "  cit_type ∈ {ACTOR, DOCUMENT, LEGAL, POSITION, TOPIC, NONE} (NONE si cit≠1 ; "
         "le plus spécifique, priorité LEGAL > DOCUMENT > POSITION > ACTOR > TOPIC).\n\n"
-        "CONFIANCE & ROUTAGE\n"
-        "Évalue ta confiance dans [0,1]. review = true si confiance < 0,90. Ne renonce "
-        "jamais par confort.\n\n"
+        "CONFIANCE\n"
+        "Évalue ta confiance dans [0,1]. Ne renonce jamais par confort.\n\n"
         "SORTIE — un seul objet JSON sur une ligne, rien d'autre :\n"
         "{\"cit\":0|1|\"INDET\",\"cit_type\":\"ACTOR|DOCUMENT|LEGAL|POSITION|TOPIC|NONE\","
-        "\"confidence\":<0..1>,\"review\":<true|false>,\"note\":\"<=200 car.\"}"
+        "\"confidence\":<0..1>,\"note\":\"<=200 car.\"}"
         % (_project_block(project_meta), ev.get("source_url", ""),
            ev.get("source_actor", ""), ev.get("target_url", ""),
            ev.get("target_title", ""), ev.get("target_typeactor", ""),
@@ -474,7 +472,7 @@ def _to_float(v) -> str:
 # =====================================================================
 def judge_location(ev: dict, model_slug: str, budget: Optional[_Budget] = None,
                    retries: int = 3) -> Optional[dict]:
-    """P-LOC → {code, status, ref_target, macro, confidence, review, note}. None si
+    """P-LOC → {code, status, ref_target, macro, confidence, note}. None si
     appel raté ou schéma invalide (juge manquant, exclu du vote)."""
     obj = parse_json_object(_safe_call(build_ploc_prompt(ev), model_slug, budget, retries))
     if not obj:
@@ -494,12 +492,12 @@ def judge_location(ev: dict, model_slug: str, budget: Optional[_Budget] = None,
         ref = ""
     return {"code": code, "status": status, "ref_target": ref, "macro": macro_of(code),
             "confidence": _to_float(obj.get("confidence")),
-            "review": bool(obj.get("review")), "note": str(obj.get("note", ""))[:200]}
+            "note": str(obj.get("note", ""))[:200]}
 
 
 def judge_citation(ev: dict, project_meta: dict, model_slug: str,
                    budget: Optional[_Budget] = None, retries: int = 3) -> Optional[dict]:
-    """P-CIT → {cit, cit_type, confidence, review, note}. None si appel raté /
+    """P-CIT → {cit, cit_type, confidence, note}. None si appel raté /
     schéma invalide."""
     obj = parse_json_object(_safe_call(build_pcit_prompt(ev, project_meta),
                                        model_slug, budget, retries))
@@ -521,7 +519,7 @@ def judge_citation(ev: dict, project_meta: dict, model_slug: str,
     if cit != 1:
         ctype = "NONE"
     return {"cit": cit, "cit_type": ctype, "confidence": _to_float(obj.get("confidence")),
-            "review": bool(obj.get("review")), "note": str(obj.get("note", ""))[:200]}
+            "note": str(obj.get("note", ""))[:200]}
 
 
 def _modal(values: list) -> Tuple[Optional[str], int]:
@@ -1020,6 +1018,7 @@ def code_links(csv_path: str, out_path: str, *, judges: List[str], project_meta:
         "rows": len(rows), "misses_indet": misses,
         "skipped_empty": skipped,   # arêtes non écrites (tous juges vides = échec API)
         "reviews": sum(1 for r in rows if str(r["contested_axes"]) != "0"),   # 0/1/2 axes contestés
+        "usage": dict(llm_openrouter.usage_totals),   # tokens facturés (prompt / completion)
     }
     with open(out_path + ".manifest.json", "w", encoding="utf-8") as f:
         json.dump(manifest, f, ensure_ascii=False, indent=2)

@@ -266,7 +266,6 @@ def configure_api_docker(config: dict):
         model_choices = [
             ("deepseek/deepseek-chat-v3.1", "DeepSeek v3.1 (economical)"),
             ("openai/gpt-4o-mini", "GPT-4o Mini (fast)"),
-            ("anthropic/claude-3-haiku", "Claude 3 Haiku (quality)"),
             ("google/gemini-1.5-flash", "Gemini 1.5 Flash (balanced)"),
             ("custom", "Custom model"),
         ]

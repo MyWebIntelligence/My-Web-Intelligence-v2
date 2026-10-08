@@ -15,7 +15,6 @@ monkeypatché pour renvoyer du JSON canné. Couvre les 7 critères GATE du sprin
 7. Schéma CSV v2 (46 col., 12/09/2026) : 9 colonnes du frame renommées en tête ;
    in_body_mwi / cites_from_place / panel_cites présentes et distinctes ; relecture v1.
 """
-import io
 import pytest
 
 from mwi import link_coding as lc
@@ -150,9 +149,9 @@ def test_03d_rawonly_full_evidence_makes_6_calls(monkeypatch):
     def fake(prompt, model=None, **kwargs):
         calls.append(model)
         if "ACTE DE CITATION" in prompt:
-            return '{"cit":1,"cit_type":"ACTOR","confidence":0.95,"review":false,"note":""}'
+            return '{"cit":1,"cit_type":"ACTOR","confidence":0.95,"note":""}'
         return ('{"status":"M","code":"EDIT_EXT","ref_target":"actor",'
-                '"confidence":0.95,"rule":"7a","review":false,"note":""}')
+                '"confidence":0.95,"rule":"7a","note":""}')
     monkeypatch.setattr(lc.llm_openrouter, "ask_openrouter_chat", fake)
 
     html = ('<html><body><article><p>As the '
@@ -196,14 +195,14 @@ def test_04b_cit_derived_regime1():
 
 
 # --- 5. agrégation majorité stricte 4 juges ---------------------------------
-def _lv(code, ref="actor", review=False):
+def _lv(code, ref="actor"):
     return {"code": code, "status": lc.status_of(code, ref), "ref_target": ref,
-            "macro": lc.macro_of(code), "confidence": "0.950", "review": review, "note": ""}
+            "macro": lc.macro_of(code), "confidence": "0.950", "note": ""}
 
 
-def _cv(cit, ctype="ACTOR", review=False):
+def _cv(cit, ctype="ACTOR"):
     return {"cit": cit, "cit_type": ctype if cit == 1 else "NONE",
-            "confidence": "0.950", "review": review, "note": ""}
+            "confidence": "0.950", "note": ""}
 
 
 def test_05a_unanimous_and_three_quarter():
@@ -310,7 +309,7 @@ def test_08_judge_location_validates_code_only(monkeypatch):
           "target_title": "", "is_external": True, "target_typeactor": "", "source_actor": ""}
     # status hors {M,C,A} (P-LOC purgé de M/C/A, C6) mais code valide → accepté
     monkeypatch.setattr(lc.llm_openrouter, "ask_openrouter_chat", lambda *a, **k:
-        '{"status":"APPARATUS","code":"NAV","ref_target":null,"confidence":0.95,"review":false}')
+        '{"status":"APPARATUS","code":"NAV","ref_target":null,"confidence":0.95}')
     v = lc.judge_location(ev, "m", None, retries=1)
     assert v is not None and v["code"] == "NAV" and v["macro"] == "NAV"
     # code invalide → rejeté (juge manquant)
@@ -368,6 +367,21 @@ def test_08b_judge_citation_coerces_and_rejects(monkeypatch):
     assert lc.judge_citation(ev, PROJECT, "m", None, retries=1) is None
 
 
+@pytest.mark.parametrize("build", [
+    lambda ev: lc.build_ploc_prompt(ev),
+    lambda ev: lc.build_pcit_prompt(ev, PROJECT),
+], ids=["P-LOC", "P-CIT"])
+def test_08c_judges_are_not_asked_for_review(build):
+    """Le `review` d'un juge n'était lu nulle part : `aggregate` le recalcule à
+    partir des majorités. Le demander coûtait un calcul par appel, pour rien."""
+    ev = {"source_url": "", "target_url": "", "dom": "", "dom_html": "", "context": "",
+          "target_title": "", "is_external": True, "target_typeactor": "", "source_actor": ""}
+
+    prompt = build(ev)
+
+    assert "review" not in prompt
+
+
 # --- 9. code_links de bout en bout (orchestration : Phase A/B, tri, manifeste, stats) ---
 def test_09_code_links_end_to_end(monkeypatch, tmp_path):
     import csv as _csv
@@ -399,6 +413,22 @@ def test_09_code_links_end_to_end(monkeypatch, tmp_path):
     with open(out, encoding="utf-8") as _f:
         assert _f.readline().strip().split(",")[:9] == \
             [lc.FRAME_OUT[c] for c in lc.FRAME_COLS if c in lc.FRAME_OUT]
+
+
+def test_09b_manifest_reports_token_usage(monkeypatch, tmp_path):
+    import json as _json
+    monkeypatch.setattr(lc, "_preload", lambda sample: ({}, {}, {}))
+    monkeypatch.setattr(lc, "_body_dom_row", lambda sid, tid: None)
+    monkeypatch.setattr(lc, "_sha256", lambda p: "deadbeef")
+    monkeypatch.setattr(lc.llm_openrouter, "usage_totals",
+                        {"prompt_tokens": 7, "completion_tokens": 3})
+
+    out = str(tmp_path / "coded.csv")
+    lc.code_links("ignored.csv", out, judges=JUDGES, project_meta=PROJECT,
+                  seed=42, n_elim=1, n_ret=1, frame_rows=_frame(1, 1))
+
+    m = _json.load(open(out + ".manifest.json", encoding="utf-8"))
+    assert m["usage"] == {"prompt_tokens": 7, "completion_tokens": 3}
 
 
 # --- 10. Ctrl-C : le CSV partiel N'EST PAS perdu (sauvegarde + drapeaux manifeste) ---
@@ -580,6 +610,47 @@ def test_13b_resume_never_appends_v2_rows_under_a_v1_header(monkeypatch, tmp_pat
 
     assert seen.get("header") == lc.csv_header()
     assert "Weight" not in seen["header"]        # plus aucune colonne v1
+
+
+# --- 14. transport : les tokens facturés sont comptés (base du chiffrage) ----
+class _ChatResponse:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self._payload
+
+
+def _reply_with(monkeypatch, payload):
+    def fake_post(*args, **kwargs):
+        return _ChatResponse(payload)
+    monkeypatch.setattr(lc.llm_openrouter.requests, "post", fake_post)
+
+
+def test_14_chat_accumulates_token_usage(monkeypatch):
+    monkeypatch.setattr(lc.llm_openrouter, "usage_totals",
+                        {"prompt_tokens": 0, "completion_tokens": 0})
+    _reply_with(monkeypatch, {"choices": [{"message": {"content": "yes"}}],
+                              "usage": {"prompt_tokens": 120, "completion_tokens": 4}})
+
+    lc.llm_openrouter.ask_openrouter_chat("q", model="m", timeout=1)
+    lc.llm_openrouter.ask_openrouter_chat("q", model="m", timeout=1)
+
+    assert lc.llm_openrouter.usage_totals == {"prompt_tokens": 240, "completion_tokens": 8}
+
+
+def test_14b_chat_without_usage_counts_nothing(monkeypatch):
+    monkeypatch.setattr(lc.llm_openrouter, "usage_totals",
+                        {"prompt_tokens": 0, "completion_tokens": 0})
+    _reply_with(monkeypatch, {"choices": [{"message": {"content": "no"}}]})
+
+    content = lc.llm_openrouter.ask_openrouter_chat("q", model="m", timeout=1)
+
+    assert content == "no"
+    assert lc.llm_openrouter.usage_totals == {"prompt_tokens": 0, "completion_tokens": 0}
 
 # --------------------------------------------------------------------------
 # parse_anchor : quelle ancre du bloc appartient réellement à cette arête ?

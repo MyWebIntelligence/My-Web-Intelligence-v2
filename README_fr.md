@@ -1862,7 +1862,7 @@ par défaut du réglage pour ce run).
 Variables configurables par l'environnement :
 - `MWI_OPENROUTER_ENABLED` (défaut `false`)
 - `MWI_OPENROUTER_API_KEY`
-- `MWI_OPENROUTER_MODEL` (par ex. `openai/gpt-4o-mini`, `anthropic/claude-3-haiku`)
+- `MWI_OPENROUTER_MODEL` (par ex. `openai/gpt-4o-mini`, `deepseek/deepseek-v4-flash`)
 - `MWI_OPENROUTER_TIMEOUT` (défaut `15` secondes)
 - `MWI_OPENROUTER_MAX_CHARS` (défaut `12000`)
 - `MWI_OPENROUTER_MAX_CALLS` (défaut `500`)
